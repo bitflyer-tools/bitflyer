@@ -1,0 +1,3 @@
+module Bitflyer
+  VERSION = "0.1.0"
+end
