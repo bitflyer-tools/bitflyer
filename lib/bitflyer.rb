@@ -11,8 +11,8 @@ module Bitflyer
     Bitflyer::HTTP::Public::Client.new
   end
 
-  def http_private_client
-    Bitflyer::HTTP::Private::Client.new
+  def http_private_client(key, secret)
+    Bitflyer::HTTP::Private::Client.new(key, secret)
   end
 
   module_function :realtime_client, :http_public_client, :http_private_client

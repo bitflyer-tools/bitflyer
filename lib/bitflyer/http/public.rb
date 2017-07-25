@@ -7,27 +7,27 @@ module Bitflyer
         end
 
         def health
-          @connection.get('gethealth').body
+          @connection.get('/v1/gethealth').body
         end
 
         def markets
-          @connection.get('markets').body
+          @connection.get('/v1/markets').body
         end
 
         def board(product_code = 'BTC_JPY')
-          @connection.get('board', { product_code: product_code }).body
+          @connection.get('/v1/board', { product_code: product_code }).body
         end
 
         def ticker(product_code = 'BTC_JPY')
-          @connection.get('ticker', { product_code: product_code }).body
+          @connection.get('/v1/ticker', { product_code: product_code }).body
         end
 
         def executions(product_code = 'BTC_JPY')
-          @connection.get('executions', { product_code: product_code }).body
+          @connection.get('/v1/executions', { product_code: product_code }).body
         end
 
         def chats(from_date = (Time.now - 5 * 24 * 60 * 60))
-          @connection.get('getchats', { from_date: from_date }).body
+          @connection.get('/v1/getchats', { from_date: from_date }).body
         end
       end
     end
