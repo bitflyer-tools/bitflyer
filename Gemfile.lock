@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    bitflyer (0.1.0)
+    bitflyer (0.0.1)
       faraday (~> 0.12.2)
       faraday_middleware (~> 0.11.0.1)
       pubnub (~> 4.0.22)
