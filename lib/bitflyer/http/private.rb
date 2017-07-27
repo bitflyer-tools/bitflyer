@@ -46,8 +46,85 @@ module Bitflyer
           @connection.get('/v1/me/getwithdrawals').body
         end
 
-        def positions
-          @connection.get('/v1/me/getpositions', { product_code: 'FX_BTC_JPY' }).body
+        def send_child_order
+          #TBD
+        end
+
+        def cancel_child_order(product_code: 'BTC_JPY', child_order_id: nil, child_order_acceptance_id: nil)
+          body = {
+              product_code: product_code,
+              child_order_id: child_order_id,
+              child_order_acceptance_id: child_order_acceptance_id
+          }.delete_if { |_, v| v.nil? }
+          @connection.post('/v1/me/cancelchildorder', body)
+        end
+
+        def send_parent_order
+          #TBD
+        end
+
+        def cancel_parent_order(product_code: 'BTC_JPY', parent_order_id: nil, parent_order_acceptance_id: nil)
+          body = {
+              product_code: product_code,
+              parent_order_id: parent_order_id,
+              parent_order_acceptance_id: parent_order_acceptance_id
+          }.delete_if { |_, v| v.nil? }
+          @connection.post('/v1/me/cancelparentorder', body)
+        end
+
+        def cancel_all_child_orders(product_code: 'BTC_JPY')
+          @connection.post('/v1/me/cancelallchildorders', { product_code: product_code }).body
+        end
+
+        def child_orders(product_code: 'BTC_JPY', count: nil, before: nil, after: nil, child_order_state: nil, parent_order_id: nil)
+          query = {
+              product_code: product_code,
+              count: count,
+              before: before,
+              after: after,
+              child_order_state: child_order_state,
+              parent_order_id: parent_order_id
+          }.delete_if { |_, v| v.nil? }
+          @connection.get('/v1/me/getchildorders', query).body
+        end
+
+        def parent_orders(product_code: 'BTC_JPY', count: nil, before: nil, after: nil, parent_order_state: nil)
+          query = {
+              product_code: product_code,
+              count: count,
+              before: before,
+              after: after,
+              parent_order_state: parent_order_state
+          }.delete_if { |_, v| v.nil? }
+          @connection.get('/v1/me/getparentorders', query).body
+        end
+
+        def parent_order(parent_order_id: nil, parent_order_acceptance_id: nil)
+          query = {
+              parent_order_id: parent_order_id,
+              parent_order_acceptance_id: parent_order_acceptance_id
+          }.delete_if { |_, v| v.nil? }
+          @connection.get('/v1/me/getparentorder', query).body
+        end
+
+        def executions(product_code: 'BTC_JPY', count: nil, before: nil, after: nil, child_order_id: nil, child_order_acceptance_id: nil)
+          query = {
+              product_code: product_code,
+              count: count,
+              before: before,
+              after: after,
+              child_order_id: child_order_id,
+              child_order_acceptance_id: child_order_acceptance_id,
+          }.delete_if { |_, v| v.nil? }
+          @connection.get('/v1/me/getexecutions', query).body
+        end
+
+        def positions(product_code: 'FX_BTC_JPY')
+          @connection.get('/v1/me/getpositions', { product_code: product_code }).body
+        end
+
+        def trading_commission(product_code: 'BTC_JPY')
+          @connection.get('v1/me/gettradingcommission', { product_code: product_code }).body
         end
       end
     end
