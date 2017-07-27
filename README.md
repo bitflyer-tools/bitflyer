@@ -15,6 +15,8 @@ gem install bitflyer
 
 ## Usage
 
+See https://lightning.bitflyer.jp/docs for details.
+
 ### HTTP API
 
 #### Example
@@ -29,7 +31,8 @@ p private_client.positions # will print your positions
 
 ### Realtime API
 
-API format is like `{event_name}_{product_code}`.
+Accessor format is like `{event_name}_{product_code}`.
+You can set lambda to get realtime events.
 
 #### `event_name`
 - board_snapshot
