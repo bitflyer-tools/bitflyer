@@ -30,6 +30,8 @@ module Bitflyer
       end
 
       def call(env)
+        return @app.call(env) if @key.nil? || @secret.nil?
+
         timestamp = Time.now.to_i.to_s
         method = env[:method].to_s.upcase
         path = env[:url].path + (env[:url].query ? '?' + env[:url].query : '')

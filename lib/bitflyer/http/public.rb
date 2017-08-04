@@ -3,7 +3,7 @@ module Bitflyer
     module Public
       class Client
         def initialize
-          @connection = Connection.new
+          @connection = Connection.new(nil, nil)
         end
 
         def health
