@@ -44,6 +44,7 @@ You can set lambda to get realtime events.
 - btc_jpy
 - fx_btc_jpy
 - eth_btc
+- bch_btc
 
 #### Example
 
