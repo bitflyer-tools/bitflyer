@@ -1,4 +1,5 @@
 require 'websocket-client-simple'
+require 'json'
 
 module Bitflyer
   module Realtime
