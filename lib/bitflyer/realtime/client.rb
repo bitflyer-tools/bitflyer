@@ -1,8 +1,7 @@
-require 'pubnub'
+require_relative './websocket'
 
 module Bitflyer
   module Realtime
-    PUBNUB_SUBSCRIBE_KEY = 'sub-c-52a9ab50-291b-11e5-baaa-0619f8945a4f'.freeze
     CHANNEL_NAMES = [
         'lightning_board_snapshot_BTC_JPY',
         'lightning_board_snapshot_FX_BTC_JPY',
@@ -22,24 +21,19 @@ module Bitflyer
         'lightning_executions_BCH_BTC'
     ].freeze
 
+    SOCKET_HOST = 'https://io.lightstream.bitflyer.com'
+
     class Client
-      attr_accessor *Realtime::CHANNEL_NAMES.map { |name| name.gsub('lightning_', '').downcase.to_sym }
+      attr_accessor :websocket_client, :ping_interval, :ping_timeout, :last_ping_at, :last_pong_at
+
+      Realtime::CHANNEL_NAMES.each do |channel_name|
+        define_method "#{channel_name.gsub('lightning_', '').downcase.to_sym}=" do |callback|
+          @websocket_client.subscribe(channel_name: channel_name.to_sym, &callback)
+        end
+      end
 
       def initialize
-        @pubnub = Pubnub.new(subscribe_key: Realtime::PUBNUB_SUBSCRIBE_KEY)
-
-        @callback = Pubnub::SubscribeCallback.new(
-            message: ->(envelope) {
-              channel_name = envelope.result[:data][:subscribed_channel].gsub('lightning_', '').downcase.to_sym
-              message = envelope.result[:data][:message]
-              send(channel_name).call(message) if send(channel_name)
-            },
-            presence: ->(envelope) {},
-            status: ->(envelope) {}
-        )
-
-        @pubnub.add_listener(callback: @callback)
-        @pubnub.subscribe(channels: Realtime::CHANNEL_NAMES)
+        @websocket_client = Bitflyer::Realtime::WebSocketClient.new(host: SOCKET_HOST)
       end
     end
   end

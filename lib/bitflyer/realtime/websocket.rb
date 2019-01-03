@@ -1,0 +1,123 @@
+require 'websocket-client-simple'
+
+module Bitflyer
+  module Realtime
+    class WebSocketClient
+      attr_accessor :websocket_client, :channel_name, :channel_callbacks, :ping_interval, :ping_timeout,
+        :last_ping_at, :last_pong_at, :error
+
+      def initialize(host:, debug: false)
+        @host = host
+        @debug = debug
+        @error = nil
+        @channel_names = []
+        @channel_callbacks = {}
+        connect
+      end
+
+      def subscribe(channel_name:, &block)
+        debug_log "Subscribe #{channel_name}"
+        @channel_names = (@channel_names + [channel_name]).uniq
+        @channel_callbacks[channel_name] = block
+        websocket_client.send "42#{['subscribe', channel_name].to_json}"
+      end
+
+      def connect
+        @websocket_client = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
+        this = self
+
+        Thread.new do
+          loop do
+            sleep 1
+            send_ping
+          end
+        end
+
+        Thread.new do
+          loop do
+            sleep 1
+            next unless @error
+            reconnect
+          end
+        end
+
+        @websocket_client.on(:message) { |payload| this.handle_message(payload: payload) }
+        @websocket_client.on(:error) { |error| this.handle_error(error: error) }
+      end
+
+      def send_ping
+        return unless @websocket_client&.open?
+        return unless @last_ping_at && @ping_interval
+        return unless Time.now.to_i - @last_ping_at > @ping_interval / 1000
+
+        debug_log 'Sent ping'
+        @websocket_client.send "2"
+        @last_ping_at = Time.now.to_i
+      end
+
+      def wait_pong
+        return unless @websocket_client&.open?
+        return unless @last_pong_at && @ping_timeout
+        return unless Time.now.to_i - @last_pong_at > @ping_timeout / 1000
+
+        debug_log 'Timed out waiting pong'
+        @websocket_client.close
+      end
+
+      def reconnect
+        return unless @error
+        debug_log 'Reconnecting...'
+
+        @error = nil
+        @websocket_client.close if @websocket_client.open?
+        connect
+        @channel_names.each do |channel_name|
+          debug_log "42#{{ subscribe: channel_name }.to_json}"
+          websocket_client.send "42#{['subscribe', channel_name].to_json}"
+        end
+      end
+
+      def handle_error(error:)
+        debug_log error
+        return unless error.kind_of? Errno::ECONNRESET
+        reconnect
+      end
+
+      def handle_message(payload:)
+        debug_log payload.data
+        return unless payload.data =~ /^\d+/
+        code, body = payload.data.scan(/^(\d+)(.*)$/)[0]
+
+        case code.to_i
+        when 0 ## socket.io connect
+          body = JSON.parse body
+          @ping_interval = body["pingInterval"].to_i || 25000
+          @ping_timeout  = body["pingTimeout"].to_i || 60000
+          @last_ping_at = Time.now.to_i
+          @last_pong_at = Time.now.to_i
+          channel_callbacks.each do |channel_name, _|
+            websocket_client.send "42#{['subscribe', channel_name].to_json}"
+          end
+        when 3 ## pong
+          debug_log 'Received pong'
+          @last_pong_at = Time.now.to_i
+        when 41 ## disconnect from server
+          debug_log 'Disconnecting from server...'
+          @error = true
+        when 42 ## data
+          channel_name, *messages = JSON.parse body
+          return unless channel_name
+          messages.each { |message| @channel_callbacks[channel_name.to_sym]&.call(message) }
+        end
+      rescue => e
+        puts e
+        puts e.backtrace.join("\n")
+      end
+
+      def debug_log(message)
+        return unless @debug
+        p message
+      end
+    end
+  end
+end
