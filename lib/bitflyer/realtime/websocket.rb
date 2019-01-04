@@ -29,7 +29,10 @@ module Bitflyer
         Thread.new do
           loop do
             sleep 1
-            send_ping
+            if @websocket_client && @websocket_client.open?
+              send_ping
+              wait_pong
+            end
           end
         end
 
@@ -46,7 +49,6 @@ module Bitflyer
       end
 
       def send_ping
-        return unless @websocket_client&.open?
         return unless @last_ping_at && @ping_interval
         return unless Time.now.to_i - @last_ping_at > @ping_interval / 1000
 
@@ -56,7 +58,6 @@ module Bitflyer
       end
 
       def wait_pong
-        return unless @websocket_client&.open?
         return unless @last_pong_at && @ping_timeout
         return unless Time.now.to_i - @last_pong_at > @ping_timeout / 1000
 
@@ -89,29 +90,41 @@ module Bitflyer
         code, body = payload.data.scan(/^(\d+)(.*)$/)[0]
 
         case code.to_i
-        when 0 ## socket.io connect
-          body = JSON.parse body
-          @ping_interval = body["pingInterval"].to_i || 25000
-          @ping_timeout  = body["pingTimeout"].to_i || 60000
-          @last_ping_at = Time.now.to_i
-          @last_pong_at = Time.now.to_i
-          channel_callbacks.each do |channel_name, _|
-            websocket_client.send "42#{['subscribe', channel_name].to_json}"
-          end
-        when 3 ## pong
-          debug_log 'Received pong'
-          @last_pong_at = Time.now.to_i
-        when 41 ## disconnect from server
-          debug_log 'Disconnecting from server...'
-          @error = true
-        when 42 ## data
-          channel_name, *messages = JSON.parse body
-          return unless channel_name
-          messages.each { |message| @channel_callbacks[channel_name.to_sym]&.call(message) }
+        when 0 then setup_by_response(json: body)
+        when 3 then receive_pong
+        when 41 then disconnect
+        when 42 then emit_message(json: body)
         end
       rescue => e
         puts e
         puts e.backtrace.join("\n")
+      end
+
+      def setup_by_response(json:)
+        body = JSON.parse json
+        @ping_interval = body["pingInterval"].to_i || 25000
+        @ping_timeout  = body["pingTimeout"].to_i || 60000
+        @last_ping_at = Time.now.to_i
+        @last_pong_at = Time.now.to_i
+        channel_callbacks.each do |channel_name, _|
+          websocket_client.send "42#{['subscribe', channel_name].to_json}"
+        end
+      end
+
+      def receive_pong
+        debug_log 'Received pong'
+        @last_pong_at = Time.now.to_i
+      end
+
+      def disconnect
+        debug_log 'Disconnecting from server...'
+        @error = true
+      end
+
+      def emit_message(json:)
+        channel_name, *messages = JSON.parse json
+        return unless channel_name
+        messages.each { |message| @channel_callbacks[channel_name.to_sym]&.call(message) }
       end
 
       def debug_log(message)
