@@ -1,3 +1,7 @@
 AllCops:
   Include:
     - 'lib/**/*.rb'
+Style/Documentation:
+  Enabled: false
+Metrics/LineLength:
+  Max: 120
