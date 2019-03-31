@@ -54,7 +54,15 @@ module Bitflyer
           @connection.get('/v1/me/getwithdrawals').body
         end
 
-        def send_child_order(product_code: 'BTC_JPY', child_order_type: nil, side: nil, price: nil, size: nil, minute_to_expire: nil, time_in_force: 'GTC')
+        def send_child_order(
+          product_code: 'BTC_JPY',
+          child_order_type: nil,
+          side: nil,
+          price: nil,
+          size: nil,
+          minute_to_expire: nil,
+          time_in_force: 'GTC'
+        )
           body = {
             product_code: product_code,
             child_order_type: child_order_type,
@@ -99,7 +107,14 @@ module Bitflyer
           @connection.post('/v1/me/cancelallchildorders', product_code: product_code).body
         end
 
-        def child_orders(product_code: 'BTC_JPY', count: nil, before: nil, after: nil, child_order_state: nil, parent_order_id: nil)
+        def child_orders(
+          product_code: 'BTC_JPY',
+          count: nil,
+          before: nil,
+          after: nil,
+          child_order_state: nil,
+          parent_order_id: nil
+        )
           query = {
             product_code: product_code,
             count: count,
@@ -130,7 +145,14 @@ module Bitflyer
           @connection.get('/v1/me/getparentorder', query).body
         end
 
-        def executions(product_code: 'BTC_JPY', count: nil, before: nil, after: nil, child_order_id: nil, child_order_acceptance_id: nil)
+        def executions(
+          product_code: 'BTC_JPY',
+          count: nil,
+          before: nil,
+          after: nil,
+          child_order_id: nil,
+          child_order_acceptance_id: nil
+        )
           query = {
             product_code: product_code,
             count: count,
