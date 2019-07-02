@@ -1,0 +1,37 @@
+version: 2.1
+
+bundle_install: &bundle_install
+  run:
+    name: bundle install
+    command: bundle install --path vendor/bundle --jobs 4
+
+restore_bundle_cache: &restore_bundle_cache
+  restore_cache:
+    key: cache-bundler-{{ checksum "Gemfile.lock" }}
+
+jobs:
+  build:
+    docker:
+      - image: circleci/ruby
+    steps:
+      - checkout
+      - *restore_bundle_cache
+      - *bundle_install
+      - save_cache:
+          key: cache-bundler-{{ checksum "Gemfile.lock" }}
+          paths:
+            - vendor/bundle
+  rspec:
+    docker:
+      - image: circleci/ruby
+    steps:
+      - checkout
+      - *restore_bundle_cache
+      - *bundle_install
+      - run: bundle exec rspec
+workflows:
+  version: 2.1
+  rspec:
+    jobs:
+      - build
+      - rspec
