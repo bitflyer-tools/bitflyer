@@ -2,7 +2,6 @@
 [![Gem Version](https://badge.fury.io/rb/bitflyer.svg)](https://badge.fury.io/rb/bitflyer)
 [![Circle CI](https://circleci.com/gh/unhappychoice/bitflyer.svg?style=shield)](https://circleci.com/gh/unhappychoice/bitflyer)
 [![Code Climate](https://codeclimate.com/github/unhappychoice/bitflyer/badges/gpa.svg)](https://codeclimate.com/github/unhappychoice/bitflyer)
-[![Dependency Status](https://gemnasium.com/badges/github.com/unhappychoice/bitflyer.svg)](https://gemnasium.com/github.com/unhappychoice/bitflyer)
 ![](http://ruby-gem-downloads-badge.herokuapp.com/bitflyer?type=total)
 
 bitflyer is a wrapper interface of [Bitflyer lightning API](https://lightning.bitflyer.jp/docs)  
