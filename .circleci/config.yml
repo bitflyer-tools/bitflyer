@@ -3,7 +3,7 @@ version: 2.1
 bundle_install: &bundle_install
   run:
     name: bundle install
-    command: bundle install --path vendor/bundle --jobs 4
+    command: bundle update --bundler && bundle install --path vendor/bundle --jobs 4
 
 restore_bundle_cache: &restore_bundle_cache
   restore_cache:
