@@ -2,25 +2,9 @@ require_relative './websocket'
 
 module Bitflyer
   module Realtime
-    CHANNEL_NAMES = [
-        'lightning_board_snapshot_BTC_JPY',
-        'lightning_board_snapshot_FX_BTC_JPY',
-        'lightning_board_snapshot_ETH_BTC',
-        'lightning_board_snapshot_BCH_BTC',
-        'lightning_board_BTC_JPY',
-        'lightning_board_FX_BTC_JPY',
-        'lightning_board_ETH_BTC',
-        'lightning_board_BCH_BTC',
-        'lightning_ticker_BTC_JPY',
-        'lightning_ticker_FX_BTC_JPY',
-        'lightning_ticker_ETH_BTC',
-        'lightning_ticker_BCH_BTC',
-        'lightning_executions_BTC_JPY',
-        'lightning_executions_FX_BTC_JPY',
-        'lightning_executions_ETH_BTC',
-        'lightning_executions_BCH_BTC'
-    ].freeze
-
+    EVENT_NAMES = %w[lightning_board_snapshot lightning_board lightning_ticker lightning_executions].freeze
+    MARKETS = %w[BTC_JPY FX_BTC_JPY ETH_BTC BCH_BTC].freeze
+    CHANNEL_NAMES = EVENT_NAMES.product(MARKETS).map { |e, m| e + '_' + m }
     SOCKET_HOST = 'https://io.lightstream.bitflyer.com'
 
     class Client
