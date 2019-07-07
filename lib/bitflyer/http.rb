@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'bitflyer'
 require 'bitflyer/http/public'
 require 'bitflyer/http/private'
@@ -13,7 +15,7 @@ module Bitflyer
       def_delegators :@connection, :get, :post
 
       def initialize(key, secret)
-        @connection = Faraday::Connection.new(:url => 'https://api.bitflyer.jp') do |f|
+        @connection = Faraday::Connection.new(url: 'https://api.bitflyer.jp') do |f|
           f.request :json
           f.response :json
           f.use Authentication, key, secret
@@ -36,7 +38,7 @@ module Bitflyer
         method = env[:method].to_s.upcase
         path = env[:url].path + (env[:url].query ? '?' + env[:url].query : '')
         body = env[:body] || ''
-        signature = OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new('sha256'), @secret, timestamp +  method + path + body)
+        signature = OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new('sha256'), @secret, timestamp + method + path + body)
         env[:request_headers]['ACCESS-KEY'] = @key if @key
         env[:request_headers]['ACCESS-TIMESTAMP'] = timestamp
         env[:request_headers]['ACCESS-SIGN'] = signature
