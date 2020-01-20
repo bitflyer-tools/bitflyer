@@ -18,7 +18,7 @@ Gem::Specification.new do |spec|
   spec.require_paths = ['lib']
 
   spec.add_dependency 'faraday', '>= 0.14', '< 1.1'
-  spec.add_dependency 'faraday_middleware', '>= 0.12', '< 0.14'
+  spec.add_dependency 'faraday_middleware', '>= 0.12', '< 0.15'
   spec.add_dependency 'websocket-client-simple', '~> 0.3.0'
   spec.add_development_dependency 'bundler', '~> 2.0'
   spec.add_development_dependency 'pry'
