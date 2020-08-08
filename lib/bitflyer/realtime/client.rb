@@ -6,7 +6,7 @@ module Bitflyer
   module Realtime
     EVENT_NAMES = %w[lightning_board_snapshot lightning_board lightning_ticker lightning_executions].freeze
     MARKETS = %w[BTC_JPY FX_BTC_JPY ETH_BTC BCH_BTC BTCJPY_MAT3M BTCJPY_MAT1WK BTCJPY_MAT2WK].freeze
-    CHANNEL_NAMES = EVENT_NAMES.product(MARKETS).map { |e, m| e + '_' + m }
+    CHANNEL_NAMES = EVENT_NAMES.product(MARKETS).map { |e, m| "#{e}_#{m}" }
 
     SOCKET_HOST = 'https://io.lightstream.bitflyer.com'
 
