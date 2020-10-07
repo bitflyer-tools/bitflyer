@@ -20,7 +20,7 @@ GEM
     method_source (1.0.0)
     multipart-post (2.1.1)
     parallel (1.19.2)
-    parser (2.7.1.5)
+    parser (2.7.2.0)
       ast (~> 2.4.1)
     pry (0.13.1)
       coderay (~> 1.1)
