@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    bitflyer (1.0.0)
+    bitflyer (1.0.1)
       faraday (>= 0.14, < 1.2)
       faraday_middleware (>= 0.12, < 1.1)
       websocket-client-simple (~> 0.3.0)
@@ -74,4 +74,4 @@ DEPENDENCIES
   rubocop
 
 BUNDLED WITH
-   1.17.3
+   2.0.2
