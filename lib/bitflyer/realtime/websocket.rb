@@ -63,7 +63,7 @@ module Bitflyer
 
       def wait_pong
         return unless @last_pong_at && @ping_timeout
-        return unless Time.now.to_i - @last_pong_at > @ping_timeout / 1000
+        return unless Time.now.to_i - @last_pong_at > (@ping_interval + @ping_timeout) / 1000
 
         debug_log 'Timed out waiting pong'
         @websocket_client.close
