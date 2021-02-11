@@ -37,19 +37,51 @@ p private_client.positions # will print your positions
 
 ### Realtime API
 
+#### Public events
+
 Accessor format is like `{event_name}_{product_code}`.
 You can set lambda to get realtime events.
 
 `{event_name}` and `{product_code}` is defined at [client.rb](./lib/bitflyer/realtime/client.rb).
 
-#### Example
+#### Private events
 
+To subscribe to the private `child_order_events` and `parent_order_events`, pass your API key and secret when creating the `realtime_client`.
+
+#### Connection status monitoring
+
+The `ready` callback is called when the `realtime_client` is ready to receive events (after the socket connection is established, the optional authentication has succeeded, and the channels have been subscribed). If connection is lost, the `disconnected` callback is called, and reconnection is attempted automatically. When connection is restored, `ready` is called again.
+
+#### Examples
+
+For public events only:
 ```ruby
 client = Bitflyer.realtime_client
-client.ticker_btc_jpy = ->(json){ p json } # will print json object 
+client.ticker_btc_jpy = ->(json){ p json } # will print json object
 client.executions_btc_jpy = ->(json){ p json }
-# ... 
+# ...
 ```
+
+For both public and private events:
+```ruby
+client = Bitflyer.realtime_client('YOUR_API_KEY', 'YOUR_API_SECRET')
+# Private events:
+client.child_order_events = ->(json){ p json }
+client.parent_order_events = ->(json){ p json }
+# Public events:
+client.ticker_btc_jpy = ->(json){ p json }
+client.executions_btc_jpy = ->(json){ p json }
+# ...
+```
+
+Connection monitoring:
+```ruby
+client = Bitflyer.realtime_client
+client.ready = -> { p "Client is ready to receive events" }
+client.disconnected = ->(error) { p "Client got disconnected" }
+```
+
+
 
 ## Contributing
 
