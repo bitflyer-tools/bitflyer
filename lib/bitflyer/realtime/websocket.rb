@@ -2,6 +2,7 @@
 
 require 'websocket-client-simple'
 require 'json'
+require 'openssl'
 
 module Bitflyer
   module Realtime
@@ -9,8 +10,10 @@ module Bitflyer
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
                     :last_ping_at, :last_pong_at
 
-      def initialize(host:, debug: false)
+      def initialize(host:, key:, secret:, debug: false)
         @host = host
+        @key = key
+        @secret = secret
         @debug = debug
         @channel_names = []
         @channel_callbacks = {}
@@ -93,6 +96,7 @@ module Bitflyer
         when 3 then receive_pong
         when 41 then disconnect
         when 42 then emit_message(json: body)
+        when 430 then authenticated(json: body)
         end
       rescue StandardError => e
         puts e
@@ -105,7 +109,39 @@ module Bitflyer
         @ping_timeout  = body['pingTimeout'].to_i || 60_000
         @last_ping_at = Time.now.to_i
         @last_pong_at = Time.now.to_i
+        if @key && @secret
+          authenticate
+        else
+          subscribe_channels
+        end
+      end
+
+      def authenticate
+        debug_log 'Authenticate'
+        timestamp = Time.now.to_i
+        nonce = Random.new.bytes(16).unpack('H*').first
+        signature = OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new('sha256'), @secret, timestamp.to_s + nonce)
+        auth_params = {
+          api_key: @key,
+          timestamp: timestamp,
+          nonce: nonce,
+          signature: signature
+        }
+        websocket_client.send "420#{['auth', auth_params].to_json}"
+      end
+
+      def authenticated(json:)
+        if json == '[null]'
+          debug_log 'Authenticated'
+          subscribe_channels
+        else
+          raise "Authentication failed: #{json}"
+        end
+      end
+
+      def subscribe_channels
         channel_callbacks.each do |channel_name, _|
+          debug_log "42#{{ subscribe: channel_name }.to_json}"
           websocket_client.send "42#{['subscribe', channel_name].to_json}"
         end
       end

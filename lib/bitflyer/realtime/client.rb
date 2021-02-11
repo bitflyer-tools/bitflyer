@@ -4,9 +4,11 @@ require_relative './websocket'
 
 module Bitflyer
   module Realtime
-    EVENT_NAMES = %w[lightning_board_snapshot lightning_board lightning_ticker lightning_executions].freeze
+    PUBLIC_EVENT_NAMES = %w[lightning_board_snapshot lightning_board lightning_ticker lightning_executions].freeze
     MARKETS = %w[BTC_JPY FX_BTC_JPY ETH_BTC BCH_BTC BTCJPY_MAT3M BTCJPY_MAT1WK BTCJPY_MAT2WK].freeze
-    CHANNEL_NAMES = EVENT_NAMES.product(MARKETS).map { |e, m| "#{e}_#{m}" }
+    PUBLIC_CHANNEL_NAMES = PUBLIC_EVENT_NAMES.product(MARKETS).map { |e, m| "#{e}_#{m}" }.freeze
+    PRIVATE_CHANNEL_NAMES = %w[child_order_events parent_order_events].freeze
+    CHANNEL_NAMES = (PUBLIC_CHANNEL_NAMES + PRIVATE_CHANNEL_NAMES).freeze
 
     SOCKET_HOST = 'https://io.lightstream.bitflyer.com'
 
@@ -19,8 +21,8 @@ module Bitflyer
         end
       end
 
-      def initialize
-        @websocket_client = Bitflyer::Realtime::WebSocketClient.new(host: SOCKET_HOST)
+      def initialize(key = nil, secret = nil)
+        @websocket_client = Bitflyer::Realtime::WebSocketClient.new(host: SOCKET_HOST, key: key, secret: secret)
       end
     end
   end
