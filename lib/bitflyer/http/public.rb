@@ -24,8 +24,14 @@ module Bitflyer
           @connection.get('/v1/ticker', product_code: product_code).body
         end
 
-        def executions(product_code: 'BTC_JPY')
-          @connection.get('/v1/executions', product_code: product_code).body
+        def executions(product_code: 'BTC_JPY', count: nil, before: nil, after: nil)
+          query = {
+            product_code: product_code,
+            count: count,
+            before: before,
+            after: after
+          }.delete_if { |_, v| v.nil? }
+          @connection.get('/v1/executions', query).body
         end
 
         def chats(from_date: (Time.now - 5 * 24 * 60 * 60))
