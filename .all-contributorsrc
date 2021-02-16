@@ -1,0 +1,24 @@
+{
+  "files": [
+    "README.md"
+  ],
+  "imageSize": 100,
+  "commit": false,
+  "contributors": [
+    {
+      "login": "yemartin",
+      "name": "Yves-Eric Martin",
+      "avatar_url": "https://avatars.githubusercontent.com/u/139002?v=4",
+      "profile": "https://github.com/yemartin",
+      "contributions": [
+        "code"
+      ]
+    }
+  ],
+  "contributorsPerLine": 7,
+  "projectName": "bitflyer",
+  "projectOwner": "unhappychoice",
+  "repoType": "github",
+  "repoHost": "https://github.com",
+  "skipCi": true
+}
