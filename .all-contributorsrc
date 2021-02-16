@@ -13,6 +13,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "unhappychoice",
+      "name": "Yuji Ueki",
+      "avatar_url": "https://avatars.githubusercontent.com/u/5608948?v=4",
+      "profile": "http://blog.unhappychoice.com",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 7,
