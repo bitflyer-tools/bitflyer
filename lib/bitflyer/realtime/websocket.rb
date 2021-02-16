@@ -7,12 +7,11 @@ module Bitflyer
   module Realtime
     class WebSocketClient
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
-                    :last_ping_at, :last_pong_at, :error
+                    :last_ping_at, :last_pong_at
 
       def initialize(host:, debug: false)
         @host = host
         @debug = debug
-        @error = nil
         @channel_names = []
         @channel_callbacks = {}
         connect
@@ -50,7 +49,7 @@ module Bitflyer
         Thread.new do
           loop do
             sleep 1
-            next unless @error
+            next if @websocket_client&.open?
 
             reconnect
           end
@@ -75,11 +74,10 @@ module Bitflyer
       end
 
       def reconnect
-        return unless @error
+        return if @websocket_client&.open?
 
         debug_log 'Reconnecting...'
 
-        @error = nil
         @websocket_client.close if @websocket_client.open?
         connect
         @channel_names.each do |channel_name|
@@ -130,7 +128,7 @@ module Bitflyer
 
       def disconnect
         debug_log 'Disconnecting from server...'
-        @error = true
+        websocket_client.close
       end
 
       def emit_message(json:)
