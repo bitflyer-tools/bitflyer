@@ -42,16 +42,9 @@ module Bitflyer
             if @websocket_client&.open?
               send_ping
               wait_pong
+            else
+              reconnect
             end
-          end
-        end
-
-        Thread.new do
-          loop do
-            sleep 1
-            next if @websocket_client&.open?
-
-            reconnect
           end
         end
       end
