@@ -16,6 +16,7 @@ module Bitflyer
         @channel_names = []
         @channel_callbacks = {}
         connect
+        start_monitoring
       end
 
       def subscribe(channel_name:, &block)
@@ -28,7 +29,11 @@ module Bitflyer
       def connect
         @websocket_client = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
         this = self
+        @websocket_client.on(:message) { |payload| this.handle_message(payload: payload) }
+        @websocket_client.on(:error) { |error| this.handle_error(error: error) }
+      end
 
+      def start_monitoring
         Thread.new do
           loop do
             sleep 1
@@ -47,9 +52,6 @@ module Bitflyer
             reconnect
           end
         end
-
-        @websocket_client.on(:message) { |payload| this.handle_message(payload: payload) }
-        @websocket_client.on(:error) { |error| this.handle_error(error: error) }
       end
 
       def send_ping
