@@ -8,7 +8,7 @@ module Bitflyer
   module Realtime
     class WebSocketClient
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
-                    :last_ping_at, :last_pong_at
+                    :last_ping_at, :last_pong_at, :ready, :disconnected
 
       def initialize(host:, key:, secret:, debug: false)
         @host = host
@@ -33,6 +33,7 @@ module Bitflyer
         this = self
         @websocket_client.on(:message) { |payload| this.handle_message(payload: payload) }
         @websocket_client.on(:error) { |error| this.handle_error(error: error) }
+        @websocket_client.on(:close) { |error| this.handle_close(error: error) }
       rescue SocketError => e
         puts e
         puts e.backtrace.join("\n")
@@ -82,6 +83,7 @@ module Bitflyer
         debug_log error
         return unless error.is_a? Errno::ECONNRESET
 
+        @disconnected&.call(error)
         reconnect
       end
 
@@ -103,6 +105,11 @@ module Bitflyer
         puts e.backtrace.join("\n")
       end
 
+      def handle_close(error:)
+        debug_log error
+        @disconnected&.call(error)
+      end
+
       def setup_by_response(json:)
         body = JSON.parse json
         @ping_interval = body['pingInterval'].to_i || 25_000
@@ -113,6 +120,7 @@ module Bitflyer
           authenticate
         else
           subscribe_channels
+          @ready&.call
         end
       end
 
@@ -134,6 +142,7 @@ module Bitflyer
         if json == '[null]'
           debug_log 'Authenticated'
           subscribe_channels
+          @ready&.call
         else
           raise "Authentication failed: #{json}"
         end
