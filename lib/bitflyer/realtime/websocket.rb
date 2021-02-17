@@ -80,10 +80,6 @@ module Bitflyer
 
         @websocket_client.close if @websocket_client.open?
         connect
-        @channel_names.each do |channel_name|
-          debug_log "42#{{ subscribe: channel_name }.to_json}"
-          websocket_client.send "42#{['subscribe', channel_name].to_json}"
-        end
       end
 
       def handle_error(error:)
