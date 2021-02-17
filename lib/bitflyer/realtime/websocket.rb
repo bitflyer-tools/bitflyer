@@ -31,6 +31,9 @@ module Bitflyer
         this = self
         @websocket_client.on(:message) { |payload| this.handle_message(payload: payload) }
         @websocket_client.on(:error) { |error| this.handle_error(error: error) }
+      rescue SocketError => e
+        puts e
+        puts e.backtrace.join("\n")
       end
 
       def start_monitoring
