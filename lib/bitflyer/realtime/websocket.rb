@@ -6,7 +6,7 @@ require 'json'
 module Bitflyer
   module Realtime
     class WebSocketClient
-      attr_accessor :websocket_client, :channel_name, :channel_callbacks, :ping_interval, :ping_timeout,
+      attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
                     :last_ping_at, :last_pong_at, :error
 
       def initialize(host:, debug: false)
