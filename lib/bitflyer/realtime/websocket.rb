@@ -25,7 +25,7 @@ module Bitflyer
         debug_log "Subscribe #{channel_name}"
         @channel_names = (@channel_names + [channel_name]).uniq
         @channel_callbacks[channel_name] = block
-        websocket_client.send "42#{['subscribe', channel_name].to_json}"
+        @websocket_client.send "42#{['subscribe', channel_name].to_json}"
       end
 
       def connect
@@ -135,7 +135,7 @@ module Bitflyer
           nonce: nonce,
           signature: signature
         }
-        websocket_client.send "420#{['auth', auth_params].to_json}"
+        @websocket_client.send "420#{['auth', auth_params].to_json}"
       end
 
       def authenticated(json:)
@@ -149,9 +149,9 @@ module Bitflyer
       end
 
       def subscribe_channels
-        channel_callbacks.each do |channel_name, _|
+        @channel_callbacks.each do |channel_name, _|
           debug_log "42#{{ subscribe: channel_name }.to_json}"
-          websocket_client.send "42#{['subscribe', channel_name].to_json}"
+          @websocket_client.send "42#{['subscribe', channel_name].to_json}"
         end
       end
 
@@ -162,7 +162,7 @@ module Bitflyer
 
       def disconnect
         debug_log 'Disconnecting from server...'
-        websocket_client.close
+        @websocket_client.close
       end
 
       def emit_message(json:)
