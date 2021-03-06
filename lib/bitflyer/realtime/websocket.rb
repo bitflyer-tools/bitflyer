@@ -2,54 +2,55 @@
 
 require 'websocket-client-simple'
 require 'json'
+require 'openssl'
 
 module Bitflyer
   module Realtime
     class WebSocketClient
-      attr_accessor :websocket_client, :channel_name, :channel_callbacks, :ping_interval, :ping_timeout,
-                    :last_ping_at, :last_pong_at, :error
+      attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
+                    :last_ping_at, :last_pong_at, :ready, :disconnected
 
-      def initialize(host:, debug: false)
+      def initialize(host:, key:, secret:, debug: false)
         @host = host
+        @key = key
+        @secret = secret
         @debug = debug
-        @error = nil
         @channel_names = []
         @channel_callbacks = {}
         connect
+        start_monitoring
       end
 
       def subscribe(channel_name:, &block)
         debug_log "Subscribe #{channel_name}"
         @channel_names = (@channel_names + [channel_name]).uniq
         @channel_callbacks[channel_name] = block
-        websocket_client.send "42#{['subscribe', channel_name].to_json}"
+        @websocket_client.send "42#{['subscribe', channel_name].to_json}"
       end
 
       def connect
         @websocket_client = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
         this = self
+        @websocket_client.on(:message) { |payload| this.handle_message(payload: payload) }
+        @websocket_client.on(:error) { |error| this.handle_error(error: error) }
+        @websocket_client.on(:close) { |error| this.handle_close(error: error) }
+      rescue SocketError => e
+        puts e
+        puts e.backtrace.join("\n")
+      end
 
+      def start_monitoring
         Thread.new do
           loop do
             sleep 1
             if @websocket_client&.open?
               send_ping
               wait_pong
+            else
+              reconnect
             end
           end
         end
-
-        Thread.new do
-          loop do
-            sleep 1
-            next unless @error
-
-            reconnect
-          end
-        end
-
-        @websocket_client.on(:message) { |payload| this.handle_message(payload: payload) }
-        @websocket_client.on(:error) { |error| this.handle_error(error: error) }
       end
 
       def send_ping
@@ -70,23 +71,19 @@ module Bitflyer
       end
 
       def reconnect
-        return unless @error
+        return if @websocket_client&.open?
 
         debug_log 'Reconnecting...'
 
-        @error = nil
         @websocket_client.close if @websocket_client.open?
         connect
-        @channel_names.each do |channel_name|
-          debug_log "42#{{ subscribe: channel_name }.to_json}"
-          websocket_client.send "42#{['subscribe', channel_name].to_json}"
-        end
       end
 
       def handle_error(error:)
         debug_log error
         return unless error.is_a? Errno::ECONNRESET
 
+        @disconnected&.call(error)
         reconnect
       end
 
@@ -101,10 +98,16 @@ module Bitflyer
         when 3 then receive_pong
         when 41 then disconnect
         when 42 then emit_message(json: body)
+        when 430 then authenticated(json: body)
         end
       rescue StandardError => e
         puts e
         puts e.backtrace.join("\n")
+      end
+
+      def handle_close(error:)
+        debug_log error
+        @disconnected&.call(error)
       end
 
       def setup_by_response(json:)
@@ -113,8 +116,42 @@ module Bitflyer
         @ping_timeout  = body['pingTimeout'].to_i || 60_000
         @last_ping_at = Time.now.to_i
         @last_pong_at = Time.now.to_i
-        channel_callbacks.each do |channel_name, _|
-          websocket_client.send "42#{['subscribe', channel_name].to_json}"
+        if @key && @secret
+          authenticate
+        else
+          subscribe_channels
+          @ready&.call
+        end
+      end
+
+      def authenticate
+        debug_log 'Authenticate'
+        timestamp = Time.now.to_i
+        nonce = Random.new.bytes(16).unpack('H*').first
+        signature = OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new('sha256'), @secret, timestamp.to_s + nonce)
+        auth_params = {
+          api_key: @key,
+          timestamp: timestamp,
+          nonce: nonce,
+          signature: signature
+        }
+        @websocket_client.send "420#{['auth', auth_params].to_json}"
+      end
+
+      def authenticated(json:)
+        if json == '[null]'
+          debug_log 'Authenticated'
+          subscribe_channels
+          @ready&.call
+        else
+          raise "Authentication failed: #{json}"
+        end
+      end
+
+      def subscribe_channels
+        @channel_callbacks.each do |channel_name, _|
+          debug_log "42#{{ subscribe: channel_name }.to_json}"
+          @websocket_client.send "42#{['subscribe', channel_name].to_json}"
         end
       end
 
@@ -125,7 +162,7 @@ module Bitflyer
 
       def disconnect
         debug_log 'Disconnecting from server...'
-        @error = true
+        @websocket_client.close
       end
 
       def emit_message(json:)
