@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    bitflyer (1.1.0)
+    bitflyer (1.2.0)
       faraday (>= 0.14, < 1.4)
       faraday_middleware (>= 0.12, < 1.1)
       websocket-client-simple (~> 0.3.0)
