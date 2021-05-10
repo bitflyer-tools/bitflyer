@@ -87,7 +87,7 @@ module Bitflyer
         reconnect
       end
 
-      def handle_message(payload:)
+      def handle_message(payload:) # rubocop:disable Metrics/CyclomaticComplexity
         debug_log payload.data
         return unless payload.data =~ /^\d+/
 
@@ -127,7 +127,7 @@ module Bitflyer
       def authenticate
         debug_log 'Authenticate'
         timestamp = Time.now.to_i
-        nonce = Random.new.bytes(16).unpack('H*').first
+        nonce = Random.new.bytes(16).unpack1('H*')
         signature = OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new('sha256'), @secret, timestamp.to_s + nonce)
         auth_params = {
           api_key: @key,
@@ -139,13 +139,11 @@ module Bitflyer
       end
 
       def authenticated(json:)
-        if json == '[null]'
-          debug_log 'Authenticated'
-          subscribe_channels
-          @ready&.call
-        else
-          raise "Authentication failed: #{json}"
-        end
+        raise "Authentication failed: #{json}" if json != '[null]'
+
+        debug_log 'Authenticated'
+        subscribe_channels
+        @ready&.call
       end
 
       def subscribe_channels
