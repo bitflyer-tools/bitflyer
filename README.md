@@ -1,6 +1,6 @@
 # bitflyer
 <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
-[![All Contributors](https://img.shields.io/badge/all_contributors-3-orange.svg?style=flat-square)](#contributors-)
+[![All Contributors](https://img.shields.io/badge/all_contributors-4-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 [![Gem Version](https://badge.fury.io/rb/bitflyer.svg)](https://badge.fury.io/rb/bitflyer)
 [![Circle CI](https://circleci.com/gh/unhappychoice/bitflyer.svg?style=shield)](https://circleci.com/gh/unhappychoice/bitflyer)
@@ -105,6 +105,7 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
     <td align="center"><a href="https://github.com/yemartin"><img src="https://avatars.githubusercontent.com/u/139002?v=4?s=100" width="100px;" alt=""/><br /><sub><b>Yves-Eric Martin</b></sub></a><br /><a href="https://github.com/unhappychoice/bitflyer/commits?author=yemartin" title="Code">💻</a></td>
     <td align="center"><a href="http://blog.unhappychoice.com"><img src="https://avatars.githubusercontent.com/u/5608948?v=4?s=100" width="100px;" alt=""/><br /><sub><b>Yuji Ueki</b></sub></a><br /><a href="https://github.com/unhappychoice/bitflyer/commits?author=unhappychoice" title="Code">💻</a></td>
     <td align="center"><a href="https://github.com/fkshom"><img src="https://avatars.githubusercontent.com/u/1889118?v=4?s=100" width="100px;" alt=""/><br /><sub><b>Shoma FUKUDA</b></sub></a><br /><a href="https://github.com/unhappychoice/bitflyer/commits?author=fkshom" title="Code">💻</a></td>
+    <td align="center"><a href="http://shidetake.com"><img src="https://avatars.githubusercontent.com/u/1559558?v=4?s=100" width="100px;" alt=""/><br /><sub><b>shidetake</b></sub></a><br /><a href="https://github.com/unhappychoice/bitflyer/commits?author=shidetake" title="Code">💻</a></td>
   </tr>
 </table>
 
