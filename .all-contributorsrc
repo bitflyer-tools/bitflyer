@@ -31,6 +31,15 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "shidetake",
+      "name": "shidetake",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1559558?v=4",
+      "profile": "http://shidetake.com",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 7,
