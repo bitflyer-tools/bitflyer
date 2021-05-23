@@ -164,6 +164,16 @@ module Bitflyer
           @connection.get('/v1/me/getexecutions', query).body
         end
 
+        def balance_history(currency_code: nil, count: nil, before: nil, after: nil)
+          query = {
+            currency_code: currency_code,
+            count: count,
+            before: before,
+            after: after
+          }.delete_if { |_, v| v.nil? }
+          @connection.get('/v1/me/getbalancehistory', query).body
+        end
+
         def positions(product_code: 'FX_BTC_JPY')
           @connection.get('/v1/me/getpositions', product_code: product_code).body
         end
