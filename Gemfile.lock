@@ -69,7 +69,7 @@ GEM
     rubocop-ast (1.8.0)
       parser (>= 3.0.1.1)
     ruby-progressbar (1.11.0)
-    ruby2_keywords (0.0.4)
+    ruby2_keywords (0.0.5)
     unicode-display_width (2.0.0)
     websocket (1.2.9)
     websocket-client-simple (0.3.0)
