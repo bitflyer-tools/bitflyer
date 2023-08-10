@@ -19,7 +19,7 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency 'faraday', '>= 0.14', '< 2.8'
   spec.add_dependency 'faraday_middleware', '>= 0.12', '< 1.3'
-  spec.add_dependency 'websocket-client-simple', '>= 0.3', '< 0.8'
+  spec.add_dependency 'websocket-client-simple', '>= 0.3', '< 0.9'
   spec.add_development_dependency 'bundler', '~> 2.0'
   spec.add_development_dependency 'pry'
   spec.add_development_dependency 'rake'
