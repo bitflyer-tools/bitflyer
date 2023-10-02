@@ -84,7 +84,7 @@ GEM
       parser (>= 3.2.1.0)
     ruby-progressbar (1.13.0)
     ruby2_keywords (0.0.5)
-    unicode-display_width (2.4.2)
+    unicode-display_width (2.5.0)
     websocket (1.2.10)
     websocket-client-simple (0.8.0)
       event_emitter
