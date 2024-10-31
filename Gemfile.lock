@@ -38,7 +38,7 @@ GEM
     faraday-retry (1.0.3)
     faraday_middleware (1.2.1)
       faraday (~> 1.0)
-    json (2.7.4)
+    json (2.7.5)
     language_server-protocol (3.17.0.3)
     method_source (1.1.0)
     multipart-post (2.4.1)
