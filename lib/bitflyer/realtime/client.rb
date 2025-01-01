@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require_relative './websocket'
+require_relative 'websocket'
 
 module Bitflyer
   module Realtime
