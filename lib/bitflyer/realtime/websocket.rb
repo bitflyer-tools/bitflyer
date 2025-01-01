@@ -147,7 +147,7 @@ module Bitflyer
       end
 
       def subscribe_channels
-        @channel_callbacks.each do |channel_name, _|
+        @channel_callbacks.each_key do |channel_name|
           debug_log "42#{{ subscribe: channel_name }.to_json}"
           @websocket_client.send "42#{['subscribe', channel_name].to_json}"
         end
