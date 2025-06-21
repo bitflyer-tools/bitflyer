@@ -110,10 +110,10 @@ module Bitflyer
         @disconnected&.call(error)
       end
 
-      def setup_by_response(json:)
+      def setup_by_response(json:) # rubocop:disable Metrics/CyclomaticComplexity, Metrics/PerceivedComplexity
         body = JSON.parse json
-        @ping_interval = body['pingInterval'].to_i || 25_000
-        @ping_timeout  = body['pingTimeout'].to_i || 60_000
+        @ping_interval = body['pingInterval']&.to_i || 25_000
+        @ping_timeout  = body['pingTimeout']&.to_i || 60_000
         @last_ping_at = Time.now.to_i
         @last_pong_at = Time.now.to_i
         if @key && @secret
