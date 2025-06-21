@@ -4,6 +4,7 @@ AllCops:
   NewCops: enable
   Include:
     - 'lib/**/*.rb'
+  TargetRubyVersion: 3.1
 Style/Documentation:
   Enabled: false
 Metrics/LineLength:
