@@ -1,0 +1,41 @@
+name: test
+
+on: [push]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@master
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: .ruby-version
+      - name: Install bundler
+        run: gem install bundler
+      - name: Install dependencies
+        run: bundle install --jobs 4
+      - name: Run lint
+        run: bundle exec rubocop lib
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ruby: ['3.4.4', '3.3.8', '3.2.8', '3.1.7']
+    steps:
+      - uses: actions/checkout@master
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          rubygems: latest
+      - name: Install bundler
+        run: gem install bundler
+      - name: Install dependencies
+        run: bundle install --jobs 4
+      - name: Run test
+        env:
+          RAILS_ENV: test
+          COVERAGE: true
+          CODECOV_TOKEN: d9091f65-2e14-4029-86e6-f6ec9c59ecec
+        run: bundle exec rspec
