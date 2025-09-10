@@ -88,7 +88,7 @@ GEM
     ruby2_keywords (0.0.5)
     unicode-display_width (3.1.5)
       unicode-emoji (~> 4.0, >= 4.0.4)
-    unicode-emoji (4.0.4)
+    unicode-emoji (4.1.0)
     websocket (1.2.11)
     websocket-client-simple (0.9.0)
       base64
