@@ -4,7 +4,6 @@ require 'bitflyer'
 require 'bitflyer/http/public'
 require 'bitflyer/http/private'
 require 'faraday'
-require 'faraday_middleware'
 require 'openssl'
 
 module Bitflyer
