@@ -22,7 +22,7 @@ GEM
       bigdecimal (~> 3.1)
     language_server-protocol (3.17.0.5)
     lint_roller (1.1.0)
-    mcp (0.7.1)
+    mcp (0.8.0)
       json-schema (>= 4.1)
     method_source (1.1.0)
     mutex_m (0.3.0)
