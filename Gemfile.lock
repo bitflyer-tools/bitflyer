@@ -16,7 +16,7 @@ GEM
     diff-lcs (1.6.2)
     event_emitter (0.2.6)
     io-console (0.8.2)
-    json (2.18.1)
+    json (2.19.1)
     json-schema (5.2.2)
       addressable (~> 2.8)
       bigdecimal (~> 3.1)
