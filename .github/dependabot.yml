@@ -10,3 +10,6 @@ updates:
     allow:
       - dependency-type: direct
       - dependency-type: indirect
+    ignore:
+      - dependency-name: parallel
+        update-types: ["version-update:semver-major"]
