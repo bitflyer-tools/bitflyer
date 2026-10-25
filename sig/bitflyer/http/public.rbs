@@ -1,0 +1,23 @@
+module Bitflyer
+  module HTTP
+    module Public
+      class Client
+        @connection: Connection
+
+        def initialize: () -> void
+
+        def health: () -> untyped
+
+        def markets: () -> untyped
+
+        def board: (?product_code: String) -> untyped
+
+        def ticker: (?product_code: String) -> untyped
+
+        def executions: (?product_code: String, ?count: Integer?, ?before: Integer?, ?after: Integer?) -> untyped
+
+        def chats: (?from_date: Time | String) -> untyped
+      end
+    end
+  end
+end

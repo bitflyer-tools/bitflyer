@@ -80,6 +80,18 @@ client.ready = -> { p "Client is ready to receive events" }
 client.disconnected = ->(error) { p "Client got disconnected" }
 ```
 
+### Type signatures
+
+The gem ships [RBS](https://github.com/ruby/rbs) signatures in `sig/`, so [Steep](https://github.com/soutaro/steep) and other RBS-based tools
+can check code that uses it. API responses are parsed JSON and are typed as `untyped`.
+
+To type check the gem itself:
+
+```sh
+bundle config set --local with typecheck
+bundle install
+bundle exec rake steep
+```
 
 
 ## Contributing

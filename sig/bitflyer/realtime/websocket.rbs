@@ -1,0 +1,56 @@
+module Bitflyer
+  module Realtime
+    class WebSocketClient
+      @host: String
+      @key: String?
+      @secret: String?
+      @debug: bool
+
+      attr_accessor websocket_client: WebSocket::Client::Simple::Client
+      attr_accessor channel_names: Array[Symbol]
+      attr_accessor channel_callbacks: Hash[Symbol, message_callback]
+      attr_accessor ping_interval: Integer?
+      attr_accessor ping_timeout: Integer?
+      attr_accessor last_ping_at: Integer?
+      attr_accessor last_pong_at: Integer?
+      attr_accessor ready: ready_callback?
+      attr_accessor disconnected: disconnected_callback?
+
+      def initialize: (host: String, key: String?, secret: String?, ?debug: bool) -> void
+
+      def subscribe: (channel_name: Symbol) { (untyped message) -> void } -> void
+
+      def connect: () -> void
+
+      def start_monitoring: () -> Thread
+
+      def send_ping: () -> void
+
+      def wait_pong: () -> void
+
+      def reconnect: () -> void
+
+      def handle_error: (error: untyped) -> void
+
+      def handle_message: (payload: untyped) -> void
+
+      def handle_close: (error: untyped) -> void
+
+      def setup_by_response: (json: String) -> void
+
+      def authenticate: () -> void
+
+      def authenticated: (json: String) -> void
+
+      def subscribe_channels: () -> void
+
+      def receive_pong: () -> void
+
+      def disconnect: () -> void
+
+      def emit_message: (json: String) -> void
+
+      def debug_log: (untyped message) -> void
+    end
+  end
+end

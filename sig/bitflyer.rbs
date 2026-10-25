@@ -1,0 +1,9 @@
+module Bitflyer
+  VERSION: String
+
+  def self?.realtime_client: (?String? key, ?String? secret) -> Realtime::Client
+
+  def self?.http_public_client: () -> HTTP::Public::Client
+
+  def self?.http_private_client: (String key, String secret) -> HTTP::Private::Client
+end
