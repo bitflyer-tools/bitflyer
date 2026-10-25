@@ -1,0 +1,124 @@
+module Bitflyer
+  module Realtime
+    PUBLIC_EVENT_NAMES: Array[String]
+    MARKETS: Array[String]
+    PUBLIC_CHANNEL_NAMES: Array[String]
+    PRIVATE_CHANNEL_NAMES: Array[String]
+    CHANNEL_NAMES: Array[String]
+    SOCKET_HOST: String
+
+    type message_callback = ^(untyped message) -> void
+
+    type ready_callback = ^() -> void
+
+    type disconnected_callback = ^(untyped error) -> void
+
+    class Client
+      extend Forwardable
+
+      attr_accessor websocket_client: WebSocketClient
+      attr_accessor ping_interval: Integer?
+      attr_accessor ping_timeout: Integer?
+      attr_accessor last_ping_at: Integer?
+      attr_accessor last_pong_at: Integer?
+
+      def initialize: (?String? key, ?String? secret) -> void
+
+      def ready=: (ready_callback? callback) -> ready_callback?
+
+      def disconnected=: (disconnected_callback? callback) -> disconnected_callback?
+
+      def board_snapshot_btc_jpy=: (message_callback callback) -> message_callback
+
+      def board_snapshot_xrp_jpy=: (message_callback callback) -> message_callback
+
+      def board_snapshot_eth_jpy=: (message_callback callback) -> message_callback
+
+      def board_snapshot_xlm_jpy=: (message_callback callback) -> message_callback
+
+      def board_snapshot_mona_jpy=: (message_callback callback) -> message_callback
+
+      def board_snapshot_eth_btc=: (message_callback callback) -> message_callback
+
+      def board_snapshot_bch_btc=: (message_callback callback) -> message_callback
+
+      def board_snapshot_fx_btc_jpy=: (message_callback callback) -> message_callback
+
+      def board_snapshot_btcjpy_mat1wk=: (message_callback callback) -> message_callback
+
+      def board_snapshot_btcjpy_mat2wk=: (message_callback callback) -> message_callback
+
+      def board_snapshot_btcjpy_mat3m=: (message_callback callback) -> message_callback
+
+      def board_btc_jpy=: (message_callback callback) -> message_callback
+
+      def board_xrp_jpy=: (message_callback callback) -> message_callback
+
+      def board_eth_jpy=: (message_callback callback) -> message_callback
+
+      def board_xlm_jpy=: (message_callback callback) -> message_callback
+
+      def board_mona_jpy=: (message_callback callback) -> message_callback
+
+      def board_eth_btc=: (message_callback callback) -> message_callback
+
+      def board_bch_btc=: (message_callback callback) -> message_callback
+
+      def board_fx_btc_jpy=: (message_callback callback) -> message_callback
+
+      def board_btcjpy_mat1wk=: (message_callback callback) -> message_callback
+
+      def board_btcjpy_mat2wk=: (message_callback callback) -> message_callback
+
+      def board_btcjpy_mat3m=: (message_callback callback) -> message_callback
+
+      def ticker_btc_jpy=: (message_callback callback) -> message_callback
+
+      def ticker_xrp_jpy=: (message_callback callback) -> message_callback
+
+      def ticker_eth_jpy=: (message_callback callback) -> message_callback
+
+      def ticker_xlm_jpy=: (message_callback callback) -> message_callback
+
+      def ticker_mona_jpy=: (message_callback callback) -> message_callback
+
+      def ticker_eth_btc=: (message_callback callback) -> message_callback
+
+      def ticker_bch_btc=: (message_callback callback) -> message_callback
+
+      def ticker_fx_btc_jpy=: (message_callback callback) -> message_callback
+
+      def ticker_btcjpy_mat1wk=: (message_callback callback) -> message_callback
+
+      def ticker_btcjpy_mat2wk=: (message_callback callback) -> message_callback
+
+      def ticker_btcjpy_mat3m=: (message_callback callback) -> message_callback
+
+      def executions_btc_jpy=: (message_callback callback) -> message_callback
+
+      def executions_xrp_jpy=: (message_callback callback) -> message_callback
+
+      def executions_eth_jpy=: (message_callback callback) -> message_callback
+
+      def executions_xlm_jpy=: (message_callback callback) -> message_callback
+
+      def executions_mona_jpy=: (message_callback callback) -> message_callback
+
+      def executions_eth_btc=: (message_callback callback) -> message_callback
+
+      def executions_bch_btc=: (message_callback callback) -> message_callback
+
+      def executions_fx_btc_jpy=: (message_callback callback) -> message_callback
+
+      def executions_btcjpy_mat1wk=: (message_callback callback) -> message_callback
+
+      def executions_btcjpy_mat2wk=: (message_callback callback) -> message_callback
+
+      def executions_btcjpy_mat3m=: (message_callback callback) -> message_callback
+
+      def child_order_events=: (message_callback callback) -> message_callback
+
+      def parent_order_events=: (message_callback callback) -> message_callback
+    end
+  end
+end

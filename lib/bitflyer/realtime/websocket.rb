@@ -36,7 +36,7 @@ module Bitflyer
         @websocket_client.on(:close) { |error| this.handle_close(error: error) }
       rescue SocketError => e
         puts e
-        puts e.backtrace.join("\n")
+        puts e.backtrace&.join("\n")
       end
 
       def start_monitoring
@@ -54,8 +54,10 @@ module Bitflyer
       end
 
       def send_ping
-        return unless @last_ping_at && @ping_interval
-        return unless Time.now.to_i - @last_ping_at > @ping_interval / 1000
+        last_ping_at = @last_ping_at
+        ping_interval = @ping_interval
+        return unless last_ping_at && ping_interval
+        return unless Time.now.to_i - last_ping_at > ping_interval / 1000
 
         debug_log 'Sent ping'
         @websocket_client.send '2'
@@ -63,8 +65,11 @@ module Bitflyer
       end
 
       def wait_pong
-        return unless @last_pong_at && @ping_timeout
-        return unless Time.now.to_i - @last_pong_at > (@ping_interval + @ping_timeout) / 1000
+        last_pong_at = @last_pong_at
+        ping_interval = @ping_interval
+        ping_timeout = @ping_timeout
+        return unless last_pong_at && ping_interval && ping_timeout
+        return unless Time.now.to_i - last_pong_at > (ping_interval + ping_timeout) / 1000
 
         debug_log 'Timed out waiting pong'
         @websocket_client.close
@@ -102,7 +107,7 @@ module Bitflyer
         end
       rescue StandardError => e
         puts e
-        puts e.backtrace.join("\n")
+        puts e.backtrace&.join("\n")
       end
 
       def handle_close(error:)
@@ -127,8 +132,8 @@ module Bitflyer
       def authenticate
         debug_log 'Authenticate'
         timestamp = Time.now.to_i
-        nonce = Random.new.bytes(16).unpack1('H*')
-        signature = OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new('sha256'), @secret, timestamp.to_s + nonce)
+        nonce = Random.new.bytes(16).unpack1('H*').to_s
+        signature = OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new('sha256'), @secret.to_s, timestamp.to_s + nonce)
         auth_params = {
           api_key: @key,
           timestamp: timestamp,

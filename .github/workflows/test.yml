@@ -17,6 +17,22 @@ jobs:
         run: bundle install --jobs 4
       - name: Run lint
         run: bundle exec rubocop lib
+  typecheck:
+    runs-on: ubuntu-latest
+    env:
+      BUNDLE_WITH: typecheck
+    steps:
+      - uses: actions/checkout@master
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: .ruby-version
+      - name: Install bundler
+        run: gem install bundler
+      - name: Install dependencies
+        run: bundle install --jobs 4
+      - name: Run type check
+        run: bundle exec rake steep
   test:
     runs-on: ubuntu-latest
     strategy:

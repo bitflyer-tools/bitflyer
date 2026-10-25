@@ -1,0 +1,33 @@
+module Bitflyer
+  module HTTP
+    BASE_URL: String
+
+    class Response < Struct[untyped]
+      attr_accessor body: untyped
+
+      def self.new: (untyped body) -> instance
+    end
+
+    class Connection
+      @key: String?
+      @secret: String?
+      @uri: URI::Generic
+
+      def initialize: (String? key, String? secret) -> void
+
+      def get: (String path, ?Hash[Symbol, untyped] params) -> Response
+
+      def post: (String path, ?Hash[Symbol, untyped] body) -> Response
+
+      private
+
+      def default_headers: () -> Hash[String, String]
+
+      def sign_request: (Net::HTTPRequest request, String path, ?String? body) -> void
+
+      def execute: (Net::HTTPRequest request) -> untyped
+
+      def parse_body: (String body) -> untyped
+    end
+  end
+end

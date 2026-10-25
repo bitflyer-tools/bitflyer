@@ -43,22 +43,28 @@ module Bitflyer
       end
 
       def sign_request(request, path, body = '')
-        return if @key.nil? || @secret.nil?
+        key = @key
+        secret = @secret
+        return if key.nil? || secret.nil?
 
         timestamp = Time.now.to_i.to_s
         method = request.method.upcase
         text = timestamp + method + path + (body || '')
-        signature = OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new('sha256'), @secret, text)
-        request['ACCESS-KEY'] = @key
+        signature = OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new('sha256'), secret, text)
+        request['ACCESS-KEY'] = key
         request['ACCESS-TIMESTAMP'] = timestamp
         request['ACCESS-SIGN'] = signature
       end
 
       def execute(request)
-        response = Net::HTTP.start(@uri.host, @uri.port, use_ssl: true) { |http| http.request(request) }
-        JSON.parse(response.body)
+        response = Net::HTTP.start(@uri.host.to_s, @uri.port, use_ssl: true) { |http| http.request(request) }
+        parse_body(response.body)
+      end
+
+      def parse_body(body)
+        JSON.parse(body)
       rescue JSON::ParserError
-        response.body
+        body
       end
     end
   end
