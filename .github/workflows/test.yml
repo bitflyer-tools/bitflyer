@@ -4,7 +4,7 @@ on: [push]
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@master
       - name: Set up Ruby
@@ -18,7 +18,7 @@ jobs:
       - name: Run lint
         run: bundle exec rubocop lib
   typecheck:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       BUNDLE_WITH: typecheck
     steps:
@@ -34,7 +34,7 @@ jobs:
       - name: Run type check
         run: bundle exec rake steep
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         ruby: ['3.4.4', '3.3.8', '3.2.8', '3.1.7']
