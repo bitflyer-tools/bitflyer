@@ -6,7 +6,7 @@ require 'openssl'
 
 module Bitflyer
   module Realtime
-    class WebSocketClient
+    class WebSocketClient # rubocop:disable Metrics/ClassLength
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
                     :last_ping_at, :last_pong_at, :ready, :disconnected
 
@@ -17,8 +17,25 @@ module Bitflyer
         @debug = debug
         @channel_names = []
         @channel_callbacks = {}
+        @lifecycle_lock = Mutex.new
+        @monitor_wakeup = ConditionVariable.new
+        @stopped = false
         connect
-        start_monitoring
+        @monitor = start_monitoring
+      end
+
+      def shutdown
+        socket = @lifecycle_lock.synchronize do
+          unless @stopped
+            @stopped = true
+            @monitor_wakeup.signal
+            @websocket_client
+          end
+        end
+
+        @monitor.join unless Thread.current == @monitor
+      ensure
+        socket&.close
       end
 
       def subscribe(channel_name:, &block)
@@ -29,28 +46,18 @@ module Bitflyer
       end
 
       def connect
-        @websocket_client = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
-        this = self
-        @websocket_client.on(:message) { |payload| this.handle_message(payload: payload) }
-        @websocket_client.on(:error) { |error| this.handle_error(error: error) }
-        @websocket_client.on(:close) { |error| this.handle_close(error: error) }
+        @lifecycle_lock.synchronize do
+          return if @stopped || @websocket_client&.open?
+
+          @websocket_client = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
+          this = self
+          @websocket_client.on(:message) { |payload| this.handle_message(payload: payload) }
+          @websocket_client.on(:error) { |error| this.handle_error(error: error) }
+          @websocket_client.on(:close) { |error| this.handle_close(error: error) }
+        end
       rescue SocketError => e
         puts e
         puts e.backtrace&.join("\n")
-      end
-
-      def start_monitoring
-        Thread.new do
-          loop do
-            sleep 1
-            if @websocket_client&.open?
-              send_ping
-              wait_pong
-            else
-              reconnect
-            end
-          end
-        end
       end
 
       def send_ping
@@ -76,17 +83,14 @@ module Bitflyer
       end
 
       def reconnect
-        return if @websocket_client&.open?
-
         debug_log 'Reconnecting...'
-
-        @websocket_client.close if @websocket_client.open?
         connect
       end
 
       def handle_error(error:)
         debug_log error
         return unless error.is_a? Errno::ECONNRESET
+        return if @lifecycle_lock.synchronize { @stopped }
 
         @disconnected&.call(error)
         reconnect
@@ -112,6 +116,8 @@ module Bitflyer
 
       def handle_close(error:)
         debug_log error
+        return if @lifecycle_lock.synchronize { @stopped }
+
         @disconnected&.call(error)
       end
 
@@ -179,6 +185,28 @@ module Bitflyer
         return unless @debug
 
         p message
+      end
+
+      private
+
+      def start_monitoring
+        Thread.new do
+          while wait_for_monitor_tick
+            if @websocket_client&.open?
+              send_ping
+              wait_pong
+            else
+              reconnect
+            end
+          end
+        end
+      end
+
+      def wait_for_monitor_tick
+        @lifecycle_lock.synchronize do
+          @monitor_wakeup.wait(@lifecycle_lock, 1) unless @stopped
+          !@stopped
+        end
       end
     end
   end
