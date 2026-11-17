@@ -107,13 +107,15 @@ module Bitflyer
           @connection.post('/v1/me/cancelallchildorders', product_code: product_code).body
         end
 
-        def child_orders(
+        def child_orders( # rubocop:disable Metrics/ParameterLists
           product_code: 'BTC_JPY',
           count: nil,
           before: nil,
           after: nil,
           child_order_state: nil,
-          parent_order_id: nil
+          parent_order_id: nil,
+          child_order_id: nil,
+          child_order_acceptance_id: nil
         )
           query = {
             product_code: product_code,
@@ -121,7 +123,9 @@ module Bitflyer
             before: before,
             after: after,
             child_order_state: child_order_state,
-            parent_order_id: parent_order_id
+            parent_order_id: parent_order_id,
+            child_order_id: child_order_id,
+            child_order_acceptance_id: child_order_acceptance_id
           }.delete_if { |_, v| v.nil? }
           @connection.get('/v1/me/getchildorders', query).body
         end
