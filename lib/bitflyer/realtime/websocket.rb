@@ -29,14 +29,15 @@ module Bitflyer
       end
 
       def connect
-        @websocket_client = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
+        socket = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
+        @ping_interval = @ping_timeout = @last_ping_at = @last_pong_at = nil
+        @websocket_client = socket
         this = self
-        @websocket_client.on(:message) { |payload| this.handle_message(payload: payload) }
-        @websocket_client.on(:error) { |error| this.handle_error(error: error) }
-        @websocket_client.on(:close) { |error| this.handle_close(error: error) }
+        socket.on(:message) { |payload| this.handle_message(payload: payload) if this.websocket_client.equal?(socket) }
+        socket.on(:error) { |error| this.handle_error(error: error) }
+        socket.on(:close) { |error| this.handle_close(error: error) }
       rescue SocketError => e
-        puts e
-        puts e.backtrace&.join("\n")
+        puts e, e.backtrace&.join("\n")
       end
 
       def start_monitoring
@@ -54,17 +55,19 @@ module Bitflyer
       end
 
       def send_ping
+        socket = @websocket_client
         last_ping_at = @last_ping_at
         ping_interval = @ping_interval
         return unless last_ping_at && ping_interval
         return unless Time.now.to_i - last_ping_at > ping_interval / 1000
 
         debug_log 'Sent ping'
-        @websocket_client.send '2'
-        @last_ping_at = Time.now.to_i
+        socket.send '2'
+        @last_ping_at = Time.now.to_i if @websocket_client.equal?(socket)
       end
 
       def wait_pong
+        socket = @websocket_client
         last_pong_at = @last_pong_at
         ping_interval = @ping_interval
         ping_timeout = @ping_timeout
@@ -72,7 +75,7 @@ module Bitflyer
         return unless Time.now.to_i - last_pong_at > (ping_interval + ping_timeout) / 1000
 
         debug_log 'Timed out waiting pong'
-        @websocket_client.close
+        socket.close
       end
 
       def reconnect
@@ -106,8 +109,7 @@ module Bitflyer
         when 430 then authenticated(json: body)
         end
       rescue StandardError => e
-        puts e
-        puts e.backtrace&.join("\n")
+        puts e, e.backtrace&.join("\n")
       end
 
       def handle_close(error:)
@@ -119,8 +121,7 @@ module Bitflyer
         body = JSON.parse json
         @ping_interval = body['pingInterval']&.to_i || 25_000
         @ping_timeout  = body['pingTimeout']&.to_i || 60_000
-        @last_ping_at = Time.now.to_i
-        @last_pong_at = Time.now.to_i
+        @last_ping_at = @last_pong_at = Time.now.to_i
         if @key && @secret
           authenticate
         else
