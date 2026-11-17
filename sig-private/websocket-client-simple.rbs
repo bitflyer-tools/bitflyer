@@ -2,7 +2,7 @@
 module WebSocket
   module Client
     module Simple
-      def self.connect: (String url, ?Hash[Symbol, untyped] options) -> Client
+      def self.connect: (String url, ?Hash[Symbol, untyped] options) ?{ (Client) -> void } -> Client
 
       class Client
         def on: (Symbol event) { (untyped) -> void } -> void
@@ -10,6 +10,8 @@ module WebSocket
         def send: (String data, ?Hash[Symbol, untyped] options) -> void
 
         def open?: () -> bool
+
+        def closed?: () -> bool
 
         def close: () -> void
       end

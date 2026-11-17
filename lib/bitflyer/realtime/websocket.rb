@@ -2,11 +2,15 @@
 
 require 'websocket-client-simple'
 require 'json'
+require 'monitor'
 require 'openssl'
 
 module Bitflyer
   module Realtime
-    class WebSocketClient
+    class WebSocketClient # rubocop:disable Metrics/ClassLength
+      HANDSHAKE_TIMEOUT = 10
+      private_constant :HANDSHAKE_TIMEOUT
+
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
                     :last_ping_at, :last_pong_at, :ready, :disconnected
 
@@ -17,6 +21,7 @@ module Bitflyer
         @debug = debug
         @channel_names = []
         @channel_callbacks = {}
+        @connection_lock = Monitor.new
         connect
         start_monitoring
       end
@@ -25,16 +30,17 @@ module Bitflyer
         debug_log "Subscribe #{channel_name}"
         @channel_names = (@channel_names + [channel_name]).uniq
         @channel_callbacks[channel_name] = block
-        @websocket_client.send "42#{['subscribe', channel_name].to_json}"
+        @websocket_client&.send "42#{['subscribe', channel_name].to_json}"
       end
 
       def connect
-        @websocket_client = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
-        this = self
-        @websocket_client.on(:message) { |payload| this.handle_message(payload: payload) }
-        @websocket_client.on(:error) { |error| this.handle_error(error: error) }
-        @websocket_client.on(:close) { |error| this.handle_close(error: error) }
+        WebSocket::Client::Simple.connect("#{@host}/socket.io/?transport=websocket") do |socket|
+          @websocket_client = socket
+          @handshake_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + HANDSHAKE_TIMEOUT
+          register_handlers(socket)
+        end
       rescue SocketError => e
+        @websocket_client = nil
         puts e
         puts e.backtrace&.join("\n")
       end
@@ -43,11 +49,14 @@ module Bitflyer
         Thread.new do
           loop do
             sleep 1
-            if @websocket_client&.open?
-              send_ping
-              wait_pong
-            else
-              reconnect
+            @connection_lock.synchronize do
+              if @websocket_client&.open?
+                @handshake_deadline = nil
+                send_ping
+                wait_pong
+              else
+                reconnect
+              end
             end
           end
         end
@@ -60,7 +69,7 @@ module Bitflyer
         return unless Time.now.to_i - last_ping_at > ping_interval / 1000
 
         debug_log 'Sent ping'
-        @websocket_client.send '2'
+        @websocket_client&.send '2'
         @last_ping_at = Time.now.to_i
       end
 
@@ -72,24 +81,28 @@ module Bitflyer
         return unless Time.now.to_i - last_pong_at > (ping_interval + ping_timeout) / 1000
 
         debug_log 'Timed out waiting pong'
-        @websocket_client.close
+        @websocket_client&.close
       end
 
       def reconnect
-        return if @websocket_client&.open?
+        @connection_lock.synchronize do
+          socket = @websocket_client
+          return if socket&.open?
+          return if socket && !socket.closed? && handshake_pending?
 
-        debug_log 'Reconnecting...'
-
-        @websocket_client.close if @websocket_client.open?
-        connect
+          debug_log 'Reconnecting...'
+          @websocket_client = nil
+          socket&.close
+          connect
+        end
       end
 
       def handle_error(error:)
         debug_log error
         return unless error.is_a? Errno::ECONNRESET
 
+        @handshake_deadline = nil
         @disconnected&.call(error)
-        reconnect
       end
 
       def handle_message(payload:) # rubocop:disable Metrics/CyclomaticComplexity
@@ -140,7 +153,7 @@ module Bitflyer
           nonce: nonce,
           signature: signature
         }
-        @websocket_client.send "420#{['auth', auth_params].to_json}"
+        @websocket_client&.send "420#{['auth', auth_params].to_json}"
       end
 
       def authenticated(json:)
@@ -154,7 +167,7 @@ module Bitflyer
       def subscribe_channels
         @channel_callbacks.each_key do |channel_name|
           debug_log "42#{{ subscribe: channel_name }.to_json}"
-          @websocket_client.send "42#{['subscribe', channel_name].to_json}"
+          @websocket_client&.send "42#{['subscribe', channel_name].to_json}"
         end
       end
 
@@ -165,7 +178,7 @@ module Bitflyer
 
       def disconnect
         debug_log 'Disconnecting from server...'
-        @websocket_client.close
+        @websocket_client&.close
       end
 
       def emit_message(json:)
@@ -179,6 +192,25 @@ module Bitflyer
         return unless @debug
 
         p message
+      end
+
+      private
+
+      def handshake_pending?
+        deadline = @handshake_deadline
+        deadline && Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
+      end
+
+      def register_handlers(socket)
+        client = self
+        dispatch = method(:with_current_socket)
+        socket.on(:message) { |payload| dispatch.call(socket) { client.handle_message(payload: payload) } }
+        socket.on(:error) { |error| dispatch.call(socket) { client.handle_error(error: error) } }
+        socket.on(:close) { |error| dispatch.call(socket) { client.handle_close(error: error) } }
+      end
+
+      def with_current_socket(socket)
+        @connection_lock.synchronize { yield if @websocket_client.equal?(socket) }
       end
     end
   end
