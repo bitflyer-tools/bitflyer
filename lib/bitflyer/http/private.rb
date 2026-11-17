@@ -8,6 +8,10 @@ module Bitflyer
           @connection = Connection.new(key, secret)
         end
 
+        def close
+          @connection.close
+        end
+
         def permissions
           @connection.get('/v1/me/getpermissions').body
         end

@@ -34,6 +34,9 @@ private_client = Bitflyer.http_private_client('YOUR_API_KEY', 'YOUR_API_SECRET')
 p private_client.positions # will print your positions
 ```
 
+Each HTTP client reuses its HTTPS connection across requests. Call `client.close` to release it.
+The next request on that client opens a new connection.
+
 ### Realtime API
 
 #### Public events

@@ -19,20 +19,24 @@ module Bitflyer
         @key = key
         @secret = secret
         @uri = URI.parse(BASE_URL)
+        @mutex = Mutex.new
+        @http = nil
+      end
+
+      def close
+        @mutex.synchronize { close_session }
       end
 
       def get(path, params = {})
         query = URI.encode_www_form(params.compact)
         full_path = query.empty? ? path : "#{path}?#{query}"
         request = Net::HTTP::Get.new(full_path, default_headers)
-        sign_request(request, full_path)
         Response.new(execute(request))
       end
 
       def post(path, body = {})
         request = Net::HTTP::Post.new(path, default_headers.merge('Content-Type' => 'application/json'))
         request.body = JSON.generate(body.compact)
-        sign_request(request, path, request.body)
         Response.new(execute(request))
       end
 
@@ -57,8 +61,24 @@ module Bitflyer
       end
 
       def execute(request)
-        response = Net::HTTP.start(@uri.host.to_s, @uri.port, use_ssl: true) { |http| http.request(request) }
+        response = @mutex.synchronize { send_request(request) }
         parse_body(response.body)
+      end
+
+      def send_request(request)
+        http = (@http ||= Net::HTTP.start(@uri.host.to_s, @uri.port, use_ssl: true))
+        sign_request(request, request.path, request.body)
+        # Net::HTTP reconnects idle sockets and only retries idempotent requests.
+        http.request(request)
+      rescue StandardError
+        close_session
+        raise
+      end
+
+      def close_session
+        http = @http
+        @http = nil
+        http&.finish
       end
 
       def parse_body(body)
