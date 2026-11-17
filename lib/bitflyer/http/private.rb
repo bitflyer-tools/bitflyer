@@ -24,20 +24,20 @@ module Bitflyer
           @connection.get('/v1/me/getaddresses').body
         end
 
-        def coin_ins
-          @connection.get('/v1/me/getcoinins').body
+        def coin_ins(count: nil, before: nil, after: nil)
+          @connection.get('/v1/me/getcoinins', count: count, before: before, after: after).body
         end
 
-        def coin_outs
-          @connection.get('/v1/me/getcoinouts').body
+        def coin_outs(count: nil, before: nil, after: nil)
+          @connection.get('/v1/me/getcoinouts', count: count, before: before, after: after).body
         end
 
         def bank_accounts
           @connection.get('/v1/me/getbankaccounts').body
         end
 
-        def deposits
-          @connection.get('/v1/me/getdeposits').body
+        def deposits(count: nil, before: nil, after: nil)
+          @connection.get('/v1/me/getdeposits', count: count, before: before, after: after).body
         end
 
         def withdraw(currency_code: 'JPY', bank_account_id: nil, amount: nil, code: nil)
@@ -50,8 +50,8 @@ module Bitflyer
           @connection.post('/v1/me/withdraw', body).body
         end
 
-        def withdrawals
-          @connection.get('/v1/me/getwithdrawals').body
+        def withdrawals(count: nil, before: nil, after: nil)
+          @connection.get('/v1/me/getwithdrawals', count: count, before: before, after: after).body
         end
 
         def send_child_order(
