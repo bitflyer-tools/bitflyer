@@ -5,6 +5,7 @@ module Bitflyer
       @key: String?
       @secret: String?
       @debug: bool
+      @authentication_error: RuntimeError?
 
       attr_accessor websocket_client: WebSocket::Client::Simple::Client
       attr_accessor channel_names: Array[Symbol]
@@ -51,6 +52,10 @@ module Bitflyer
       def emit_message: (json: String) -> void
 
       def debug_log: (untyped message) -> void
+
+      private
+
+      def reject_authentication: (String json) -> void
     end
   end
 end

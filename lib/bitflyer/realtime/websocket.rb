@@ -6,7 +6,7 @@ require 'openssl'
 
 module Bitflyer
   module Realtime
-    class WebSocketClient
+    class WebSocketClient # rubocop:disable Metrics/ClassLength
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
                     :last_ping_at, :last_pong_at, :ready, :disconnected
 
@@ -17,6 +17,7 @@ module Bitflyer
         @debug = debug
         @channel_names = []
         @channel_callbacks = {}
+        @authentication_error = nil
         connect
         start_monitoring
       end
@@ -43,6 +44,8 @@ module Bitflyer
         Thread.new do
           loop do
             sleep 1
+            break if @authentication_error
+
             if @websocket_client&.open?
               send_ping
               wait_pong
@@ -76,6 +79,7 @@ module Bitflyer
       end
 
       def reconnect
+        return if @authentication_error
         return if @websocket_client&.open?
 
         debug_log 'Reconnecting...'
@@ -93,6 +97,8 @@ module Bitflyer
       end
 
       def handle_message(payload:) # rubocop:disable Metrics/CyclomaticComplexity
+        return if @authentication_error
+
         debug_log payload.data
         return unless payload.data =~ /^\d+/
 
@@ -112,7 +118,7 @@ module Bitflyer
 
       def handle_close(error:)
         debug_log error
-        @disconnected&.call(error)
+        @disconnected&.call(@authentication_error || error)
       end
 
       def setup_by_response(json:) # rubocop:disable Metrics/CyclomaticComplexity, Metrics/PerceivedComplexity
@@ -144,7 +150,7 @@ module Bitflyer
       end
 
       def authenticated(json:)
-        raise "Authentication failed: #{json}" if json != '[null]'
+        return reject_authentication(json) if json != '[null]'
 
         debug_log 'Authenticated'
         subscribe_channels
@@ -179,6 +185,13 @@ module Bitflyer
         return unless @debug
 
         p message
+      end
+
+      private
+
+      def reject_authentication(json)
+        @authentication_error = RuntimeError.new("Authentication failed: #{json}")
+        disconnect
       end
     end
   end
