@@ -90,6 +90,7 @@ module Bitflyer
 
       def handle_error(error:)
         debug_log error
+        return if @authentication_error
         return unless error.is_a? Errno::ECONNRESET
 
         @disconnected&.call(error)
@@ -118,7 +119,9 @@ module Bitflyer
 
       def handle_close(error:)
         debug_log error
-        @disconnected&.call(@authentication_error || error)
+        return if @authentication_error
+
+        @disconnected&.call(error)
       end
 
       def setup_by_response(json:) # rubocop:disable Metrics/CyclomaticComplexity, Metrics/PerceivedComplexity
@@ -192,6 +195,10 @@ module Bitflyer
       def reject_authentication(json)
         @authentication_error = RuntimeError.new("Authentication failed: #{json}")
         disconnect
+      rescue SystemCallError, IOError => e
+        debug_log e
+      ensure
+        @disconnected&.call(@authentication_error)
       end
     end
   end
