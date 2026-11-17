@@ -8,6 +8,8 @@ module Bitflyer
           @connection = Connection.new(key, secret)
         end
 
+        def inspect = "#<#{self.class}>"
+
         def permissions
           @connection.get('/v1/me/getpermissions').body
         end

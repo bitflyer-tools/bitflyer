@@ -18,6 +18,8 @@ module Bitflyer
 
       def initialize: (host: String, key: String?, secret: String?, ?debug: bool) -> void
 
+      def inspect: () -> String
+
       def subscribe: (channel_name: Symbol) { (untyped message) -> void } -> void
 
       def connect: () -> void
