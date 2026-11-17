@@ -94,6 +94,16 @@ describe Bitflyer::HTTP::Connection do
       expect(@captured_request['ACCESS-SIGN']).to eq(expected_sign)
     end
 
+    it 'sends and signs the absolute trading commission request target' do
+      client = Bitflyer.http_private_client('test_key', 'test_secret')
+      client.trading_commission(product_code: 'ETH_JPY')
+
+      expected_path = '/v1/me/gettradingcommission?product_code=ETH_JPY'
+      expected_sign = OpenSSL::HMAC.hexdigest('sha256', 'test_secret', "1000000GET#{expected_path}")
+      expect(@captured_request).to have_attributes(method: 'GET', path: expected_path)
+      expect(@captured_request['ACCESS-SIGN']).to eq(expected_sign)
+    end
+
     it 'does not add auth headers without credentials' do
       connection_no_auth = described_class.new(nil, nil)
       connection_no_auth.get('/v1/gethealth')
