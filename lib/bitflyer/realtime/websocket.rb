@@ -6,9 +6,9 @@ require 'openssl'
 
 module Bitflyer
   module Realtime
-    class WebSocketClient
+    class WebSocketClient # rubocop:disable Metrics/ClassLength
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
-                    :last_ping_at, :last_pong_at, :ready, :disconnected
+                    :last_ping_at, :last_pong_at, :ready, :disconnected, :subscription_failed
 
       def initialize(host:, key:, secret:, debug: false)
         @host = host
@@ -17,6 +17,9 @@ module Bitflyer
         @debug = debug
         @channel_names = []
         @channel_callbacks = {}
+        @pending_subscriptions = {}
+        @subscription_rejected = false
+        @awaiting_authentication = false
         connect
         start_monitoring
       end
@@ -29,11 +32,13 @@ module Bitflyer
       end
 
       def connect
-        @websocket_client = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
+        @pending_subscriptions.clear
+        @awaiting_authentication = false
+        socket = @websocket_client = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
         this = self
-        @websocket_client.on(:message) { |payload| this.handle_message(payload: payload) }
-        @websocket_client.on(:error) { |error| this.handle_error(error: error) }
-        @websocket_client.on(:close) { |error| this.handle_close(error: error) }
+        socket.on(:message) { |payload| this.handle_message(payload: payload) if this.websocket_client.equal?(socket) }
+        socket.on(:error) { |error| this.handle_error(error: error) if this.websocket_client.equal?(socket) }
+        socket.on(:close) { |error| this.handle_close(error: error) if this.websocket_client.equal?(socket) }
       rescue SocketError => e
         puts e
         puts e.backtrace&.join("\n")
@@ -98,12 +103,13 @@ module Bitflyer
 
         code, body = payload.data.scan(/^(\d+)(.*)$/)[0]
 
-        case code.to_i
-        when 0 then setup_by_response(json: body)
-        when 3 then receive_pong
-        when 41 then disconnect
-        when 42 then emit_message(json: body)
-        when 430 then authenticated(json: body)
+        case code
+        when '0' then setup_by_response(json: body)
+        when '3' then receive_pong
+        when '41' then disconnect
+        when '42' then emit_message(json: body)
+        when '430' then authenticated(json: body)
+        when /\A43[1-9]\d*\z/ then acknowledge_subscription(id: code[2..].to_i, json: body)
         end
       rescue StandardError => e
         puts e
@@ -112,10 +118,12 @@ module Bitflyer
 
       def handle_close(error:)
         debug_log error
+        @pending_subscriptions.clear
+        @awaiting_authentication = false
         @disconnected&.call(error)
       end
 
-      def setup_by_response(json:) # rubocop:disable Metrics/CyclomaticComplexity, Metrics/PerceivedComplexity
+      def setup_by_response(json:)
         body = JSON.parse json
         @ping_interval = body['pingInterval']&.to_i || 25_000
         @ping_timeout  = body['pingTimeout']&.to_i || 60_000
@@ -125,7 +133,6 @@ module Bitflyer
           authenticate
         else
           subscribe_channels
-          @ready&.call
         end
       end
 
@@ -140,21 +147,43 @@ module Bitflyer
           nonce: nonce,
           signature: signature
         }
+        @awaiting_authentication = true
         @websocket_client.send "420#{['auth', auth_params].to_json}"
       end
 
       def authenticated(json:)
+        return unless @awaiting_authentication
+
+        @awaiting_authentication = false
         raise "Authentication failed: #{json}" if json != '[null]'
 
         debug_log 'Authenticated'
         subscribe_channels
-        @ready&.call
       end
 
       def subscribe_channels
-        @channel_callbacks.each_key do |channel_name|
-          debug_log "42#{{ subscribe: channel_name }.to_json}"
-          @websocket_client.send "42#{['subscribe', channel_name].to_json}"
+        @subscription_rejected = false
+        @pending_subscriptions = @channel_callbacks.keys.each_with_index.to_h { |channel, index| [index + 1, channel] }
+        @ready&.call if @pending_subscriptions.empty?
+        socket = @websocket_client
+        @pending_subscriptions.to_a.each do |id, channel|
+          frame = "42#{id}#{['subscribe', channel].to_json}"
+          debug_log frame
+          socket.send frame
+        end
+      end
+
+      def acknowledge_subscription(id:, json:)
+        channel = @pending_subscriptions[id]
+        return unless channel
+
+        error = JSON.parse(json).first
+        @pending_subscriptions.delete(id)
+        if error
+          @subscription_rejected = true
+          @subscription_failed&.call(channel, error)
+        elsif @pending_subscriptions.empty? && !@subscription_rejected
+          @ready&.call
         end
       end
 

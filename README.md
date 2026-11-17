@@ -49,7 +49,7 @@ To subscribe to the private `child_order_events` and `parent_order_events`, pass
 
 #### Connection status monitoring
 
-The `ready` callback is called when the `realtime_client` is ready to receive events (after the socket connection is established, the optional authentication has succeeded, and the channels have been subscribed). If connection is lost, the `disconnected` callback is called, and reconnection is attempted automatically. When connection is restored, `ready` is called again.
+The `ready` callback is called when the `realtime_client` is ready to receive events (after the socket connection is established, the optional authentication has succeeded, and the channels have been subscribed). If connection is lost, the `disconnected` callback is called, and reconnection is attempted automatically. When the connection is restored and the server acknowledges all subscriptions for that setup, `ready` is called again. If the server rejects a setup subscription, `subscription_failed` receives the channel name as a symbol and the server error. That setup skips `ready`.
 
 #### Examples
 
@@ -78,6 +78,7 @@ Connection monitoring:
 client = Bitflyer.realtime_client
 client.ready = -> { p "Client is ready to receive events" }
 client.disconnected = ->(error) { p "Client got disconnected" }
+client.subscription_failed = ->(channel, error) { p [channel, error] }
 ```
 
 ### Type signatures

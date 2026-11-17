@@ -5,6 +5,9 @@ module Bitflyer
       @key: String?
       @secret: String?
       @debug: bool
+      @pending_subscriptions: Hash[Integer, Symbol]
+      @subscription_rejected: bool
+      @awaiting_authentication: bool
 
       attr_accessor websocket_client: WebSocket::Client::Simple::Client
       attr_accessor channel_names: Array[Symbol]
@@ -15,6 +18,8 @@ module Bitflyer
       attr_accessor last_pong_at: Integer?
       attr_accessor ready: ready_callback?
       attr_accessor disconnected: disconnected_callback?
+
+      attr_accessor subscription_failed: subscription_failed_callback?
 
       def initialize: (host: String, key: String?, secret: String?, ?debug: bool) -> void
 
@@ -43,6 +48,8 @@ module Bitflyer
       def authenticated: (json: String) -> void
 
       def subscribe_channels: () -> void
+
+      def acknowledge_subscription: (id: Integer, json: String) -> void
 
       def receive_pong: () -> void
 
