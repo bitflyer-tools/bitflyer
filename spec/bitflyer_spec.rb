@@ -102,6 +102,35 @@ describe Bitflyer do
       end
     end
 
+    it 'stops the monitor and closes the socket during a stalled TLS reconnect' do
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
+      replacement = Bitflyer::Realtime::Transport.new
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket, replacement)
+
+      TCPServer.open('127.0.0.1', 0) do |server|
+        stub_const('Bitflyer::Realtime::SOCKET_HOST', "https://127.0.0.1:#{server.addr[1]}")
+        @client = Bitflyer.realtime_client
+        monitor = @client.websocket_client.instance_variable_get(:@monitor)
+        allow(socket).to receive(:open?).and_return(false)
+        allow(socket).to receive(:closed?).and_return(true)
+
+        peer = nil
+        Timeout.timeout(5) do
+          peer = server.accept
+          expect(peer.readpartial(1)).to eq("\x16")
+          @client.shutdown
+          peer.read
+          expect(peer).to be_eof
+        end
+
+        expect(monitor).not_to be_alive
+        expect(replacement).to be_closed
+        expect(@client.websocket_client.websocket_client).to equal(socket)
+      ensure
+        peer&.close
+      end
+    end
+
     it 'reconnects after the peer closes during the WebSocket handshake' do
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
       TCPServer.open('127.0.0.1', 0) do |server|

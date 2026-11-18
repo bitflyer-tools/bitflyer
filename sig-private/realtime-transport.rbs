@@ -5,5 +5,17 @@ module Bitflyer
 
       def close_on_eof: () -> void
     end
+
+    class WebSocketClient
+      @connection: [Transport, Thread]?
+
+      private
+
+      def start_connection: () -> [Transport, Thread]?
+
+      def attach_transport: (Transport) -> void
+
+      def finish_connection: ([Transport, Thread], bool connected) -> void
+    end
   end
 end

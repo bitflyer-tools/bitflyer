@@ -25,14 +25,20 @@ module Bitflyer
       end
 
       def shutdown
-        socket = @lifecycle_lock.synchronize do
-          unless @stopped
-            @stopped = true
-            @monitor_wakeup.signal
-            @websocket_client
-          end
+        socket, connection = @lifecycle_lock.synchronize do
+          next [nil, nil] if @stopped
+
+          @stopped = true
+          @monitor_wakeup.signal
+          @connection&.last&.kill
+          [@websocket_client, @connection]
         end
 
+        if connection
+          transport, connector = connection
+          connector.join
+          transport.close
+        end
         @monitor.join unless Thread.current == @monitor
       ensure
         socket&.close
@@ -46,21 +52,18 @@ module Bitflyer
       end
 
       def connect
-        @lifecycle_lock.synchronize do
-          return if @stopped || (@websocket_client && !@websocket_client.closed?)
+        connection = start_connection
+        return unless connection
 
-          transport = Transport.new
-          transport.connect "#{@host}/socket.io/?transport=websocket"
-          @websocket_client = transport
-          this = self
-          transport.on(:message) { |payload| this.handle_message(payload: payload) }
-          transport.on(:error) { |error| this.handle_error(error: error) }
-          transport.on(:close) { |error| this.handle_close(error: error) }
-          transport.close_on_eof
-        end
+        error = connection.last.value
+        raise error if error
+
+        connected = true
       rescue SocketError => e
         puts e
         puts e.backtrace&.join("\n")
+      ensure
+        finish_connection(connection, !!connected) if connection
       end
 
       def send_ping
@@ -191,6 +194,46 @@ module Bitflyer
       end
 
       private
+
+      def start_connection
+        @lifecycle_lock.synchronize do
+          return if @stopped || @connection || (@websocket_client && !@websocket_client.closed?)
+
+          transport = Transport.new
+          connector = Thread.new do
+            transport.connect "#{@host}/socket.io/?transport=websocket"
+            nil
+          rescue StandardError => e
+            e
+          end
+          @connection = [transport, connector]
+        end
+      end
+
+      def attach_transport(transport)
+        @websocket_client = transport
+        this = self
+        transport.on(:message) { |payload| this.handle_message(payload: payload) }
+        transport.on(:error) { |error| this.handle_error(error: error) }
+        transport.on(:close) { |error| this.handle_close(error: error) }
+        transport.close_on_eof
+      end
+
+      def finish_connection(connection, connected)
+        transport, connector = connection
+        close_transport = @lifecycle_lock.synchronize do
+          @connection = nil
+          return if @stopped
+
+          attach_transport(transport) if connected
+          !connected
+        end
+        return unless close_transport
+
+        connector.kill
+        connector.join
+        transport.close
+      end
 
       def start_monitoring
         Thread.new do
