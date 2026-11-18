@@ -8,6 +8,8 @@ module Bitflyer
 
       def close_after_reset: (Errno::ECONNRESET) -> void
 
+      def close_for_shutdown: () -> void
+
       def close_on_eof: () -> void
     end
 

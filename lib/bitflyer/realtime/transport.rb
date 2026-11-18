@@ -9,6 +9,11 @@ module Bitflyer
 
       def close_after_reset(error)
         @reset_error = error
+        close_for_shutdown
+      end
+
+      def close_for_shutdown
+        # A close frame can block on the same socket as the pending write.
         @pipe_broken = true
         close
       end

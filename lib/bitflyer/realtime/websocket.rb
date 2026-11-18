@@ -31,11 +31,15 @@ module Bitflyer
         if connection
           transport, connector = connection
           connector.join
-          transport.close
+          transport.close_for_shutdown unless transport.equal?(socket)
         end
-        @monitor&.join unless Thread.current == @monitor
+        if socket.is_a?(Transport)
+          socket.close_for_shutdown
+        else
+          socket&.close
+        end
       ensure
-        socket&.close
+        @monitor&.join unless Thread.current == @monitor
       end
 
       def subscribe(channel_name:, &block)
@@ -73,6 +77,8 @@ module Bitflyer
         debug_log 'Sent ping'
         @websocket_client&.send '2'
         @last_ping_at = Time.now.to_i
+      rescue IOError, SystemCallError
+        raise unless @lifecycle_lock.synchronize { @stopped }
       end
 
       def wait_pong
