@@ -5,9 +5,9 @@ module Bitflyer
       @pipe_broken: bool
       @closed: bool?
 
-      attr_reader reset_error: Errno::ECONNRESET?
+      attr_reader read_error: (Errno::ECONNRESET | OpenSSL::SSL::SSLError)?
 
-      def close_after_reset: (Errno::ECONNRESET) -> void
+      def close_after_read_error: (Errno::ECONNRESET | OpenSSL::SSL::SSLError) -> void
 
       def close_for_shutdown: () -> void
 
@@ -30,6 +30,8 @@ module Bitflyer
       def stop_lifecycle: () -> [WebSocket::Client::Simple::Client?, [Transport, Thread]?]
 
       def start_connection: () -> [Transport, Thread]?
+
+      def wait_for_connection: ([Transport, Thread]) -> bool
 
       def register_transport_handlers: (Transport) -> void
 

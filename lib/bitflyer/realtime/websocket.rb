@@ -60,10 +60,7 @@ module Bitflyer
         connection = start_connection
         return unless connection
 
-        error = connection.last.value
-        raise error if error
-
-        connected = true
+        connected = wait_for_connection(connection)
       rescue SocketError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::ETIMEDOUT,
              Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
         puts e
@@ -122,11 +119,11 @@ module Bitflyer
 
       def handle_error(error:, transport: @websocket_client)
         debug_log error
-        return unless error.is_a? Errno::ECONNRESET
+        return unless error.is_a?(Errno::ECONNRESET) || error.is_a?(OpenSSL::SSL::SSLError)
         return unless transport.is_a? Transport
         return if @lifecycle_lock.synchronize { lifecycle_inactive? }
 
-        transport.close_after_reset(error)
+        transport.close_after_read_error(error)
       end
 
       def handle_message(payload:) # rubocop:disable Metrics/CyclomaticComplexity
@@ -245,7 +242,7 @@ module Bitflyer
       end
 
       def ping_interrupted?(socket)
-        return true if socket.is_a?(Transport) && socket.reset_error
+        return true if socket.is_a?(Transport) && socket.read_error
 
         @lifecycle_lock.synchronize { lifecycle_inactive? }
       end
@@ -279,6 +276,17 @@ module Bitflyer
         end
       end
 
+      def wait_for_connection(connection)
+        error = connection.last.value
+        raise error if error
+
+        true
+      rescue OpenSSL::SSL::SSLError
+        raise unless connection.first.read_error
+
+        false
+      end
+
       def register_transport_handlers(transport)
         this = self
         activate = -> { activate_transport(transport) }
@@ -287,7 +295,7 @@ module Bitflyer
           this.handle_message(payload: payload) if this.websocket_client.equal?(transport)
         end
         transport.on(:error) { |error| this.handle_error(error: error, transport: transport) }
-        transport.on(:close) { |error| this.handle_close(error: error || transport.reset_error) }
+        transport.on(:close) { |error| this.handle_close(error: error || transport.read_error) }
       end
 
       def activate_transport(transport)

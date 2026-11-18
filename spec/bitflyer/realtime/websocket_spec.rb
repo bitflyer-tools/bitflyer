@@ -6,7 +6,7 @@ require 'timeout'
 describe Bitflyer::Realtime::WebSocketClient do
   let(:socket) do
     instance_double(Bitflyer::Realtime::Transport, open?: true, closed?: false, send: nil, close: nil,
-                    close_on_eof: nil, reset_error: nil)
+                    close_on_eof: nil, read_error: nil)
   end
   let(:handlers) { {} }
 

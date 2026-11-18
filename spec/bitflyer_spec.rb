@@ -35,7 +35,7 @@ describe Bitflyer do
   describe '.realtime_client' do
     let(:socket) do
       double('websocket transport', open?: true, closed?: false, connect: nil, on: nil, close: nil,
-             close_on_eof: nil, reset_error: nil, send: nil)
+             close_on_eof: nil, read_error: nil, send: nil)
     end
 
     before do
@@ -119,7 +119,7 @@ describe Bitflyer do
 
     it 'automatically reconnects after the transport closes while active' do
       replacement = double('replacement transport', open?: true, closed?: false, connect: nil, on: nil, close: nil,
-                           close_on_eof: nil, reset_error: nil)
+                           close_on_eof: nil, read_error: nil)
       reconnected = Queue.new
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket, replacement)
       allow(replacement).to receive(:close_on_eof) { reconnected << true }
@@ -406,39 +406,49 @@ describe Bitflyer do
       end
     end
 
-    it 'retries when the receiver clears the socket before the handshake write' do
-      allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
-      resetting_transport = Bitflyer::Realtime::Transport.new
-      replacement = double('replacement transport', open?: true, connect: nil, on: nil, close: nil)
-      raw_socket = double('socket', close: nil)
-      allow(raw_socket).to receive(:getc).and_raise(Errno::ECONNRESET)
-      allow(TCPSocket).to receive(:new).and_return(raw_socket)
-      allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket, resetting_transport, replacement)
+    [Errno::ECONNRESET, OpenSSL::SSL::SSLError].each do |read_error|
+      it "retries when #{read_error} clears the socket before the handshake write" do
+        allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
+        interrupted_transport = Bitflyer::Realtime::Transport.new
+        replacement = double('replacement transport', open?: true, connect: nil, on: nil, close: nil)
+        raw_socket = double('socket', close: nil)
+        peer = raw_socket
+        url = 'ws://example.test'
+        if read_error == OpenSSL::SSL::SSLError
+          peer = instance_double(OpenSSL::SSL::SSLSocket, connect: nil, close: nil, 'sync_close=': nil, 'hostname=': nil)
+          allow(OpenSSL::SSL::SSLSocket).to receive(:new).and_return(peer)
+          url = 'wss://example.test'
+        end
+        allow(peer).to receive(:getc).and_raise(read_error)
+        allow(TCPSocket).to receive(:new).and_return(raw_socket)
+        allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket, interrupted_transport, replacement)
 
-      connector = nil
-      allow(resetting_transport).to receive(:connect).and_wrap_original do |connect, url|
-        connector = Thread.current
-        connect.call(url)
+        connector = nil
+        allow(interrupted_transport).to receive(:connect).and_wrap_original do |connect, url|
+          connector = Thread.current
+          connect.call(url)
+        end
+        allow(Thread).to receive(:new).and_wrap_original do |start, &block|
+          thread = start.call(&block)
+          thread.join(1) if Thread.current == connector
+          thread
+        end
+
+        reconnected = Queue.new
+        allow(replacement).to receive(:close_on_eof) { reconnected << true }
+        allow($stdout).to receive(:puts)
+        stub_const('Bitflyer::Realtime::SOCKET_HOST', url)
+        disconnected = Queue.new
+        client.disconnected = ->(error) { disconnected << error }
+        allow(socket).to receive_messages(open?: false, closed?: true)
+
+        Timeout.timeout(5) { reconnected.pop }
+        expect(disconnected.pop(true)).to be_a(read_error)
+        expect(peer).to have_received(:close).once
+        expect(session.websocket_client).to equal(replacement)
+      ensure
+        interrupted_transport&.close_for_shutdown
       end
-      allow(Thread).to receive(:new).and_wrap_original do |start, &block|
-        thread = start.call(&block)
-        thread.join(1) if Thread.current == connector
-        thread
-      end
-
-      reconnected = Queue.new
-      allow(replacement).to receive(:close_on_eof) { reconnected << true }
-      allow($stdout).to receive(:puts)
-      stub_const('Bitflyer::Realtime::SOCKET_HOST', 'ws://example.test')
-      @client = Bitflyer.realtime_client
-      disconnected = Queue.new
-      @client.disconnected = ->(error) { disconnected << error }
-      allow(socket).to receive_messages(open?: false, closed?: true)
-
-      Timeout.timeout(5) { reconnected.pop }
-      expect(disconnected.pop(true)).to be_a(Errno::ECONNRESET)
-      expect(raw_socket).to have_received(:close).once
-      expect(session.websocket_client).to equal(replacement)
     end
 
     it 'exposes heartbeat state initialized and updated by the WebSocket session' do

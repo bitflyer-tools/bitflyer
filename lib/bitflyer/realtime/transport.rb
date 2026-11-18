@@ -5,20 +5,20 @@ require 'websocket-client-simple'
 module Bitflyer
   module Realtime
     class Transport < WebSocket::Client::Simple::Client
-      attr_reader :reset_error
+      attr_reader :read_error
 
       def connect(url, options = {})
         super
       rescue NoMethodError => e
         # The receiver can clear the socket before the handshake request is written.
-        error = @reset_error
+        error = @read_error
         raise unless error && e.name == :write && e.receiver.nil?
 
         raise error
       end
 
-      def close_after_reset(error)
-        @reset_error = error
+      def close_after_read_error(error)
+        @read_error = error
         close_for_shutdown
       end
 
