@@ -3,6 +3,7 @@ module Bitflyer
     class Transport < WebSocket::Client::Simple::Client
       @socket: (TCPSocket | OpenSSL::SSL::SSLSocket)?
       @pipe_broken: bool
+      @closed: bool?
 
       attr_reader reset_error: Errno::ECONNRESET?
 
@@ -11,6 +12,10 @@ module Bitflyer
       def close_for_shutdown: () -> void
 
       def close_on_eof: () -> void
+
+      private
+
+      def close_from_reader: () -> void
     end
 
     class WebSocketClient

@@ -79,6 +79,44 @@ describe Bitflyer do
       expect(Bitflyer::Realtime::Transport).to have_received(:new).once
     end
 
+    {
+      ready: '0{}',
+      ticker_btc_jpy: '42["lightning_ticker_BTC_JPY",{}]'
+    }.each do |callback, payload|
+      it "returns from shutdown inside the #{callback} callback" do
+        allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
+        TCPServer.open('127.0.0.1', 0) do |server|
+          stub_const('Bitflyer::Realtime::SOCKET_HOST', "http://127.0.0.1:#{server.addr[1]}")
+          transport = session.websocket_client
+          monitor = session.instance_variable_get(:@monitor)
+          completed = Queue.new
+          stop_client = lambda do |*|
+            client.shutdown
+            completed << Thread.current
+          end
+          client.public_send(:"#{callback}=", stop_client)
+
+          peer = nil
+          Timeout.timeout(5) do
+            peer = server.accept
+            handshake = WebSocket::Handshake::Server.new
+            handshake << peer.gets("\r\n\r\n")
+            peer.write(handshake.to_s)
+            peer.write(WebSocket::Frame::Outgoing::Server.new(version: handshake.version, type: :text,
+                                                               data: payload).to_s)
+
+            expect(completed.pop).to equal(transport.thread)
+            expect(transport.thread.join(1)).to equal(transport.thread)
+            expect(transport).to be_closed
+            expect(monitor).not_to be_alive
+            expect(peer).to be_eof
+          end
+        ensure
+          peer&.close
+        end
+      end
+    end
+
     it 'automatically reconnects after the transport closes while active' do
       replacement = double('replacement transport', open?: true, closed?: false, connect: nil, on: nil, close: nil,
                            close_on_eof: nil, reset_error: nil)

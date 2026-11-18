@@ -25,7 +25,7 @@ module Bitflyer
       def close_for_shutdown
         # A close frame can block on the same socket as the pending write.
         @pipe_broken = true
-        close
+        Thread.current == thread ? close_from_reader : close
       end
 
       def close_on_eof
@@ -40,6 +40,18 @@ module Bitflyer
           transport.close if byte.nil?
           byte
         end
+      end
+
+      private
+
+      def close_from_reader
+        return if @closed
+
+        # The read loop exits after the current callback returns.
+        @closed = true
+        @socket&.close
+        @socket = nil
+        emit :__close
       end
     end
   end
