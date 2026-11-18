@@ -8,7 +8,7 @@ module Bitflyer
       @lifecycle_lock: Mutex
       @monitor_wakeup: Thread::ConditionVariable
       @stopped: bool
-      @monitor: Thread
+      @monitor: Thread?
 
       attr_accessor websocket_client: WebSocket::Client::Simple::Client
       attr_accessor channel_names: Array[Symbol]

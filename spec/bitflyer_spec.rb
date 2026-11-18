@@ -62,7 +62,7 @@ describe Bitflyer do
                            close_on_eof: nil, reset_error: nil)
       reconnected = Queue.new
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket, replacement)
-      allow(replacement).to receive(:on).with(:close) { reconnected << true }
+      allow(replacement).to receive(:close_on_eof) { reconnected << true }
       @client = Bitflyer.realtime_client
       allow(socket).to receive(:open?).and_return(false)
       allow(socket).to receive(:closed?).and_return(true)
@@ -70,6 +70,31 @@ describe Bitflyer do
       Timeout.timeout(3) { reconnected.pop }
       @client.shutdown
       expect(replacement).to have_received(:close).once
+    end
+
+    it 'authenticates, resubscribes, and signals readiness when the greeting arrives during connect' do
+      replacement = double('replacement transport', close_on_eof: nil, close: nil)
+      callbacks = {}
+      ready = Queue.new
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket, replacement)
+      allow(socket).to receive(:send)
+      allow(replacement).to receive(:on) { |event, &callback| callbacks[event] = callback }
+      allow(replacement).to receive(:send)
+      allow(replacement).to receive(:connect) do
+        callbacks[:open]&.call
+        callbacks[:message]&.call(double(data: '0{"pingInterval":25000}'))
+        callbacks[:message]&.call(double(data: '430[null]'))
+      end
+
+      @client = Bitflyer.realtime_client('key', 'secret')
+      @client.ready = -> { ready << true }
+      @client.ticker_btc_jpy = ->(_message) {}
+      allow(socket).to receive(:closed?).and_return(true)
+      @client.websocket_client.reconnect
+
+      expect(replacement).to have_received(:send).with(start_with('420["auth",')).ordered
+      expect(replacement).to have_received(:send).with('42["subscribe","lightning_ticker_BTC_JPY"]').ordered
+      expect(ready.size).to eq(1)
     end
 
     it 'keeps the pending handshake through a monitor tick and releases the transport on shutdown' do

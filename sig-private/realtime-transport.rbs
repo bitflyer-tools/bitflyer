@@ -16,9 +16,13 @@ module Bitflyer
 
       private
 
+      def stop_lifecycle: () -> [WebSocket::Client::Simple::Client?, [Transport, Thread]?]
+
       def start_connection: () -> [Transport, Thread]?
 
-      def attach_transport: (Transport) -> void
+      def register_transport_handlers: (Transport) -> void
+
+      def activate_transport: (Transport) -> void
 
       def finish_connection: ([Transport, Thread], bool connected) -> void
     end

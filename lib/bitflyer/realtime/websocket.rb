@@ -25,21 +25,13 @@ module Bitflyer
       end
 
       def shutdown
-        socket, connection = @lifecycle_lock.synchronize do
-          next [nil, nil] if @stopped
-
-          @stopped = true
-          @monitor_wakeup.signal
-          @connection&.last&.kill
-          [@websocket_client, @connection]
-        end
-
+        socket, connection = stop_lifecycle
         if connection
           transport, connector = connection
           connector.join
           transport.close
         end
-        @monitor.join unless Thread.current == @monitor
+        @monitor&.join unless Thread.current == @monitor
       ensure
         socket&.close
       end
@@ -195,11 +187,23 @@ module Bitflyer
 
       private
 
+      def stop_lifecycle
+        @lifecycle_lock.synchronize do
+          next [nil, nil] if @stopped
+
+          @stopped = true
+          @monitor_wakeup.signal
+          @connection&.last&.kill
+          [@websocket_client, @connection]
+        end
+      end
+
       def start_connection
         @lifecycle_lock.synchronize do
           return if @stopped || @connection || (@websocket_client && !@websocket_client.closed?)
 
           transport = Transport.new
+          register_transport_handlers(transport)
           connector = Thread.new do
             transport.connect "#{@host}/socket.io/?transport=websocket"
             nil
@@ -210,13 +214,17 @@ module Bitflyer
         end
       end
 
-      def attach_transport(transport)
-        @websocket_client = transport
+      def register_transport_handlers(transport)
         this = self
+        activate = -> { activate_transport(transport) }
+        transport.on(:open) { activate.call }
         transport.on(:message) { |payload| this.handle_message(payload: payload) }
         transport.on(:error) { |error| this.handle_error(error: error, transport: transport) }
         transport.on(:close) { |error| this.handle_close(error: error || transport.reset_error) }
-        transport.close_on_eof
+      end
+
+      def activate_transport(transport)
+        @lifecycle_lock.synchronize { @websocket_client = transport unless @stopped }
       end
 
       def finish_connection(connection, connected)
@@ -225,7 +233,10 @@ module Bitflyer
           @connection = nil
           return if @stopped
 
-          attach_transport(transport) if connected
+          if connected
+            @websocket_client = transport
+            transport.close_on_eof
+          end
           !connected
         end
         return unless close_transport
