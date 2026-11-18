@@ -57,11 +57,13 @@ module Bitflyer
         last_ping_at = @last_ping_at
         ping_interval = @ping_interval
         return unless last_ping_at && ping_interval
-        return unless Time.now.to_i - last_ping_at > ping_interval / 1000
+
+        now = Process.clock_gettime(Process::CLOCK_MONOTONIC, :millisecond)
+        return unless now - last_ping_at >= ping_interval
 
         debug_log 'Sent ping'
         @websocket_client.send '2'
-        @last_ping_at = Time.now.to_i
+        @last_ping_at = now
       end
 
       def wait_pong
@@ -69,7 +71,9 @@ module Bitflyer
         ping_interval = @ping_interval
         ping_timeout = @ping_timeout
         return unless last_pong_at && ping_interval && ping_timeout
-        return unless Time.now.to_i - last_pong_at > (ping_interval + ping_timeout) / 1000
+
+        now = Process.clock_gettime(Process::CLOCK_MONOTONIC, :millisecond)
+        return unless now - last_pong_at >= ping_interval + ping_timeout
 
         debug_log 'Timed out waiting pong'
         @websocket_client.close
@@ -119,8 +123,7 @@ module Bitflyer
         body = JSON.parse json
         @ping_interval = body['pingInterval']&.to_i || 25_000
         @ping_timeout  = body['pingTimeout']&.to_i || 60_000
-        @last_ping_at = Time.now.to_i
-        @last_pong_at = Time.now.to_i
+        @last_ping_at = @last_pong_at = Process.clock_gettime(Process::CLOCK_MONOTONIC, :millisecond)
         if @key && @secret
           authenticate
         else
@@ -160,7 +163,7 @@ module Bitflyer
 
       def receive_pong
         debug_log 'Received pong'
-        @last_pong_at = Time.now.to_i
+        @last_pong_at = Process.clock_gettime(Process::CLOCK_MONOTONIC, :millisecond)
       end
 
       def disconnect
