@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
-require 'websocket-client-simple'
 require 'json'
 require 'openssl'
+require 'bitflyer/realtime/transport'
 
 module Bitflyer
   module Realtime
@@ -49,11 +49,14 @@ module Bitflyer
         @lifecycle_lock.synchronize do
           return if @stopped || (@websocket_client && !@websocket_client.closed?)
 
-          @websocket_client = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
+          transport = Transport.new
+          transport.connect "#{@host}/socket.io/?transport=websocket"
+          @websocket_client = transport
           this = self
-          @websocket_client.on(:message) { |payload| this.handle_message(payload: payload) }
-          @websocket_client.on(:error) { |error| this.handle_error(error: error) }
-          @websocket_client.on(:close) { |error| this.handle_close(error: error) }
+          transport.on(:message) { |payload| this.handle_message(payload: payload) }
+          transport.on(:error) { |error| this.handle_error(error: error) }
+          transport.on(:close) { |error| this.handle_close(error: error) }
+          transport.close_on_eof
         end
       rescue SocketError => e
         puts e

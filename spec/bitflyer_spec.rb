@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'spec_helper'
+require 'socket'
 require 'timeout'
 
 describe Bitflyer do
@@ -22,10 +23,12 @@ describe Bitflyer do
   end
 
   describe '.realtime_client' do
-    let(:socket) { double('websocket transport', open?: true, closed?: false, on: nil, close: nil) }
+    let(:socket) do
+      double('websocket transport', open?: true, closed?: false, connect: nil, on: nil, close: nil, close_on_eof: nil)
+    end
 
     before do
-      allow(WebSocket::Client::Simple).to receive(:connect).and_return(socket)
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket)
     end
 
     after { @client&.shutdown }
@@ -50,13 +53,14 @@ describe Bitflyer do
 
       expect(monitor).not_to be_alive
       expect(socket).to have_received(:close).once
-      expect(WebSocket::Client::Simple).to have_received(:connect).once
+      expect(Bitflyer::Realtime::Transport).to have_received(:new).once
     end
 
     it 'automatically reconnects after the transport closes while active' do
-      replacement = double('replacement transport', open?: true, closed?: false, on: nil, close: nil)
+      replacement = double('replacement transport', open?: true, closed?: false, connect: nil, on: nil, close: nil,
+                           close_on_eof: nil)
       reconnected = Queue.new
-      allow(WebSocket::Client::Simple).to receive(:connect).and_return(socket, replacement)
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket, replacement)
       allow(replacement).to receive(:on).with(:close) { reconnected << true }
       @client = Bitflyer.realtime_client
       allow(socket).to receive(:open?).and_return(false)
@@ -68,7 +72,7 @@ describe Bitflyer do
     end
 
     it 'keeps the pending handshake through a monitor tick and releases the transport on shutdown' do
-      allow(WebSocket::Client::Simple).to receive(:connect).and_call_original
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
       TCPServer.open('127.0.0.1', 0) do |server|
         stub_const('Bitflyer::Realtime::SOCKET_HOST', "http://127.0.0.1:#{server.addr[1]}")
         @client = Bitflyer.realtime_client
@@ -86,7 +90,7 @@ describe Bitflyer do
           peer.each_line { |line| break if line == "\r\n" }
           tick.pop
           expect(transport).not_to be_open
-          expect(WebSocket::Client::Simple).to have_received(:connect).once
+          expect(Bitflyer::Realtime::Transport).to have_received(:new).once
 
           @client.shutdown
           expect(peer.eof?).to be(true)
@@ -95,6 +99,34 @@ describe Bitflyer do
       ensure
         transport&.close
         peer&.close
+      end
+    end
+
+    it 'reconnects after the peer closes during the WebSocket handshake' do
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
+      TCPServer.open('127.0.0.1', 0) do |server|
+        stub_const('Bitflyer::Realtime::SOCKET_HOST', "http://127.0.0.1:#{server.addr[1]}")
+        @client = Bitflyer.realtime_client
+        transport = @client.websocket_client.websocket_client
+        disconnected = Queue.new
+        @client.disconnected = ->(error) { disconnected << error }
+
+        peer = replacement_peer = nil
+        Timeout.timeout(5) do
+          peer = server.accept
+          peer.each_line { |line| break if line == "\r\n" }
+          peer.close
+          disconnected.pop
+          replacement_peer = server.accept
+          replacement_peer.each_line { |line| break if line == "\r\n" }
+          expect(transport).to be_closed
+          expect(transport.thread.join(1)).to eq(transport.thread)
+          expect(Bitflyer::Realtime::Transport).to have_received(:new).twice
+        end
+      ensure
+        @client&.shutdown
+        peer&.close
+        replacement_peer&.close
       end
     end
   end

@@ -1,0 +1,9 @@
+module Bitflyer
+  module Realtime
+    class Transport < WebSocket::Client::Simple::Client
+      @socket: (TCPSocket | OpenSSL::SSL::SSLSocket)?
+
+      def close_on_eof: () -> void
+    end
+  end
+end
