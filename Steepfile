@@ -3,7 +3,7 @@
 D = Steep::Diagnostic
 
 target :lib do
-  signature 'sig', 'sig-private'
+  signature 'sig'
   check 'lib'
 
   library 'forwardable', 'json', 'net-http', 'openssl', 'uri'
