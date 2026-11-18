@@ -24,6 +24,8 @@ module Bitflyer
 
       def initialize: (?String? key, ?String? secret) -> void
 
+      def inspect: () -> String
+
       def ready=: (ready_callback? callback) -> ready_callback?
 
       def disconnected=: (disconnected_callback? callback) -> disconnected_callback?

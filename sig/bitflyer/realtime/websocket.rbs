@@ -8,6 +8,8 @@ module Bitflyer
       @authentication_error: RuntimeError?
       @subscriptions_mutex: Thread::Mutex
       @session_ready: bool
+      @last_ping_monotonic: Integer?
+      @last_pong_monotonic: Integer?
 
       attr_accessor websocket_client: WebSocket::Client::Simple::Client?
       attr_accessor channel_names: Array[Symbol]
@@ -20,6 +22,8 @@ module Bitflyer
       attr_accessor disconnected: disconnected_callback?
 
       def initialize: (host: String, key: String?, secret: String?, ?debug: bool) -> void
+
+      def inspect: () -> String
 
       def subscribe: (channel_name: Symbol) { (untyped message) -> void } -> void
 
@@ -58,6 +62,10 @@ module Bitflyer
       private
 
       def reject_authentication: (String json) -> void
+
+      def monotonic_milliseconds: () -> Integer
+
+      def monotonic_from_unix_seconds: (Integer?) -> Integer?
     end
   end
 end

@@ -18,6 +18,16 @@ describe Bitflyer do
       client = Bitflyer.http_private_client('key', 'secret')
       expect(client).to be_a(Bitflyer::HTTP::Private::Client)
     end
+
+    it 'omits credentials from client and connection inspection' do
+      client = Bitflyer.http_private_client('test_api_key', 'test_api_secret')
+      connection = client.instance_variable_get(:@connection)
+
+      [client, connection].each do |object|
+        expect(object.inspect).not_to include('test_api_key')
+        expect(object.inspect).not_to include('test_api_secret')
+      end
+    end
   end
 
   describe '.realtime_client' do
@@ -33,6 +43,8 @@ describe Bitflyer do
       allow(socket).to receive(:close) { handlers.fetch(:close).call(nil) }
       allow_any_instance_of(Bitflyer::Realtime::WebSocketClient).to receive(:start_monitoring)
       allow(Time).to receive(:now).and_return(connected_at)
+      allow(Process).to receive(:clock_gettime).and_call_original
+      allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond).and_return(10_000)
     end
 
     it 'returns a Realtime::Client instance' do
@@ -46,6 +58,7 @@ describe Bitflyer do
                                         last_ping_at: connected_at.to_i, last_pong_at: connected_at.to_i)
 
       allow(Time).to receive(:now).and_return(connected_at + 6)
+      allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond).and_return(16_000)
       expect(socket).to receive(:send).with('2')
       session.send_ping
       session.receive_pong
@@ -123,6 +136,33 @@ describe Bitflyer do
 
     def receive_frame(data)
       handlers.fetch(:message).call(double(data: data))
+    end
+
+    context 'with credentials' do
+      let(:client) { Bitflyer.realtime_client('test_api_key', 'test_api_secret') }
+
+      it 'omits credentials from client and connection inspection' do
+        [client, client.websocket_client].each do |object|
+          expect(object.inspect).not_to include('test_api_key')
+          expect(object.inspect).not_to include('test_api_secret')
+        end
+      end
+
+      it 'authenticates with the original credentials' do
+        allow(socket).to receive(:send) do |message|
+          expect(message).to start_with('420')
+          event, params = JSON.parse(message.delete_prefix('420'))
+          expected_signature = OpenSSL::HMAC.hexdigest(
+            'sha256', 'test_api_secret', "#{params.fetch('timestamp')}#{params.fetch('nonce')}"
+          )
+          expect(event).to eq('auth')
+          expect(params).to include('api_key' => 'test_api_key', 'signature' => expected_signature)
+        end
+
+        client.websocket_client.setup_by_response(json: '{}')
+
+        expect(socket).to have_received(:send).once
+      end
     end
   end
 end
