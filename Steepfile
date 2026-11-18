@@ -3,10 +3,10 @@
 D = Steep::Diagnostic
 
 target :lib do
-  signature 'sig'
+  signature 'sig', 'sig-private'
   check 'lib'
 
-  library 'forwardable', 'json', 'monitor', 'net-http', 'openssl', 'socket', 'timeout', 'uri'
+  library 'forwardable', 'json', 'net-http', 'openssl', 'socket', 'timeout', 'uri'
 
   configure_code_diagnostics(D::Ruby.default)
 end

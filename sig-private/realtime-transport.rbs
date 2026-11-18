@@ -1,0 +1,51 @@
+module Bitflyer
+  module Realtime
+    class Transport
+      @socket: (OpenSSL::SSL::SSLSocket | TCPSocket)?
+      @closed: bool
+      @driver: WebSocket::Driver?
+      @driver_lock: Mutex
+      @close_lock: Mutex
+      @handlers: Hash[Symbol, ^(untyped) -> void]
+      @events: Array[[Symbol, untyped]]
+
+      private
+
+      def setup_driver: () -> WebSocket::Driver
+
+      def connect_tls: (URI::Generic) -> (OpenSSL::SSL::SSLSocket | TCPSocket)
+
+      def read_messages: () -> void
+
+      def read_handshake: (OpenSSL::SSL::SSLSocket | TCPSocket) -> void
+
+      def parse: (String) -> void
+
+      def terminate: (?untyped error, ?notify: bool) -> void
+    end
+
+    class WebSocketClient
+      @connection: [Transport, Thread]?
+      @shutdown_lock: Mutex
+
+      private
+
+      def close_connections: () -> void
+
+
+      def stop_lifecycle: () -> [Transport?, [Transport, Thread]?]
+
+      def start_connection: () -> [Transport, Thread]?
+
+      def wait_for_connection: ([Transport, Thread]) -> void
+
+      def register_transport_handlers: (Transport) -> void
+
+      def activate_transport: (Transport) -> void
+
+      def replace_transport: (Transport) -> void
+
+      def finish_connection: ([Transport, Thread], bool connected) -> void
+    end
+  end
+end

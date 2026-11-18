@@ -5,10 +5,18 @@ module Bitflyer
       @key: String?
       @secret: String?
       @debug: bool
-      @subscriptions_mutex: Thread::Mutex
+      @lifecycle_lock: Mutex
+      @monitor_wakeup: Thread::ConditionVariable
+      @stopped: bool
+      @authentication_error: RuntimeError?
+      @monitor: Thread?
+      @session_mutex: Thread::Mutex
       @session_ready: bool
+      @ready_state: :pending | :ready | :notified
+      @last_ping_monotonic: Integer?
+      @last_pong_monotonic: Integer?
 
-      attr_accessor websocket_client: WebSocketTransport?
+      attr_accessor websocket_client: Transport?
       attr_accessor channel_names: Array[Symbol]
       attr_accessor channel_callbacks: Hash[Symbol, message_callback]
       attr_accessor ping_interval: Integer?
@@ -20,11 +28,13 @@ module Bitflyer
 
       def initialize: (host: String, key: String?, secret: String?, ?debug: bool) -> void
 
+      def shutdown: () -> void
+
+      def inspect: () -> String
+
       def subscribe: (channel_name: Symbol) { (untyped message) -> void } -> void
 
       def connect: () -> void
-
-      def start_monitoring: () -> Thread
 
       def send_ping: () -> void
 
@@ -36,7 +46,7 @@ module Bitflyer
 
       def handle_message: (payload: untyped) -> void
 
-      def handle_close: (error: untyped) -> void
+      def handle_close: (error: untyped, ?socket: Transport?) -> void
 
       def setup_by_response: (json: String) -> void
 
@@ -53,6 +63,28 @@ module Bitflyer
       def emit_message: (json: String) -> void
 
       def debug_log: (untyped message) -> void
+
+      private
+
+      def start_monitoring: () -> Thread
+
+      def wait_for_monitor_tick: () -> bool
+
+      def lifecycle_inactive?: () -> bool
+
+      def notify_ready: () -> void
+
+      def take_ready_callback: () -> ready_callback?
+
+      def reset_readiness: (?Transport?) -> bool
+
+      def clear_readiness: () -> void
+
+      def reject_authentication: (String json) -> void
+
+      def monotonic_milliseconds: () -> Integer
+
+      def monotonic_from_unix_seconds: (Integer?) -> Integer?
     end
   end
 end

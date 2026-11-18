@@ -1,0 +1,154 @@
+# frozen_string_literal: true
+
+require 'openssl'
+require 'socket'
+require 'timeout'
+require 'uri'
+require 'websocket/driver'
+
+module Bitflyer
+  module Realtime
+    class Transport
+      HANDSHAKE_TIMEOUT = 10
+
+      attr_reader :url, :thread
+
+      def initialize
+        @driver_lock = Mutex.new
+        @close_lock = Mutex.new
+        @handlers = {}
+        @closed = false
+      end
+
+      def on(event, &handler)
+        @handlers[event] = handler
+      end
+
+      def connect(url)
+        uri = URI.parse(url)
+        raise ArgumentError, 'Realtime connections require TLS' unless %w[https wss].include?(uri.scheme)
+
+        @url = url.sub(/\Ahttps:/, 'wss:')
+        @socket = connect_tls(uri)
+        setup_driver.start
+        @thread = Thread.new { read_messages }
+      ensure
+        terminate(notify: false) unless @thread
+      end
+
+      def open?
+        !closed? && @driver&.state == :open
+      end
+
+      def closed?
+        @socket.nil? || @closed
+      end
+
+      def send(data)
+        @driver_lock.synchronize { @driver&.text(data) if open? }
+      rescue IOError, SystemCallError, OpenSSL::SSL::SSLError => e
+        terminate(e)
+        false
+      end
+
+      def close
+        @driver_lock.synchronize { @driver&.close if open? }
+      rescue IOError, SystemCallError, OpenSSL::SSL::SSLError
+        nil
+      ensure
+        terminate
+      end
+
+      def close_for_shutdown
+        terminate
+      end
+
+      def write(data)
+        socket = @socket
+        raise IOError, 'WebSocket is closed' if closed? || !socket
+
+        socket.write(data)
+      end
+
+      private
+
+      def setup_driver
+        @events = []
+        driver = WebSocket::Driver.client(self)
+        %i[open message error close].each do |event|
+          driver.on(event) { |event_data| @events << [event, event_data] }
+        end
+        @driver = driver
+      end
+
+      def connect_tls(uri)
+        hostname = uri.hostname
+        raise ArgumentError, 'Realtime connections require a TLS hostname' unless hostname
+
+        trust_store = OpenSSL::X509::Store.new
+        trust_store.set_default_paths
+        context = OpenSSL::SSL::SSLContext.new
+        context.set_params(verify_mode: OpenSSL::SSL::VERIFY_PEER, verify_hostname: true, cert_store: trust_store)
+        tcp = TCPSocket.new(hostname, uri.port || 443)
+        socket = OpenSSL::SSL::SSLSocket.new(tcp, context)
+        socket.sync_close = true
+        socket.hostname = hostname
+        connected = socket.connect
+      ensure
+        tcp&.close unless connected
+      end
+
+      def read_messages
+        socket = @socket
+        return unless socket
+
+        read_handshake(socket)
+        parse(socket.readpartial(4096)) until closed?
+      rescue EOFError
+        nil
+      rescue IOError, SystemCallError, OpenSSL::SSL::SSLError, Timeout::Error => e
+        failure = e
+      ensure
+        terminate(failure)
+      end
+
+      def read_handshake(socket)
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + HANDSHAKE_TIMEOUT
+        until closed? || open?
+          remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          raise Timeout::Error, 'WebSocket upgrade timed out' unless remaining.positive?
+
+          parse(Timeout.timeout(remaining) { socket.readpartial(4096) })
+        end
+      end
+
+      def parse(data)
+        events = @driver_lock.synchronize do
+          @driver&.parse(data)
+          @events.shift(@events.size)
+        end
+        # Callbacks can send messages or shut down the client.
+        events.each do |event, payload|
+          break if closed?
+
+          case event
+          when :error then terminate(payload)
+          when :close then terminate
+          else @handlers[event]&.call(payload)
+          end
+        end
+      end
+
+      def terminate(error = nil, notify: true)
+        socket = @close_lock.synchronize do
+          return if @closed
+
+          @closed = true
+          @socket&.close
+          @socket
+        end
+        @handlers[:close]&.call(error) if socket && notify
+      end
+    end
+  end
+end

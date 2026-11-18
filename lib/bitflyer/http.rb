@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'bitflyer'
 require 'bitflyer/http/public'
 require 'bitflyer/http/private'
 require 'net/http'
@@ -30,6 +29,8 @@ module Bitflyer
         @secret = secret
         @uri = URI.parse(BASE_URL)
       end
+
+      def inspect = "#<#{self.class}>"
 
       def get(path, params = {})
         query = URI.encode_www_form(params.compact)
