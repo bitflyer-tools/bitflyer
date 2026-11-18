@@ -10,8 +10,9 @@ module Bitflyer
       @stopped: bool
       @authentication_error: RuntimeError?
       @monitor: Thread?
-      @subscriptions_mutex: Thread::Mutex
+      @session_mutex: Thread::Mutex
       @session_ready: bool
+      @ready_state: :pending | :ready | :notified
       @last_ping_monotonic: Integer?
       @last_pong_monotonic: Integer?
 
@@ -41,11 +42,11 @@ module Bitflyer
 
       def reconnect: () -> void
 
-      def handle_error: (error: untyped, ?transport: WebSocket::Client::Simple::Client) -> void
+      def handle_error: (error: untyped, ?transport: WebSocket::Client::Simple::Client?) -> void
 
       def handle_message: (payload: untyped) -> void
 
-      def handle_close: (error: untyped) -> void
+      def handle_close: (error: untyped, ?socket: WebSocket::Client::Simple::Client?) -> void
 
       def setup_by_response: (json: String) -> void
 
@@ -70,6 +71,14 @@ module Bitflyer
       def wait_for_monitor_tick: () -> bool
 
       def lifecycle_inactive?: () -> bool
+
+      def notify_ready: () -> void
+
+      def take_ready_callback: () -> ready_callback?
+
+      def reset_readiness: (?WebSocket::Client::Simple::Client?) -> bool
+
+      def clear_readiness: () -> void
 
       def reject_authentication: (String json) -> void
 

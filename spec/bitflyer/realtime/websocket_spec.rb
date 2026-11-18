@@ -6,7 +6,7 @@ require 'timeout'
 describe Bitflyer::Realtime::WebSocketClient do
   let(:socket) do
     instance_double(Bitflyer::Realtime::Transport, open?: true, closed?: false, send: nil, close: nil,
-                    close_on_eof: nil, read_error: nil)
+                    close_on_eof: nil, close_for_shutdown: nil, read_error: nil)
   end
   let(:handlers) { {} }
 
@@ -86,6 +86,10 @@ describe Bitflyer::Realtime::WebSocketClient do
 
     receive_message('430[null]')
     expect(socket).to have_received(:send).with('42["subscribe","child_order_events"]').once
+
+    notifications = []
+    @client.ready = -> { notifications << :ready }
+    expect(notifications).to eq([:ready])
   end
 
   it 'stops retrying and leaves queued subscriptions unsent when authentication is rejected' do
@@ -98,6 +102,9 @@ describe Bitflyer::Realtime::WebSocketClient do
     @client = Bitflyer.realtime_client('key', 'secret')
     @client.child_order_events = ->(_event) {}
     Timeout.timeout(5) { reconnected.pop }
+    errors = []
+    notifications = []
+    @client.disconnected = ->(error) { errors << error }
     allow(socket).to receive(:close) do
       allow(socket).to receive_messages(open?: false, closed?: true)
       handlers.fetch(:close).call(nil)
@@ -105,10 +112,13 @@ describe Bitflyer::Realtime::WebSocketClient do
 
     receive_message('0{}')
     receive_message('430[{"message":"Invalid API key"}]')
+    @client.ready = -> { notifications << :ready }
 
     expect(@monitor.join(5)).to eq(@monitor)
     expect(socket).not_to have_received(:send).with('42["subscribe","child_order_events"]')
     expect(socket).to have_received(:connect).twice
+    expect(notifications).to be_empty
+    expect(errors.map(&:message)).to eq(['Authentication failed: [{"message":"Invalid API key"}]'])
   end
 end
 

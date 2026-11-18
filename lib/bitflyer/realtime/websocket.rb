@@ -8,8 +8,8 @@ module Bitflyer
   module Realtime
     class WebSocketClient # rubocop:disable Metrics/ClassLength
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
-                    :ready, :disconnected
-      attr_reader :last_ping_at, :last_pong_at
+                    :disconnected
+      attr_reader :ready, :last_ping_at, :last_pong_at
 
       def initialize(host:, key:, secret:, debug: false)
         @host = host
@@ -22,8 +22,9 @@ module Bitflyer
         @monitor_wakeup = ConditionVariable.new
         @stopped = false
         @authentication_error = nil
-        @subscriptions_mutex = Thread::Mutex.new
+        @session_mutex = Thread::Mutex.new
         @session_ready = false
+        @ready_state = :pending
         connect
         @monitor = start_monitoring
       end
@@ -46,9 +47,18 @@ module Bitflyer
 
       def inspect = "#<#{self.class}>"
 
+      def ready=(callback)
+        notification = @session_mutex.synchronize do
+          @ready = callback
+          take_ready_callback
+        end
+        notification&.call
+        callback
+      end
+
       def subscribe(channel_name:, &block)
         debug_log "Subscribe #{channel_name}"
-        socket = @subscriptions_mutex.synchronize do
+        socket = @session_mutex.synchronize do
           @channel_names = (@channel_names + [channel_name]).uniq
           @channel_callbacks[channel_name] = block
           @websocket_client if @session_ready
@@ -121,7 +131,9 @@ module Bitflyer
         debug_log error
         return unless error.is_a?(Errno::ECONNRESET) || error.is_a?(OpenSSL::SSL::SSLError)
         return unless transport.is_a? Transport
-        return if @lifecycle_lock.synchronize { lifecycle_inactive? }
+        return unless @lifecycle_lock.synchronize do
+          !lifecycle_inactive? && [@websocket_client, @connection&.first].include?(transport)
+        end
 
         transport.close_after_read_error(error)
       end
@@ -146,14 +158,17 @@ module Bitflyer
         puts e.backtrace&.join("\n")
       end
 
-      def handle_close(error:)
+      def handle_close(error:, socket: @websocket_client)
         debug_log error
-        return if @lifecycle_lock.synchronize { lifecycle_inactive? }
+        return unless @lifecycle_lock.synchronize do
+          connecting_socket = @connection&.first
+          !lifecycle_inactive? && (reset_readiness(socket) || (socket && connecting_socket.equal?(socket)))
+        end
 
         @disconnected&.call(error)
       end
 
-      def setup_by_response(json:) # rubocop:disable Metrics/CyclomaticComplexity, Metrics/PerceivedComplexity
+      def setup_by_response(json:)
         body = JSON.parse json
         @ping_interval = body['pingInterval']&.to_i || 25_000
         @ping_timeout  = body['pingTimeout']&.to_i || 60_000
@@ -163,7 +178,7 @@ module Bitflyer
           authenticate
         else
           subscribe_channels
-          @ready&.call
+          notify_ready
         end
       end
 
@@ -186,11 +201,11 @@ module Bitflyer
 
         debug_log 'Authenticated'
         subscribe_channels
-        @ready&.call
+        notify_ready
       end
 
       def subscribe_channels
-        socket, channels = @subscriptions_mutex.synchronize do
+        socket, channels = @session_mutex.synchronize do
           @session_ready = true
           [@websocket_client, @channel_callbacks.keys]
         end
@@ -252,6 +267,7 @@ module Bitflyer
           next [nil, nil] if @stopped
 
           @stopped = true
+          reset_readiness
           @monitor_wakeup.signal
           @connection&.last&.kill
           [@websocket_client, @connection]
@@ -263,7 +279,7 @@ module Bitflyer
           socket = @websocket_client
           return if lifecycle_inactive? || @connection || (socket && !socket.closed?)
 
-          @subscriptions_mutex.synchronize { @session_ready = false }
+          reset_readiness(socket)
           transport = Transport.new
           register_transport_handlers(transport)
           connector = Thread.new do
@@ -295,7 +311,7 @@ module Bitflyer
           this.handle_message(payload: payload) if this.websocket_client.equal?(transport)
         end
         transport.on(:error) { |error| this.handle_error(error: error, transport: transport) }
-        transport.on(:close) { |error| this.handle_close(error: error || transport.read_error) }
+        transport.on(:close) { |error| this.handle_close(error: error || transport.read_error, socket: transport) }
       end
 
       def activate_transport(transport)
@@ -307,7 +323,10 @@ module Bitflyer
 
         @ping_interval = @ping_timeout = nil
         self.last_ping_at = self.last_pong_at = nil
-        @websocket_client = transport
+        @session_mutex.synchronize do
+          @websocket_client = transport
+          clear_readiness
+        end
       end
 
       def finish_connection(connection, connected)
@@ -353,11 +372,45 @@ module Bitflyer
         @stopped || !@authentication_error.nil?
       end
 
+      def notify_ready
+        notification = @lifecycle_lock.synchronize do
+          return if lifecycle_inactive?
+
+          @session_mutex.synchronize do
+            @ready_state = :ready if @ready_state == :pending
+            take_ready_callback
+          end
+        end
+        notification&.call
+      end
+
+      def take_ready_callback
+        return unless @ready_state == :ready && @ready
+
+        @ready_state = :notified
+        @ready
+      end
+
+      def reset_readiness(socket = @websocket_client)
+        @session_mutex.synchronize do
+          return false unless @websocket_client.equal?(socket)
+
+          clear_readiness
+          true
+        end
+      end
+
+      def clear_readiness
+        @session_ready = false
+        @ready_state = :pending
+      end
+
       def reject_authentication(json)
         error = @lifecycle_lock.synchronize do
           return if lifecycle_inactive?
 
           @authentication_error = RuntimeError.new("Authentication failed: #{json}")
+          reset_readiness
           @monitor_wakeup.signal
           @authentication_error
         end
