@@ -31,6 +31,8 @@ module Bitflyer
         @uri = URI.parse(BASE_URL)
       end
 
+      def inspect = "#<#{self.class}>"
+
       def get(path, params = {})
         query = URI.encode_www_form(params.compact)
         full_path = query.empty? ? path : "#{path}?#{query}"

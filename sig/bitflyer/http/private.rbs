@@ -6,6 +6,8 @@ module Bitflyer
 
         def initialize: (String key, String secret) -> void
 
+        def inspect: () -> String
+
         def permissions: () -> untyped
 
         def balance: () -> untyped
