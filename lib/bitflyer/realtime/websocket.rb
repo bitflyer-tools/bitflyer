@@ -47,7 +47,7 @@ module Bitflyer
 
       def connect
         @lifecycle_lock.synchronize do
-          return if @stopped || @websocket_client&.open?
+          return if @stopped || (@websocket_client && !@websocket_client.closed?)
 
           @websocket_client = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
           this = self

@@ -22,7 +22,7 @@ describe Bitflyer do
   end
 
   describe '.realtime_client' do
-    let(:socket) { double('websocket transport', open?: true, on: nil, close: nil) }
+    let(:socket) { double('websocket transport', open?: true, closed?: false, on: nil, close: nil) }
 
     before do
       allow(WebSocket::Client::Simple).to receive(:connect).and_return(socket)
@@ -54,16 +54,48 @@ describe Bitflyer do
     end
 
     it 'automatically reconnects after the transport closes while active' do
-      replacement = double('replacement transport', open?: true, on: nil, close: nil)
+      replacement = double('replacement transport', open?: true, closed?: false, on: nil, close: nil)
       reconnected = Queue.new
       allow(WebSocket::Client::Simple).to receive(:connect).and_return(socket, replacement)
       allow(replacement).to receive(:on).with(:close) { reconnected << true }
       @client = Bitflyer.realtime_client
       allow(socket).to receive(:open?).and_return(false)
+      allow(socket).to receive(:closed?).and_return(true)
 
       Timeout.timeout(3) { reconnected.pop }
       @client.shutdown
       expect(replacement).to have_received(:close).once
+    end
+
+    it 'keeps the pending handshake through a monitor tick and releases the transport on shutdown' do
+      allow(WebSocket::Client::Simple).to receive(:connect).and_call_original
+      TCPServer.open('127.0.0.1', 0) do |server|
+        stub_const('Bitflyer::Realtime::SOCKET_HOST', "http://127.0.0.1:#{server.addr[1]}")
+        @client = Bitflyer.realtime_client
+        websocket = @client.websocket_client
+        transport = websocket.websocket_client
+        receiver = transport.thread
+        tick = Queue.new
+        allow(websocket).to receive(:reconnect).and_wrap_original do |reconnect|
+          reconnect.call
+          tick << true
+        end
+
+        peer = Timeout.timeout(5) { server.accept }
+        Timeout.timeout(5) do
+          peer.each_line { |line| break if line == "\r\n" }
+          tick.pop
+          expect(transport).not_to be_open
+          expect(WebSocket::Client::Simple).to have_received(:connect).once
+
+          @client.shutdown
+          expect(peer.eof?).to be(true)
+          expect(receiver.join(1)).to eq(receiver)
+        end
+      ensure
+        transport&.close
+        peer&.close
+      end
     end
   end
 end

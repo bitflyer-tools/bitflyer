@@ -11,6 +11,8 @@ module WebSocket
 
         def open?: () -> bool
 
+        def closed?: () -> bool
+
         def close: () -> void
       end
     end
