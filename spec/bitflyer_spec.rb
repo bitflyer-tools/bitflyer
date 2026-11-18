@@ -21,19 +21,49 @@ describe Bitflyer do
   end
 
   describe '.realtime_client' do
-    let(:transport) { instance_double(WebSocket::Client::Simple::Client, send: nil, open?: false) }
+    let(:socket) { instance_double(WebSocket::Client::Simple::Client, send: nil, open?: false) }
     let(:handlers) { {} }
+    let(:client) { Bitflyer.realtime_client }
+    let(:session) { client.websocket_client }
+    let(:connected_at) { Time.at(1_000) }
 
     before do
-      allow(WebSocket::Client::Simple).to receive(:connect).and_return(transport)
-      allow(transport).to receive(:on) { |event, &handler| handlers[event] = handler }
-      allow(transport).to receive(:close) { handlers.fetch(:close).call(nil) }
-      allow(Thread).to receive(:new)
+      allow(WebSocket::Client::Simple).to receive(:connect).and_return(socket)
+      allow(socket).to receive(:on) { |event, &handler| handlers[event] = handler }
+      allow(socket).to receive(:close) { handlers.fetch(:close).call(nil) }
+      allow_any_instance_of(Bitflyer::Realtime::WebSocketClient).to receive(:start_monitoring)
+      allow(Time).to receive(:now).and_return(connected_at)
     end
 
     it 'returns a Realtime::Client instance' do
-      client = Bitflyer.realtime_client
       expect(client).to be_a(Bitflyer::Realtime::Client)
+    end
+
+    it 'exposes heartbeat state initialized and updated by the WebSocket session' do
+      session.setup_by_response(json: '{"pingInterval":5000,"pingTimeout":6000}')
+
+      expect(client).to have_attributes(ping_interval: 5_000, ping_timeout: 6_000,
+                                        last_ping_at: connected_at.to_i, last_pong_at: connected_at.to_i)
+
+      allow(Time).to receive(:now).and_return(connected_at + 6)
+      expect(socket).to receive(:send).with('2')
+      session.send_ping
+      session.receive_pong
+
+      expect(client).to have_attributes(last_ping_at: connected_at.to_i + 6, last_pong_at: connected_at.to_i + 6)
+    end
+
+    it 'uses heartbeat values written through the public client when monitoring' do
+      session.setup_by_response(json: '{}')
+      client.ping_interval = 2_000
+      client.ping_timeout = 1_000
+      client.last_ping_at = connected_at.to_i - 3
+      client.last_pong_at = connected_at.to_i - 4
+
+      expect(socket).to receive(:send).with('2')
+      expect(socket).to receive(:close)
+      session.send_ping
+      session.wait_pong
     end
 
     it 'reports authentication rejection and closes the rejected session' do
@@ -50,7 +80,7 @@ describe Bitflyer do
       receive_frame('430[null]')
       client.websocket_client.reconnect
 
-      expect(transport).to have_received(:close).once
+      expect(socket).to have_received(:close).once
       expect(disconnected).to have_received(:call)
         .with(an_object_having_attributes(message: 'Authentication failed: [{"message":"Invalid API key"}]')).once
       expect(ready).not_to have_received(:call)
@@ -68,7 +98,7 @@ describe Bitflyer do
       receive_frame('430[null]')
 
       expect(ready).to have_received(:call).once
-      expect(transport).not_to have_received(:close)
+      expect(socket).not_to have_received(:close)
     end
 
     it 'reports authentication rejection once when closing the socket fails' do
@@ -76,7 +106,7 @@ describe Bitflyer do
       disconnected = spy('disconnected callback')
       client.disconnected = disconnected
       reset = Errno::ECONNRESET.new
-      allow(transport).to receive(:close).and_raise(reset)
+      allow(socket).to receive(:close).and_raise(reset)
 
       receive_frame('0{}')
       receive_frame('430[{"message":"Invalid API key"}]')
