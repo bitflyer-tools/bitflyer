@@ -93,10 +93,10 @@ module Bitflyer
       end
 
       def handle_message(payload:) # rubocop:disable Metrics/CyclomaticComplexity
-        debug_log payload.data
         return unless payload.data =~ /^\d+/
 
         code, body = payload.data.scan(/^(\d+)(.*)$/)[0]
+        debug_log "Received packet #{code}"
 
         case code.to_i
         when 0 then setup_by_response(json: body)
@@ -172,6 +172,7 @@ module Bitflyer
         channel_name, *messages = JSON.parse json
         return unless channel_name
 
+        debug_log "Received event on #{channel_name}"
         messages.each { |message| @channel_callbacks[channel_name.to_sym]&.call(message) }
       end
 
