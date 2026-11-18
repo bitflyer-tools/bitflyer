@@ -21,6 +21,7 @@ module Bitflyer
         @lifecycle_lock = Mutex.new
         @monitor_wakeup = ConditionVariable.new
         @stopped = false
+        @authentication_error = nil
         @subscriptions_mutex = Thread::Mutex.new
         @session_ready = false
         connect
@@ -72,6 +73,7 @@ module Bitflyer
       end
 
       def send_ping
+        socket = @websocket_client
         last_ping_monotonic = @last_ping_monotonic
         ping_interval = @ping_interval
         return unless last_ping_monotonic && ping_interval
@@ -79,10 +81,18 @@ module Bitflyer
         now = monotonic_milliseconds
         return unless now - last_ping_monotonic >= ping_interval
 
-        write_ping(now)
+        return unless write_ping(socket)
+
+        @lifecycle_lock.synchronize do
+          if @websocket_client.equal?(socket)
+            @last_ping_monotonic = now
+            @last_ping_at = Time.now.to_i
+          end
+        end
       end
 
       def wait_pong
+        socket = @websocket_client
         last_pong_monotonic = @last_pong_monotonic
         ping_interval = @ping_interval
         ping_timeout = @ping_timeout
@@ -92,7 +102,7 @@ module Bitflyer
         return unless now - last_pong_monotonic >= ping_interval + ping_timeout
 
         debug_log 'Timed out waiting pong'
-        @websocket_client&.close
+        socket&.close
       end
 
       def last_ping_at=(timestamp)
@@ -114,12 +124,14 @@ module Bitflyer
         debug_log error
         return unless error.is_a? Errno::ECONNRESET
         return unless transport.is_a? Transport
-        return if @lifecycle_lock.synchronize { @stopped }
+        return if @lifecycle_lock.synchronize { lifecycle_inactive? }
 
         transport.close_after_reset(error)
       end
 
       def handle_message(payload:) # rubocop:disable Metrics/CyclomaticComplexity
+        return if @lifecycle_lock.synchronize { lifecycle_inactive? }
+
         debug_log payload.data
         return unless payload.data =~ /^\d+/
 
@@ -139,7 +151,7 @@ module Bitflyer
 
       def handle_close(error:)
         debug_log error
-        return if @lifecycle_lock.synchronize { @stopped }
+        return if @lifecycle_lock.synchronize { lifecycle_inactive? }
 
         @disconnected&.call(error)
       end
@@ -173,7 +185,7 @@ module Bitflyer
       end
 
       def authenticated(json:)
-        raise "Authentication failed: #{json}" if json != '[null]'
+        return reject_authentication(json) if json != '[null]'
 
         debug_log 'Authenticated'
         subscribe_channels
@@ -217,16 +229,19 @@ module Bitflyer
 
       private
 
-      def write_ping(now)
+      def write_ping(socket)
         debug_log 'Sent ping'
-        @websocket_client&.send '2'
-        @last_ping_monotonic = now
-        @last_ping_at = Time.now.to_i
+        socket&.send '2'
+        true
       rescue IOError, SystemCallError
-        raise unless @lifecycle_lock.synchronize { @stopped }
+        raise unless @lifecycle_lock.synchronize { lifecycle_inactive? }
+
+        false
       rescue NoMethodError => e
         # The transport can clear its socket after the send has started.
-        raise unless e.name == :write && e.receiver.nil? && @lifecycle_lock.synchronize { @stopped }
+        raise unless e.name == :write && e.receiver.nil? && @lifecycle_lock.synchronize { lifecycle_inactive? }
+
+        false
       end
 
       def stop_lifecycle
@@ -243,7 +258,7 @@ module Bitflyer
       def start_connection
         @lifecycle_lock.synchronize do
           socket = @websocket_client
-          return if @stopped || @connection || (socket && !socket.closed?)
+          return if lifecycle_inactive? || @connection || (socket && !socket.closed?)
 
           @subscriptions_mutex.synchronize { @session_ready = false }
           transport = Transport.new
@@ -262,13 +277,23 @@ module Bitflyer
         this = self
         activate = -> { activate_transport(transport) }
         transport.on(:open) { activate.call }
-        transport.on(:message) { |payload| this.handle_message(payload: payload) }
+        transport.on(:message) do |payload|
+          this.handle_message(payload: payload) if this.websocket_client.equal?(transport)
+        end
         transport.on(:error) { |error| this.handle_error(error: error, transport: transport) }
         transport.on(:close) { |error| this.handle_close(error: error || transport.reset_error) }
       end
 
       def activate_transport(transport)
-        @lifecycle_lock.synchronize { @websocket_client = transport unless @stopped }
+        @lifecycle_lock.synchronize { replace_transport(transport) unless lifecycle_inactive? }
+      end
+
+      def replace_transport(transport)
+        return if @websocket_client.equal?(transport)
+
+        @ping_interval = @ping_timeout = nil
+        self.last_ping_at = self.last_pong_at = nil
+        @websocket_client = transport
       end
 
       def finish_connection(connection, connected)
@@ -278,7 +303,7 @@ module Bitflyer
           return if @stopped
 
           if connected
-            @websocket_client = transport
+            replace_transport(transport) unless @authentication_error
             transport.close_on_eof
           end
           !connected
@@ -305,8 +330,30 @@ module Bitflyer
 
       def wait_for_monitor_tick
         @lifecycle_lock.synchronize do
-          @monitor_wakeup.wait(@lifecycle_lock, 1) unless @stopped
-          !@stopped
+          @monitor_wakeup.wait(@lifecycle_lock, 1) unless lifecycle_inactive?
+          !lifecycle_inactive?
+        end
+      end
+
+      def lifecycle_inactive?
+        @stopped || !@authentication_error.nil?
+      end
+
+      def reject_authentication(json)
+        error = @lifecycle_lock.synchronize do
+          return if lifecycle_inactive?
+
+          @authentication_error = RuntimeError.new("Authentication failed: #{json}")
+          @monitor_wakeup.signal
+          @authentication_error
+        end
+
+        begin
+          disconnect
+        rescue SystemCallError, IOError => e
+          debug_log e
+        ensure
+          @disconnected&.call(error)
         end
       end
 

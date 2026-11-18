@@ -6,7 +6,7 @@ require 'timeout'
 describe Bitflyer::Realtime::WebSocketClient do
   let(:socket) do
     instance_double(Bitflyer::Realtime::Transport, open?: true, closed?: false, send: nil, close: nil,
-                    close_on_eof: nil)
+                    close_on_eof: nil, reset_error: nil)
   end
   let(:handlers) { {} }
 
@@ -86,6 +86,85 @@ describe Bitflyer::Realtime::WebSocketClient do
 
     receive_message('430[null]')
     expect(socket).to have_received(:send).with('42["subscribe","child_order_events"]').once
+  end
+
+  it 'stops retrying and leaves queued subscriptions unsent when authentication is rejected' do
+    @attempts = [SocketError.new('DNS lookup failed'), nil]
+    reconnected = Queue.new
+    allow(socket).to receive(:close_on_eof) { reconnected << true }
+    allow_any_instance_of(described_class).to receive(:start_monitoring).and_wrap_original do |start|
+      @monitor = start.call
+    end
+    @client = Bitflyer.realtime_client('key', 'secret')
+    @client.child_order_events = ->(_event) {}
+    Timeout.timeout(5) { reconnected.pop }
+    allow(socket).to receive(:close) do
+      allow(socket).to receive_messages(open?: false, closed?: true)
+      handlers.fetch(:close).call(nil)
+    end
+
+    receive_message('0{}')
+    receive_message('430[{"message":"Invalid API key"}]')
+
+    expect(@monitor.join(5)).to eq(@monitor)
+    expect(socket).not_to have_received(:send).with('42["subscribe","child_order_events"]')
+    expect(socket).to have_received(:connect).twice
+  end
+end
+
+describe Bitflyer::Realtime::WebSocketClient, 'when replacing a socket' do
+  let(:original_socket) { instance_double(Bitflyer::Realtime::Transport, closed?: false) }
+  let(:replacement_socket) { instance_double(Bitflyer::Realtime::Transport) }
+  let(:message_handlers) { {} }
+
+  before do
+    [original_socket, replacement_socket].each do |socket|
+      allow(socket).to receive_messages(connect: nil, close_on_eof: nil)
+      allow(socket).to receive(:on) do |event, &handler|
+        message_handlers[socket] = handler if event == :message
+      end
+    end
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(original_socket, replacement_socket)
+    allow_any_instance_of(described_class).to receive(:start_monitoring)
+    @heartbeat_time = 10_000
+    allow(Process).to receive(:clock_gettime).and_call_original
+    allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond) { @heartbeat_time }
+  end
+
+  it 'waits for setup before checking the replacement socket heartbeat' do
+    client = described_class.new(host: 'wss://example.test', key: nil, secret: nil)
+    setup = Struct.new(:data).new('0{"pingInterval":1000,"pingTimeout":1000}')
+    message_handlers.fetch(original_socket).call(setup)
+
+    @heartbeat_time += 3_000
+    expect(original_socket).to receive(:close)
+    client.wait_pong
+
+    allow(original_socket).to receive(:closed?).and_return(true)
+    client.reconnect
+    expect(replacement_socket).not_to receive(:send)
+    expect(replacement_socket).not_to receive(:close)
+    client.wait_pong
+    client.send_ping
+
+    message_handlers.fetch(original_socket).call(setup)
+    message_handlers.fetch(original_socket).call(Struct.new(:data).new('3'))
+    expect(client.ping_interval).to be_nil
+    expect(client.ping_timeout).to be_nil
+    expect(client.last_ping_at).to be_nil
+    expect(client.last_pong_at).to be_nil
+  end
+
+  it 'closes the replacement socket when its own heartbeat times out after setup' do
+    client = described_class.new(host: 'wss://example.test', key: nil, secret: nil)
+    allow(original_socket).to receive(:closed?).and_return(true)
+    client.reconnect
+    setup = Struct.new(:data).new('0{"pingInterval":1000,"pingTimeout":1000}')
+    message_handlers.fetch(replacement_socket).call(setup)
+
+    @heartbeat_time += 3_000
+    expect(replacement_socket).to receive(:close)
+    client.wait_pong
   end
 end
 

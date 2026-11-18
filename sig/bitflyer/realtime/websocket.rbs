@@ -8,6 +8,7 @@ module Bitflyer
       @lifecycle_lock: Mutex
       @monitor_wakeup: Thread::ConditionVariable
       @stopped: bool
+      @authentication_error: RuntimeError?
       @monitor: Thread?
       @subscriptions_mutex: Thread::Mutex
       @session_ready: bool
@@ -67,6 +68,10 @@ module Bitflyer
       def start_monitoring: () -> Thread
 
       def wait_for_monitor_tick: () -> bool
+
+      def lifecycle_inactive?: () -> bool
+
+      def reject_authentication: (String json) -> void
 
       def monotonic_milliseconds: () -> Integer
 
