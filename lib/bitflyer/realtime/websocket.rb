@@ -8,7 +8,8 @@ module Bitflyer
   module Realtime
     class WebSocketClient # rubocop:disable Metrics/ClassLength
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
-                    :last_ping_at, :last_pong_at, :ready, :disconnected
+                    :ready, :disconnected
+      attr_reader :last_ping_at, :last_pong_at
 
       def initialize(host:, key:, secret:, debug: false)
         @host = host
@@ -61,25 +62,40 @@ module Bitflyer
       end
 
       def send_ping
-        last_ping_at = @last_ping_at
+        last_ping_monotonic = @last_ping_monotonic
         ping_interval = @ping_interval
-        return unless last_ping_at && ping_interval
-        return unless Time.now.to_i - last_ping_at > ping_interval / 1000
+        return unless last_ping_monotonic && ping_interval
+
+        now = monotonic_milliseconds
+        return unless now - last_ping_monotonic >= ping_interval
 
         debug_log 'Sent ping'
         @websocket_client&.send '2'
+        @last_ping_monotonic = now
         @last_ping_at = Time.now.to_i
       end
 
       def wait_pong
-        last_pong_at = @last_pong_at
+        last_pong_monotonic = @last_pong_monotonic
         ping_interval = @ping_interval
         ping_timeout = @ping_timeout
-        return unless last_pong_at && ping_interval && ping_timeout
-        return unless Time.now.to_i - last_pong_at > (ping_interval + ping_timeout) / 1000
+        return unless last_pong_monotonic && ping_interval && ping_timeout
+
+        now = monotonic_milliseconds
+        return unless now - last_pong_monotonic >= ping_interval + ping_timeout
 
         debug_log 'Timed out waiting pong'
         @websocket_client&.close
+      end
+
+      def last_ping_at=(timestamp)
+        @last_ping_monotonic = monotonic_from_unix_seconds(timestamp)
+        @last_ping_at = timestamp
+      end
+
+      def last_pong_at=(timestamp)
+        @last_pong_monotonic = monotonic_from_unix_seconds(timestamp)
+        @last_pong_at = timestamp
       end
 
       def reconnect
@@ -125,8 +141,8 @@ module Bitflyer
         body = JSON.parse json
         @ping_interval = body['pingInterval']&.to_i || 25_000
         @ping_timeout  = body['pingTimeout']&.to_i || 60_000
-        @last_ping_at = Time.now.to_i
-        @last_pong_at = Time.now.to_i
+        @last_ping_at = @last_pong_at = Time.now.to_i
+        @last_ping_monotonic = @last_pong_monotonic = monotonic_milliseconds
         if @key && @secret
           authenticate
         else
@@ -170,6 +186,7 @@ module Bitflyer
 
       def receive_pong
         debug_log 'Received pong'
+        @last_pong_monotonic = monotonic_milliseconds
         @last_pong_at = Time.now.to_i
       end
 
@@ -189,6 +206,19 @@ module Bitflyer
         return unless @debug
 
         p message
+      end
+
+      private
+
+      def monotonic_milliseconds
+        Process.clock_gettime(Process::CLOCK_MONOTONIC, :millisecond)
+      end
+
+      def monotonic_from_unix_seconds(timestamp)
+        return if timestamp.nil?
+
+        elapsed_milliseconds = (Time.now.to_i - timestamp) * 1000
+        monotonic_milliseconds - elapsed_milliseconds
       end
     end
   end

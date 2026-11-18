@@ -30,6 +30,8 @@ describe Bitflyer do
       allow(WebSocket::Client::Simple).to receive(:connect).and_return(socket)
       allow_any_instance_of(Bitflyer::Realtime::WebSocketClient).to receive(:start_monitoring)
       allow(Time).to receive(:now).and_return(connected_at)
+      allow(Process).to receive(:clock_gettime).and_call_original
+      allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond).and_return(10_000)
     end
 
     it 'returns a Realtime::Client instance' do
@@ -43,6 +45,7 @@ describe Bitflyer do
                                         last_ping_at: connected_at.to_i, last_pong_at: connected_at.to_i)
 
       allow(Time).to receive(:now).and_return(connected_at + 6)
+      allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond).and_return(16_000)
       expect(socket).to receive(:send).with('2')
       session.send_ping
       session.receive_pong
