@@ -234,14 +234,20 @@ module Bitflyer
         socket&.send '2'
         true
       rescue IOError, SystemCallError
-        raise unless @lifecycle_lock.synchronize { lifecycle_inactive? }
+        raise unless ping_interrupted?(socket)
 
         false
       rescue NoMethodError => e
         # The transport can clear its socket after the send has started.
-        raise unless e.name == :write && e.receiver.nil? && @lifecycle_lock.synchronize { lifecycle_inactive? }
+        raise unless e.name == :write && e.receiver.nil? && ping_interrupted?(socket)
 
         false
+      end
+
+      def ping_interrupted?(socket)
+        return true if socket.is_a?(Transport) && socket.reset_error
+
+        @lifecycle_lock.synchronize { lifecycle_inactive? }
       end
 
       def stop_lifecycle

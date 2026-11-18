@@ -25,6 +25,8 @@ module Bitflyer
 
       def write_ping: (WebSocket::Client::Simple::Client? socket) -> bool
 
+      def ping_interrupted?: (WebSocket::Client::Simple::Client? socket) -> bool
+
       def stop_lifecycle: () -> [WebSocket::Client::Simple::Client?, [Transport, Thread]?]
 
       def start_connection: () -> [Transport, Thread]?

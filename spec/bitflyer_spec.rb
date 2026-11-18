@@ -350,6 +350,62 @@ describe Bitflyer do
       end
     end
 
+    [nil, IOError.new('stream closed in another thread')].each do |write_error|
+      it "reconnects after a reset interrupts ping with #{write_error&.class || NoMethodError}" do
+        allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
+        transport = Bitflyer::Realtime::Transport.new
+        replacement = double('replacement transport', open?: true, connect: nil, on: nil, close: nil)
+        allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(transport, replacement)
+
+        ping_started = Queue.new
+        write_released = Queue.new
+        reconnected = Queue.new
+        raw_socket = double('socket', getc: nil, close: nil)
+        handshake = double('handshake', finished?: true, version: 13)
+        if write_error
+          allow(raw_socket).to receive(:write) do
+            ping_started << true
+            write_released.pop
+            raise write_error
+          end
+        else
+          allow(handshake).to receive(:version) do
+            ping_started << true
+            write_released.pop
+            13
+          end
+        end
+        allow(transport).to receive(:connect) do
+          transport.instance_variable_set(:@socket, raw_socket)
+          transport.instance_variable_set(:@handshake, handshake)
+          transport.instance_variable_set(:@handshaked, true)
+          transport.once(:__close) { |error| transport.emit(:close, error) }
+        end
+        allow(replacement).to receive(:close_on_eof) { reconnected << true }
+        reset = Errno::ECONNRESET.new
+        disconnected = Queue.new
+        client.disconnected = ->(error) { disconnected << error }
+        client.ping_interval = 0
+        client.last_ping_at = Time.now.to_i - 1
+
+        Timeout.timeout(5) do
+          ping_started.pop
+          Thread.new do
+            transport.instance_variable_set(:@thread, Thread.current)
+            transport.emit(:error, reset)
+          end.value
+          write_released << true
+          reconnected.pop
+        end
+
+        expect(disconnected.pop(true)).to eq(reset)
+        expect(raw_socket).to have_received(:close).once
+        expect(session.websocket_client).to equal(replacement)
+      ensure
+        write_released << true
+      end
+    end
+
     it 'retries when the receiver clears the socket before the handshake write' do
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
       resetting_transport = Bitflyer::Realtime::Transport.new
