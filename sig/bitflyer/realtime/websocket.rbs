@@ -5,10 +5,11 @@ module Bitflyer
       @key: String?
       @secret: String?
       @debug: bool
-      @ready_mutex: Thread::Mutex
+      @session_mutex: Thread::Mutex
+      @session_ready: bool
       @ready_state: :pending | :ready | :notified
 
-      attr_accessor websocket_client: WebSocket::Client::Simple::Client
+      attr_accessor websocket_client: WebSocket::Client::Simple::Client?
       attr_accessor channel_names: Array[Symbol]
       attr_accessor channel_callbacks: Hash[Symbol, message_callback]
       attr_accessor ping_interval: Integer?
