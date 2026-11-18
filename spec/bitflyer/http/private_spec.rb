@@ -19,7 +19,7 @@ describe Bitflyer::HTTP::Private::Client do
 
     it 'serializes the order conditions as a JSON array' do
       http = instance_double(Net::HTTP)
-      response = instance_double(Net::HTTPOK, body: '{"parent_order_acceptance_id":"123"}')
+      response = instance_double(Net::HTTPOK, code: '200', body: '{"parent_order_acceptance_id":"123"}')
       allow(Net::HTTP).to receive(:start).and_yield(http)
       expect(http).to receive(:request) do |request|
         expect(request.path).to eq('/v1/me/sendparentorder')
