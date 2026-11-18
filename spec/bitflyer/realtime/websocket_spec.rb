@@ -4,55 +4,39 @@ require 'spec_helper'
 require 'timeout'
 
 describe Bitflyer::Realtime::WebSocketClient do
-  let(:socket) { instance_double(WebSocket::Client::Simple::Client, open?: true, send: nil) }
-  let(:ticks) { Queue.new }
-  let(:waiting) { Queue.new }
+  let(:socket) do
+    instance_double(Bitflyer::Realtime::Transport, open?: true, closed?: false, send: nil, close: nil,
+                    close_on_eof: nil, close_for_shutdown: nil, read_error: nil)
+  end
   let(:handlers) { {} }
 
   before do
-    tick_queue = ticks
-    waiting_queue = waiting
     allow(socket).to receive(:on) { |event, &handler| handlers[event] = handler }
-    allow(WebSocket::Client::Simple).to receive(:connect) do
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket)
+    allow(socket).to receive(:connect) do
       attempt = @attempts.shift
-      raise attempt if attempt.is_a?(Exception)
+      raise attempt if attempt
 
-      attempt
-    end
-    allow_any_instance_of(described_class).to receive(:sleep) do
-      waiting_queue.push(Thread.current)
-      tick_queue.pop
+      handlers.fetch(:open).call
     end
     allow($stdout).to receive(:puts)
   end
 
-  after do
-    @monitor&.kill
-    @monitor&.join
-  end
-
-  def wait_for_monitor
-    @monitor = Timeout.timeout(5) { waiting.pop }
-  end
-
-  def tick_monitor
-    ticks.push(true)
-    wait_for_monitor
-  end
+  after { @client&.shutdown }
 
   def receive_message(data)
     handlers.fetch(:message).call(double('WebSocket payload', data: data))
   end
 
   it 'replays subscriptions registered during the initial outage once the session is ready' do
-    @attempts = [SocketError.new('DNS lookup failed'), socket]
-    client = Bitflyer.realtime_client
-    wait_for_monitor
+    allow_any_instance_of(described_class).to receive(:start_monitoring)
+    @attempts = [SocketError.new('DNS lookup failed'), nil]
+    @client = Bitflyer.realtime_client
 
     events = []
-    client.ticker_btc_jpy = ->(event) { events << event }
-    tick_monitor
-    client.executions_btc_jpy = ->(_event) {}
+    @client.ticker_btc_jpy = ->(event) { events << event }
+    @client.websocket_client.reconnect
+    @client.executions_btc_jpy = ->(_event) {}
     expect(socket).not_to have_received(:send)
 
     receive_message('0{}')
@@ -63,25 +47,54 @@ describe Bitflyer::Realtime::WebSocketClient do
     expect(events).to eq([{ 'ltp' => 100 }])
   end
 
+  it 'stops delivering events from the current frame when a subscription callback shuts down' do
+    @attempts = [nil]
+    @client = Bitflyer.realtime_client
+    events = []
+    @client.ticker_btc_jpy = lambda do |event|
+      events << event
+      @client.shutdown
+    end
+    receive_message('0{}')
+
+    receive_message('42["lightning_ticker_BTC_JPY",{"ltp":100},{"ltp":101}]')
+
+    expect(events).to eq([{ 'ltp' => 100 }])
+  end
+
+  it 'waits for the replacement session before sending new subscriptions' do
+    allow_any_instance_of(described_class).to receive(:start_monitoring)
+    @attempts = [nil, nil]
+    @client = Bitflyer.realtime_client
+    receive_message('0{}')
+
+    allow(socket).to receive(:closed?).and_return(true)
+    @client.websocket_client.reconnect
+    @client.ticker_btc_jpy = ->(_event) {}
+    expect(socket).not_to have_received(:send)
+
+    receive_message('0{}')
+    expect(socket).to have_received(:send).with('42["subscribe","lightning_ticker_BTC_JPY"]').once
+  end
+
   it 'keeps the monitor alive after a refused retry' do
-    @attempts = [SocketError.new('DNS lookup failed'), Errno::ECONNREFUSED.new, socket]
-    client = Bitflyer.realtime_client
-    wait_for_monitor
+    @attempts = [SocketError.new('DNS lookup failed'), Errno::ECONNREFUSED.new, nil]
+    reconnected = Queue.new
+    allow(socket).to receive(:close_on_eof) { reconnected << true }
 
-    tick_monitor
-    expect(@monitor).to be_alive
-    expect(client.websocket_client.websocket_client).to be_nil
+    @client = Bitflyer.realtime_client
 
-    tick_monitor
-    expect(client.websocket_client.websocket_client).to eq(socket)
+    Timeout.timeout(5) { reconnected.pop }
+    expect(socket).to have_received(:connect).exactly(3).times
+    expect(@client.websocket_client.websocket_client).to eq(socket)
   end
 
   it 'waits for authentication before replaying private subscriptions' do
-    @attempts = [SocketError.new('DNS lookup failed'), socket]
-    client = Bitflyer.realtime_client('key', 'secret')
-    wait_for_monitor
-    client.child_order_events = ->(_event) {}
-    tick_monitor
+    allow_any_instance_of(described_class).to receive(:start_monitoring)
+    @attempts = [SocketError.new('DNS lookup failed'), nil]
+    @client = Bitflyer.realtime_client('key', 'secret')
+    @client.child_order_events = ->(_event) {}
+    @client.websocket_client.reconnect
 
     receive_message('0{}')
     expect(socket).not_to have_received(:send).with('42["subscribe","child_order_events"]')
@@ -90,49 +103,53 @@ describe Bitflyer::Realtime::WebSocketClient do
     expect(socket).to have_received(:send).with('42["subscribe","child_order_events"]').once
 
     notifications = []
-    client.ready = -> { notifications << :ready }
+    @client.ready = -> { notifications << :ready }
     expect(notifications).to eq([:ready])
   end
 
   it 'stops retrying and leaves queued subscriptions unsent when authentication is rejected' do
-    @attempts = [SocketError.new('DNS lookup failed'), socket]
-    client = Bitflyer.realtime_client('key', 'secret')
-    wait_for_monitor
-    client.child_order_events = ->(_event) {}
-    tick_monitor
+    @attempts = [SocketError.new('DNS lookup failed'), nil]
+    reconnected = Queue.new
+    allow(socket).to receive(:close_on_eof) { reconnected << true }
+    allow_any_instance_of(described_class).to receive(:start_monitoring).and_wrap_original do |start|
+      @monitor = start.call
+    end
+    @client = Bitflyer.realtime_client('key', 'secret')
+    @client.child_order_events = ->(_event) {}
+    Timeout.timeout(5) { reconnected.pop }
     errors = []
     notifications = []
-    client.disconnected = ->(error) { errors << error }
+    @client.disconnected = ->(error) { errors << error }
     allow(socket).to receive(:close) do
-      allow(socket).to receive(:open?).and_return(false)
+      allow(socket).to receive_messages(open?: false, closed?: true)
       handlers.fetch(:close).call(nil)
     end
 
     receive_message('0{}')
     receive_message('430[{"message":"Invalid API key"}]')
-    client.ready = -> { notifications << :ready }
-    ticks.push(true)
+    @client.ready = -> { notifications << :ready }
 
     expect(@monitor.join(5)).to eq(@monitor)
     expect(socket).not_to have_received(:send).with('42["subscribe","child_order_events"]')
-    expect(WebSocket::Client::Simple).to have_received(:connect).twice
+    expect(socket).to have_received(:connect).twice
     expect(notifications).to be_empty
     expect(errors.map(&:message)).to eq(['Authentication failed: [{"message":"Invalid API key"}]'])
   end
 end
 
 describe Bitflyer::Realtime::WebSocketClient, 'when replacing a socket' do
-  let(:original_socket) { instance_double(WebSocket::Client::Simple::Client) }
-  let(:replacement_socket) { instance_double(WebSocket::Client::Simple::Client) }
+  let(:original_socket) { instance_double(Bitflyer::Realtime::Transport, closed?: false) }
+  let(:replacement_socket) { instance_double(Bitflyer::Realtime::Transport) }
   let(:message_handlers) { {} }
 
   before do
     [original_socket, replacement_socket].each do |socket|
+      allow(socket).to receive_messages(connect: nil, close_on_eof: nil)
       allow(socket).to receive(:on) do |event, &handler|
         message_handlers[socket] = handler if event == :message
       end
     end
-    allow(WebSocket::Client::Simple).to receive(:connect).and_return(original_socket, replacement_socket)
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(original_socket, replacement_socket)
     allow_any_instance_of(described_class).to receive(:start_monitoring)
     @heartbeat_time = 10_000
     allow(Process).to receive(:clock_gettime).and_call_original
@@ -148,7 +165,7 @@ describe Bitflyer::Realtime::WebSocketClient, 'when replacing a socket' do
     expect(original_socket).to receive(:close)
     client.wait_pong
 
-    allow(original_socket).to receive(:open?).and_return(false)
+    allow(original_socket).to receive(:closed?).and_return(true)
     client.reconnect
     expect(replacement_socket).not_to receive(:send)
     expect(replacement_socket).not_to receive(:close)
@@ -165,7 +182,8 @@ describe Bitflyer::Realtime::WebSocketClient, 'when replacing a socket' do
 
   it 'closes the replacement socket when its own heartbeat times out after setup' do
     client = described_class.new(host: 'wss://example.test', key: nil, secret: nil)
-    client.connect
+    allow(original_socket).to receive(:closed?).and_return(true)
+    client.reconnect
     setup = Struct.new(:data).new('0{"pingInterval":1000,"pingTimeout":1000}')
     message_handlers.fetch(replacement_socket).call(setup)
 
@@ -178,7 +196,7 @@ end
 RSpec.describe Bitflyer::Realtime::WebSocketClient do
   subject(:client) { described_class.new(host: 'wss://example.test', key: key, secret: secret) }
 
-  let(:socket) { instance_double(WebSocket::Client::Simple::Client, on: nil, send: nil, close: nil) }
+  let(:socket) { instance_double(Bitflyer::Realtime::Transport, on: nil, send: nil, close: nil, connect: nil, close_on_eof: nil) }
   let(:key) { nil }
   let(:secret) { nil }
 
@@ -188,7 +206,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     allow(Process).to receive(:clock_gettime).and_call_original
     allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond) { @heartbeat_time }
     allow(Time).to receive(:now) { @wall_time }
-    allow(WebSocket::Client::Simple).to receive(:connect).and_return(socket)
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket)
     allow_any_instance_of(described_class).to receive(:start_monitoring)
     client.setup_by_response(json: '{"pingInterval":1500,"pingTimeout":750}')
   end

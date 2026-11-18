@@ -17,7 +17,7 @@ module Bitflyer
     class Client
       extend Forwardable
 
-      def_delegators :@websocket_client, :ready=, :disconnected=
+      def_delegators :@websocket_client, :ready=, :disconnected=, :shutdown
       def_delegators :@websocket_client, :ping_interval, :ping_interval=, :ping_timeout, :ping_timeout=,
                      :last_ping_at, :last_ping_at=, :last_pong_at, :last_pong_at=
       attr_accessor :websocket_client

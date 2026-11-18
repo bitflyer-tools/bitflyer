@@ -5,7 +5,11 @@ module Bitflyer
       @key: String?
       @secret: String?
       @debug: bool
+      @lifecycle_lock: Mutex
+      @monitor_wakeup: Thread::ConditionVariable
+      @stopped: bool
       @authentication_error: RuntimeError?
+      @monitor: Thread?
       @session_mutex: Thread::Mutex
       @session_ready: bool
       @ready_state: :pending | :ready | :notified
@@ -24,13 +28,13 @@ module Bitflyer
 
       def initialize: (host: String, key: String?, secret: String?, ?debug: bool) -> void
 
+      def shutdown: () -> void
+
       def inspect: () -> String
 
       def subscribe: (channel_name: Symbol) { (untyped message) -> void } -> void
 
       def connect: () -> void
-
-      def start_monitoring: () -> Thread
 
       def send_ping: () -> void
 
@@ -38,7 +42,7 @@ module Bitflyer
 
       def reconnect: () -> void
 
-      def handle_error: (error: untyped, ?socket: WebSocket::Client::Simple::Client?) -> void
+      def handle_error: (error: untyped, ?transport: WebSocket::Client::Simple::Client?) -> void
 
       def handle_message: (payload: untyped) -> void
 
@@ -61,6 +65,12 @@ module Bitflyer
       def debug_log: (untyped message) -> void
 
       private
+
+      def start_monitoring: () -> Thread
+
+      def wait_for_monitor_tick: () -> bool
+
+      def lifecycle_inactive?: () -> bool
 
       def notify_ready: () -> void
 
