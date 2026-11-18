@@ -18,6 +18,14 @@ Requires Ruby 3.3 or later.
 gem install bitflyer
 ```
 
+## Quick start
+
+After installing the gem, run this command to print the public BTC/JPY order book snapshot. The public client works without API credentials.
+
+```sh
+ruby -r bitflyer -e 'p Bitflyer.http_public_client.board(product_code: "BTC_JPY")'
+```
+
 ## Usage
 
 See https://lightning.bitflyer.jp/docs for details.
@@ -31,10 +39,9 @@ the numeric HTTP status in `status` and the raw response body in `body`.
 
 #### Example
 
-```ruby 
-public_client = Bitflyer.http_public_client
-p public_client.board # will print board snapshot
- 
+```ruby
+require 'bitflyer'
+
 private_client = Bitflyer.http_private_client('YOUR_API_KEY', 'YOUR_API_SECRET')
 p private_client.positions # will print your positions
 ```
