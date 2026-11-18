@@ -25,6 +25,7 @@ module Bitflyer
       Realtime::CHANNEL_NAMES.each do |channel_name|
         define_method "#{channel_name.gsub('lightning_', '').downcase.to_sym}=" do |callback|
           @websocket_client.subscribe(channel_name: channel_name.to_sym, &callback)
+          callback
         end
       end
 
