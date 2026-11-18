@@ -18,6 +18,7 @@ module Bitflyer
         @debug = debug
         @channel_names = []
         @channel_callbacks = {}
+        @authentication_error = nil
         @subscriptions_mutex = Thread::Mutex.new
         connect
         start_monitoring
@@ -53,6 +54,8 @@ module Bitflyer
         Thread.new do
           loop do
             sleep 1
+            break if @authentication_error
+
             if @websocket_client&.open?
               send_ping
               wait_pong
@@ -101,6 +104,7 @@ module Bitflyer
       end
 
       def reconnect
+        return if @authentication_error
         return if @websocket_client&.open?
 
         debug_log 'Reconnecting...'
@@ -110,6 +114,7 @@ module Bitflyer
 
       def handle_error(error:)
         debug_log error
+        return if @authentication_error
         return unless error.is_a? Errno::ECONNRESET
 
         @disconnected&.call(error)
@@ -117,6 +122,8 @@ module Bitflyer
       end
 
       def handle_message(payload:) # rubocop:disable Metrics/CyclomaticComplexity
+        return if @authentication_error
+
         debug_log payload.data
         return unless payload.data =~ /^\d+/
 
@@ -136,6 +143,8 @@ module Bitflyer
 
       def handle_close(error:)
         debug_log error
+        return if @authentication_error
+
         @disconnected&.call(error)
       end
 
@@ -168,7 +177,7 @@ module Bitflyer
       end
 
       def authenticated(json:)
-        raise "Authentication failed: #{json}" if json != '[null]'
+        return reject_authentication(json) if json != '[null]'
 
         debug_log 'Authenticated'
         subscribe_channels
@@ -211,6 +220,15 @@ module Bitflyer
       end
 
       private
+
+      def reject_authentication(json)
+        @authentication_error = RuntimeError.new("Authentication failed: #{json}")
+        disconnect
+      rescue SystemCallError, IOError => e
+        debug_log e
+      ensure
+        @disconnected&.call(@authentication_error)
+      end
 
       def monotonic_milliseconds
         Process.clock_gettime(Process::CLOCK_MONOTONIC, :millisecond)

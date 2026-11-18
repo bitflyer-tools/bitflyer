@@ -31,13 +31,16 @@ describe Bitflyer do
   end
 
   describe '.realtime_client' do
-    let(:socket) { instance_double(WebSocket::Client::Simple::Client, on: nil, close: nil) }
+    let(:socket) { instance_double(WebSocket::Client::Simple::Client, send: nil, open?: false) }
+    let(:handlers) { {} }
     let(:client) { Bitflyer.realtime_client }
     let(:session) { client.websocket_client }
     let(:connected_at) { Time.at(1_000) }
 
     before do
       allow(WebSocket::Client::Simple).to receive(:connect).and_return(socket)
+      allow(socket).to receive(:on) { |event, &handler| handlers[event] = handler }
+      allow(socket).to receive(:close) { handlers.fetch(:close).call(nil) }
       allow_any_instance_of(Bitflyer::Realtime::WebSocketClient).to receive(:start_monitoring)
       allow(Time).to receive(:now).and_return(connected_at)
       allow(Process).to receive(:clock_gettime).and_call_original
@@ -74,6 +77,65 @@ describe Bitflyer do
       expect(socket).to receive(:close)
       session.send_ping
       session.wait_pong
+    end
+
+    it 'reports authentication rejection and closes the rejected session' do
+      client = Bitflyer.realtime_client('key', 'secret')
+      ready = spy('ready callback')
+      disconnected = spy('disconnected callback')
+      client.ready = ready
+      client.disconnected = disconnected
+
+      receive_frame('0{}')
+      client.websocket_client.last_pong_at = 0
+      receive_frame('430[{"message":"Invalid API key"}]')
+      receive_frame('3')
+      receive_frame('430[null]')
+      client.websocket_client.reconnect
+
+      expect(socket).to have_received(:close).once
+      expect(disconnected).to have_received(:call)
+        .with(an_object_having_attributes(message: 'Authentication failed: [{"message":"Invalid API key"}]')).once
+      expect(ready).not_to have_received(:call)
+      expect(client.websocket_client.last_pong_at).to eq(0)
+      expect(WebSocket::Client::Simple).to have_received(:connect).once
+    end
+
+    it 'signals readiness after authentication succeeds' do
+      client = Bitflyer.realtime_client('key', 'secret')
+      ready = spy('ready callback')
+      client.ready = ready
+
+      receive_frame('0{}')
+      expect(ready).not_to have_received(:call)
+      receive_frame('430[null]')
+
+      expect(ready).to have_received(:call).once
+      expect(socket).not_to have_received(:close)
+    end
+
+    it 'reports authentication rejection once when closing the socket fails' do
+      client = Bitflyer.realtime_client('key', 'secret')
+      disconnected = spy('disconnected callback')
+      client.disconnected = disconnected
+      reset = Errno::ECONNRESET.new
+      allow(socket).to receive(:close).and_raise(reset)
+
+      receive_frame('0{}')
+      receive_frame('430[{"message":"Invalid API key"}]')
+      message = 'Authentication failed: [{"message":"Invalid API key"}]'
+      expect(disconnected).to have_received(:call).once.with(
+        be_an_instance_of(RuntimeError).and(have_attributes(message: message))
+      )
+
+      handlers.fetch(:error).call(reset)
+      handlers.fetch(:close).call(reset)
+      expect(disconnected).to have_received(:call).once
+      expect(WebSocket::Client::Simple).to have_received(:connect).once
+    end
+
+    def receive_frame(data)
+      handlers.fetch(:message).call(double(data: data))
     end
 
     context 'with credentials' do

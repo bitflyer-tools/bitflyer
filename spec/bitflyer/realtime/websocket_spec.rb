@@ -89,6 +89,26 @@ describe Bitflyer::Realtime::WebSocketClient do
     receive_message('430[null]')
     expect(socket).to have_received(:send).with('42["subscribe","child_order_events"]').once
   end
+
+  it 'stops retrying and leaves queued subscriptions unsent when authentication is rejected' do
+    @attempts = [SocketError.new('DNS lookup failed'), socket]
+    client = Bitflyer.realtime_client('key', 'secret')
+    wait_for_monitor
+    client.child_order_events = ->(_event) {}
+    tick_monitor
+    allow(socket).to receive(:close) do
+      allow(socket).to receive(:open?).and_return(false)
+      handlers.fetch(:close).call(nil)
+    end
+
+    receive_message('0{}')
+    receive_message('430[{"message":"Invalid API key"}]')
+    ticks.push(true)
+
+    expect(@monitor.join(5)).to eq(@monitor)
+    expect(socket).not_to have_received(:send).with('42["subscribe","child_order_events"]')
+    expect(WebSocket::Client::Simple).to have_received(:connect).twice
+  end
 end
 
 RSpec.describe Bitflyer::Realtime::WebSocketClient do

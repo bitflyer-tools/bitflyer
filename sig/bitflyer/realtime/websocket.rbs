@@ -5,6 +5,7 @@ module Bitflyer
       @key: String?
       @secret: String?
       @debug: bool
+      @authentication_error: RuntimeError?
       @subscriptions_mutex: Thread::Mutex
       @session_ready: bool
       @last_ping_monotonic: Integer?
@@ -59,6 +60,8 @@ module Bitflyer
       def debug_log: (untyped message) -> void
 
       private
+
+      def reject_authentication: (String json) -> void
 
       def monotonic_milliseconds: () -> Integer
 
