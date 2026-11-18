@@ -34,7 +34,7 @@ module Bitflyer
 
       def reconnect: () -> void
 
-      def handle_error: (error: untyped) -> void
+      def handle_error: (error: untyped, ?transport: WebSocket::Client::Simple::Client) -> void
 
       def handle_message: (payload: untyped) -> void
 

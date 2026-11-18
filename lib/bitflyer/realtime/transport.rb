@@ -5,6 +5,14 @@ require 'websocket-client-simple'
 module Bitflyer
   module Realtime
     class Transport < WebSocket::Client::Simple::Client
+      attr_reader :reset_error
+
+      def close_after_reset(error)
+        @reset_error = error
+        @pipe_broken = true
+        close
+      end
+
       def close_on_eof
         socket = @socket
         return unless socket

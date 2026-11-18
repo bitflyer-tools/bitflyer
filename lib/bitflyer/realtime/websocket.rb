@@ -93,13 +93,13 @@ module Bitflyer
         connect
       end
 
-      def handle_error(error:)
+      def handle_error(error:, transport: @websocket_client)
         debug_log error
         return unless error.is_a? Errno::ECONNRESET
+        return unless transport.is_a? Transport
         return if @lifecycle_lock.synchronize { @stopped }
 
-        @disconnected&.call(error)
-        reconnect
+        transport.close_after_reset(error)
       end
 
       def handle_message(payload:) # rubocop:disable Metrics/CyclomaticComplexity
@@ -214,8 +214,8 @@ module Bitflyer
         @websocket_client = transport
         this = self
         transport.on(:message) { |payload| this.handle_message(payload: payload) }
-        transport.on(:error) { |error| this.handle_error(error: error) }
-        transport.on(:close) { |error| this.handle_close(error: error) }
+        transport.on(:error) { |error| this.handle_error(error: error, transport: transport) }
+        transport.on(:close) { |error| this.handle_close(error: error || transport.reset_error) }
         transport.close_on_eof
       end
 

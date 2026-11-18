@@ -24,7 +24,8 @@ describe Bitflyer do
 
   describe '.realtime_client' do
     let(:socket) do
-      double('websocket transport', open?: true, closed?: false, connect: nil, on: nil, close: nil, close_on_eof: nil)
+      double('websocket transport', open?: true, closed?: false, connect: nil, on: nil, close: nil,
+             close_on_eof: nil, reset_error: nil)
     end
 
     before do
@@ -58,7 +59,7 @@ describe Bitflyer do
 
     it 'automatically reconnects after the transport closes while active' do
       replacement = double('replacement transport', open?: true, closed?: false, connect: nil, on: nil, close: nil,
-                           close_on_eof: nil)
+                           close_on_eof: nil, reset_error: nil)
       reconnected = Queue.new
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket, replacement)
       allow(replacement).to receive(:on).with(:close) { reconnected << true }
@@ -151,6 +152,35 @@ describe Bitflyer do
           expect(transport).to be_closed
           expect(transport.thread.join(1)).to eq(transport.thread)
           expect(Bitflyer::Realtime::Transport).to have_received(:new).twice
+        end
+      ensure
+        @client&.shutdown
+        peer&.close
+        replacement_peer&.close
+      end
+    end
+
+    it 'reconnects after the peer resets the connection during the WebSocket handshake' do
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
+      TCPServer.open('127.0.0.1', 0) do |server|
+        stub_const('Bitflyer::Realtime::SOCKET_HOST', "http://127.0.0.1:#{server.addr[1]}")
+        @client = Bitflyer.realtime_client
+        transport = @client.websocket_client.websocket_client
+        disconnected = Queue.new
+        @client.disconnected = ->(error) { disconnected << [error, transport.closed?] }
+
+        peer = replacement_peer = nil
+        Timeout.timeout(5) do
+          peer = server.accept
+          peer.each_line { |line| break if line == "\r\n" }
+          peer.setsockopt(Socket::Option.linger(true, 0))
+          peer.close
+          expect(disconnected.pop).to match([an_instance_of(Errno::ECONNRESET), true])
+          replacement_peer = server.accept
+          expect(transport).to be_closed
+          expect(transport.thread.join(1)).to eq(transport.thread)
+          expect(Bitflyer::Realtime::Transport).to have_received(:new).twice
+          expect(disconnected).to be_empty
         end
       ensure
         @client&.shutdown
