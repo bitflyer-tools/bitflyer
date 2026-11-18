@@ -9,6 +9,8 @@ module Bitflyer
 
       def close_after_read_error: (Errno::ECONNRESET | OpenSSL::SSL::SSLError) -> void
 
+      def close_after_write_reset: (Errno::ECONNRESET) -> void
+
       def close_for_shutdown: () -> void
 
       def close_on_eof: () -> void
@@ -24,6 +26,8 @@ module Bitflyer
       private
 
       def write_ping: (WebSocket::Client::Simple::Client? socket) -> bool
+
+      def close_after_ping_reset: (WebSocket::Client::Simple::Client? socket, Errno::ECONNRESET) -> void
 
       def ping_interrupted?: (WebSocket::Client::Simple::Client? socket) -> bool
 

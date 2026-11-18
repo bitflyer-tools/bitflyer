@@ -22,6 +22,11 @@ module Bitflyer
         close_for_shutdown
       end
 
+      def close_after_write_reset(error)
+        @pipe_broken = true
+        emit :__close, error
+      end
+
       def close_for_shutdown
         # A close frame can block on the same socket as the pending write.
         @pipe_broken = true

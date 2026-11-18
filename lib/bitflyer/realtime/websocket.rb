@@ -245,6 +245,9 @@ module Bitflyer
         debug_log 'Sent ping'
         socket&.send '2'
         true
+      rescue Errno::ECONNRESET => e
+        close_after_ping_reset(socket, e)
+        false
       rescue IOError, SystemCallError
         raise unless ping_interrupted?(socket)
 
@@ -254,6 +257,14 @@ module Bitflyer
         raise unless e.name == :write && e.receiver.nil? && ping_interrupted?(socket)
 
         false
+      end
+
+      def close_after_ping_reset(socket, error)
+        return if ping_interrupted?(socket)
+
+        raise error unless socket.is_a?(Transport)
+
+        socket.close_after_write_reset(error)
       end
 
       def ping_interrupted?(socket)

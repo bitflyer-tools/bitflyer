@@ -9,7 +9,7 @@ module WebSocket
 
         def on: (Symbol event) { (untyped) -> void } -> void
 
-        def emit: (Symbol event) -> void
+        def emit: (Symbol event, *untyped data) -> void
 
         def send: (String data, ?Hash[Symbol, untyped] options) -> void
 

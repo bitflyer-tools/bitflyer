@@ -350,6 +350,45 @@ describe Bitflyer do
       end
     end
 
+    it 'reconnects when the ping write detects a reset before the reader' do
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
+      TCPServer.open('127.0.0.1', 0) do |server|
+        stub_const('Bitflyer::Realtime::SOCKET_HOST', "http://127.0.0.1:#{server.addr[1]}")
+        transport = session.websocket_client
+        ready = Queue.new
+        disconnected = Queue.new
+        client.ready = -> { ready << true }
+        client.disconnected = ->(error) { disconnected << error }
+        reset = Errno::ECONNRESET.new
+
+        peer = replacement_peer = nil
+        Timeout.timeout(5) do
+          peer = server.accept
+          handshake = WebSocket::Handshake::Server.new
+          handshake << peer.gets("\r\n\r\n")
+          peer.write(handshake.to_s)
+          peer.write(WebSocket::Frame::Outgoing::Server.new(version: handshake.version, type: :text,
+                                                             data: '0{}').to_s)
+          ready.pop
+
+          raw_socket = transport.instance_variable_get(:@socket)
+          allow(raw_socket).to receive(:write).and_raise(reset)
+          client.ping_interval = 0
+
+          expect(disconnected.pop).to equal(reset)
+          replacement_peer = server.accept
+          expect(replacement_peer.gets("\r\n\r\n")).to start_with('GET /socket.io/')
+          expect(transport).to be_closed
+          expect(transport.thread.join(1)).to eq(transport.thread)
+          expect(disconnected).to be_empty
+        end
+      ensure
+        @client&.shutdown
+        peer&.close
+        replacement_peer&.close
+      end
+    end
+
     %i[reset eof].product([nil, IOError.new('stream closed in another thread')]).each do |disconnect, write_error|
       it "reconnects after #{disconnect} interrupts ping with #{write_error&.class || NoMethodError}" do
         allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
