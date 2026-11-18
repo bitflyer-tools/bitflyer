@@ -5,6 +5,8 @@ module Bitflyer
       @key: String?
       @secret: String?
       @debug: bool
+      @last_ping_monotonic: Integer?
+      @last_pong_monotonic: Integer?
 
       attr_accessor websocket_client: WebSocket::Client::Simple::Client
       attr_accessor channel_names: Array[Symbol]
@@ -51,6 +53,12 @@ module Bitflyer
       def emit_message: (json: String) -> void
 
       def debug_log: (untyped message) -> void
+
+      private
+
+      def monotonic_milliseconds: () -> Integer
+
+      def monotonic_from_unix_seconds: (Integer?) -> Integer?
     end
   end
 end

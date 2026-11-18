@@ -62,6 +62,54 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     expect(socket).to have_received(:close).once
   end
 
+  it 'exposes handshake, ping, and pong timestamps in Unix seconds' do
+    expect(client.last_ping_at).to eq(1_000)
+    expect(client.last_pong_at).to eq(1_000)
+
+    @wall_time = Time.at(900, 500_000)
+    @heartbeat_time += 1_500
+    client.send_ping
+    expect(client.last_ping_at).to eq(900)
+
+    @wall_time += 200
+    client.receive_pong
+    expect(client.last_pong_at).to eq(1_100)
+  end
+
+  it 'applies Unix-second writes to both deadlines despite later wall-clock changes' do
+    client.last_ping_at = client.last_pong_at = 999
+    expect(client.last_ping_at).to eq(999)
+    expect(client.last_pong_at).to eq(999)
+
+    @wall_time += 60
+    @heartbeat_time += 499
+    client.send_ping
+    client.wait_pong
+    expect(socket).not_to have_received(:send)
+    expect(socket).not_to have_received(:close)
+
+    @heartbeat_time += 1
+    client.send_ping
+    expect(socket).to have_received(:send).with('2').once
+
+    @wall_time -= 160
+    @heartbeat_time += 750
+    client.wait_pong
+    expect(socket).to have_received(:close).once
+  end
+
+  it 'clears both deadlines when the timestamps are set to nil' do
+    client.last_ping_at = client.last_pong_at = nil
+    expect(client.last_ping_at).to be_nil
+    expect(client.last_pong_at).to be_nil
+
+    @heartbeat_time += 3_000
+    client.send_ping
+    client.wait_pong
+    expect(socket).not_to have_received(:send)
+    expect(socket).not_to have_received(:close)
+  end
+
   context 'with credentials' do
     let(:key) { 'key' }
     let(:secret) { 'secret' }
