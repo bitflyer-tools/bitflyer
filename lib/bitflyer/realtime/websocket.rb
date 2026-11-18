@@ -230,7 +230,11 @@ module Bitflyer
         channel_name, *messages = JSON.parse json
         return unless channel_name
 
-        messages.each { |message| @channel_callbacks[channel_name.to_sym]&.call(message) }
+        messages.each do |message|
+          break if @lifecycle_lock.synchronize { lifecycle_inactive? }
+
+          @channel_callbacks[channel_name.to_sym]&.call(message)
+        end
       end
 
       def debug_log(message)

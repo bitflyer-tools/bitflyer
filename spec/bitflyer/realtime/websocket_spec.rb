@@ -47,6 +47,21 @@ describe Bitflyer::Realtime::WebSocketClient do
     expect(events).to eq([{ 'ltp' => 100 }])
   end
 
+  it 'stops delivering events from the current frame when a subscription callback shuts down' do
+    @attempts = [nil]
+    @client = Bitflyer.realtime_client
+    events = []
+    @client.ticker_btc_jpy = lambda do |event|
+      events << event
+      @client.shutdown
+    end
+    receive_message('0{}')
+
+    receive_message('42["lightning_ticker_BTC_JPY",{"ltp":100},{"ltp":101}]')
+
+    expect(events).to eq([{ 'ltp' => 100 }])
+  end
+
   it 'waits for the replacement session before sending new subscriptions' do
     allow_any_instance_of(described_class).to receive(:start_monitoring)
     @attempts = [nil, nil]
