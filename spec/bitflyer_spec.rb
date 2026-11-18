@@ -350,8 +350,8 @@ describe Bitflyer do
       end
     end
 
-    [nil, IOError.new('stream closed in another thread')].each do |write_error|
-      it "reconnects after a reset interrupts ping with #{write_error&.class || NoMethodError}" do
+    %i[reset eof].product([nil, IOError.new('stream closed in another thread')]).each do |disconnect, write_error|
+      it "reconnects after #{disconnect} interrupts ping with #{write_error&.class || NoMethodError}" do
         allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
         transport = Bitflyer::Realtime::Transport.new
         replacement = double('replacement transport', open?: true, connect: nil, on: nil, close: nil)
@@ -364,12 +364,17 @@ describe Bitflyer do
         handshake = double('handshake', finished?: true, version: 13)
         if write_error
           allow(raw_socket).to receive(:write) do
+            next if Thread.current == transport.thread
+
             ping_started << true
             write_released.pop
             raise write_error
           end
         else
+          allow(raw_socket).to receive(:write)
           allow(handshake).to receive(:version) do
+            next 13 if Thread.current == transport.thread
+
             ping_started << true
             write_released.pop
             13
@@ -382,7 +387,7 @@ describe Bitflyer do
           transport.once(:__close) { |error| transport.emit(:close, error) }
         end
         allow(replacement).to receive(:close_on_eof) { reconnected << true }
-        reset = Errno::ECONNRESET.new
+        read_error = Errno::ECONNRESET.new if disconnect == :reset
         disconnected = Queue.new
         client.disconnected = ->(error) { disconnected << error }
         client.ping_interval = 0
@@ -390,15 +395,16 @@ describe Bitflyer do
 
         Timeout.timeout(5) do
           ping_started.pop
-          Thread.new do
+          reader = Thread.new do
             transport.instance_variable_set(:@thread, Thread.current)
-            transport.emit(:error, reset)
-          end.value
+            read_error ? transport.emit(:error, read_error) : raw_socket.getc
+          end
+          reader.join
           write_released << true
           reconnected.pop
         end
 
-        expect(disconnected.pop(true)).to eq(reset)
+        expect(disconnected.pop(true)).to eq(read_error)
         expect(raw_socket).to have_received(:close).once
         expect(session.websocket_client).to equal(replacement)
       ensure

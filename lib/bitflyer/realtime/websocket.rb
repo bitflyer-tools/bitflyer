@@ -257,7 +257,7 @@ module Bitflyer
       end
 
       def ping_interrupted?(socket)
-        return true if socket.is_a?(Transport) && socket.read_error
+        return true if socket.is_a?(Transport) && (socket.read_error || socket.closed?)
 
         @lifecycle_lock.synchronize { lifecycle_inactive? }
       end
