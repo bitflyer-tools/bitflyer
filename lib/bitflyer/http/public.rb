@@ -34,6 +34,19 @@ module Bitflyer
           @connection.get('/v1/executions', query).body
         end
 
+        def each_execution(
+          product_code: 'BTC_JPY', count: nil, before: nil, after: nil, max_pages: ExecutionHistory::DEFAULT_MAX_PAGES,
+          &block
+        )
+          stream = ExecutionHistory.stream(before, max_pages) do |cursor|
+            executions(product_code: product_code, count: count, before: cursor, after: after)
+          end
+          return stream unless block
+
+          stream.each(&block)
+          nil
+        end
+
         def chats(from_date: (Time.now - (5 * 24 * 60 * 60)))
           @connection.get('/v1/getchats', from_date: from_date).body
         end

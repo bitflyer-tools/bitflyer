@@ -37,6 +37,26 @@ private_client = Bitflyer.http_private_client('YOUR_API_KEY', 'YOUR_API_SECRET')
 p private_client.positions # will print your positions
 ```
 
+#### Stream execution history
+
+`each_execution` on either HTTP client fetches pages on demand and yields one execution at a time
+in API response order. It uses the lowest execution ID on each page as the next exclusive `before`
+cursor. Pass a saved execution ID as `before` to resume from older records, and use `after` to set
+an exclusive lower bound.
+
+```ruby
+history = public_client.each_execution(product_code: 'BTC_JPY', before: 123_456, count: 50, max_pages: 5)
+history.lazy.take(75).each { |execution| p execution }
+
+private_client.each_execution(child_order_acceptance_id: 'YOUR_ORDER_ACCEPTANCE_ID') do |fill|
+  p fill
+end
+```
+
+`max_pages` defaults to 10 requests per traversal. Set it to 0 to skip fetching. Iteration also
+stops when a page is empty, when the cursor stops moving backward, or when the caller stops
+consuming the enumerator. Request errors propagate to the caller.
+
 ### Realtime API
 
 #### Public events

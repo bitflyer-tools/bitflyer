@@ -2,6 +2,14 @@ module Bitflyer
   module HTTP
     BASE_URL: String
 
+    module ExecutionHistory
+      DEFAULT_MAX_PAGES: Integer
+
+      def self.stream: (Integer? before, Integer max_pages) { (Integer?) -> untyped } -> Enumerator[untyped, untyped]
+
+      private def self.validate_page_budget: (Integer max_pages) -> void
+    end
+
     class Response < Struct[untyped]
       attr_accessor body: untyped
 

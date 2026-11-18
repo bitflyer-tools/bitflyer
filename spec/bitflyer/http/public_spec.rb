@@ -60,6 +60,76 @@ describe Bitflyer::HTTP::Public::Client do
     end
   end
 
+  describe '#each_execution' do
+    def execution_page(*ids)
+      Bitflyer::HTTP::Response.new(ids.map { |id| { 'id' => id } })
+    end
+
+    it 'fetches pages lazily using the lowest ID and preserves filters and response order' do
+      filters = { product_code: 'ETH_JPY', count: 3, after: 10 }
+      history = client.each_execution(**filters, before: 100)
+      expect(connection).not_to have_received(:get)
+
+      expect(connection).to receive(:get).with('/v1/executions', filters.merge(before: 100))
+                                         .ordered.and_return(execution_page(95, 90, 92))
+      expect(connection).to receive(:get).with('/v1/executions', filters.merge(before: 90))
+                                         .ordered.and_return(execution_page(80))
+      expect(connection).to receive(:get).with('/v1/executions', filters.merge(before: 80))
+                                         .ordered.and_return(execution_page)
+
+      expect(history.map { |execution| execution.fetch('id') }).to eq([95, 90, 92, 80])
+    end
+
+    it 'starts at the latest page and stops fetching when the caller has enough records' do
+      expect(connection).to receive(:get).with('/v1/executions', { product_code: 'BTC_JPY' })
+                                         .once.and_return(execution_page(95, 90))
+
+      expect(client.each_execution.first).to eq('id' => 95)
+    end
+
+    it 'stops at the requested page budget' do
+      expect(connection).to receive(:get).with('/v1/executions', { product_code: 'BTC_JPY' })
+                                         .once.and_return(execution_page(95, 90))
+
+      expect(client.each_execution(max_pages: 1).to_a.size).to eq(2)
+    end
+
+    it 'defaults to a budget of ten requests' do
+      id = 100
+      expect(connection).to receive(:get).exactly(10).times { execution_page(id -= 1) }
+
+      expect(client.each_execution.to_a.size).to eq(10)
+    end
+
+    it 'returns no executions and makes no requests with a zero page budget' do
+      expect(client.each_execution(max_pages: 0).to_a).to be_empty
+      expect(connection).not_to have_received(:get)
+    end
+
+    it 'rejects invalid page budgets before making a request' do
+      [-1, 1.5, nil].each do |budget|
+        expect { client.each_execution(max_pages: budget) }.to raise_error(ArgumentError, /max_pages/)
+      end
+      expect(connection).not_to have_received(:get)
+    end
+
+    it 'stops before yielding a page whose cursor does not move backward' do
+      expect(connection).to receive(:get).with('/v1/executions', { product_code: 'BTC_JPY' })
+                                         .ordered.and_return(execution_page(95, 90))
+      expect(connection).to receive(:get).with('/v1/executions', { product_code: 'BTC_JPY', before: 90 })
+                                         .ordered.and_return(execution_page(95, 90))
+
+      expect(client.each_execution.to_a).to eq([{ 'id' => 95 }, { 'id' => 90 }])
+    end
+
+    it 'propagates a request failure during iteration' do
+      error = Bitflyer::HTTP::ResponseError.new(429, 'Rate limit exceeded')
+      expect(connection).to receive(:get).and_raise(error)
+
+      expect { client.each_execution.to_a }.to raise_error { |raised| expect(raised).to equal(error) }
+    end
+  end
+
   describe '#chats' do
     it 'calls GET /v1/getchats with from_date' do
       frozen_time = Time.new(2025, 1, 10, 0, 0, 0, '+00:00')
