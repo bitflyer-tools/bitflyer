@@ -54,6 +54,7 @@ cursor. Pass a saved execution ID as `before` to resume from older records, and 
 an exclusive lower bound.
 
 ```ruby
+public_client = Bitflyer.http_public_client
 history = public_client.each_execution(product_code: 'BTC_JPY', before: 123_456, count: 50, max_pages: 5)
 history.lazy.take(75).each { |execution| p execution }
 
