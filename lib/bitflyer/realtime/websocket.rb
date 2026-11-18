@@ -23,6 +23,8 @@ module Bitflyer
         start_monitoring
       end
 
+      def inspect = "#<#{self.class}>"
+
       def subscribe(channel_name:, &block)
         debug_log "Subscribe #{channel_name}"
         socket = @subscriptions_mutex.synchronize do
