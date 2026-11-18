@@ -31,6 +31,8 @@ jobs:
         run: gem install bundler
       - name: Install dependencies
         run: bundle install --jobs 4
+      - name: Check generated realtime signatures
+        run: ruby script/generate_realtime_signatures.rb --check
       - name: Run type check
         run: bundle exec rake steep
   test:
