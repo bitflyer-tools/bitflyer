@@ -6,9 +6,10 @@ require 'openssl'
 
 module Bitflyer
   module Realtime
-    class WebSocketClient
+    class WebSocketClient # rubocop:disable Metrics/ClassLength
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
-                    :last_ping_at, :last_pong_at, :ready, :disconnected
+                    :last_ping_at, :last_pong_at, :disconnected
+      attr_reader :ready
 
       def initialize(host:, key:, secret:, debug: false)
         @host = host
@@ -17,8 +18,19 @@ module Bitflyer
         @debug = debug
         @channel_names = []
         @channel_callbacks = {}
+        @ready_mutex = Mutex.new
+        @ready_state = :pending
         connect
         start_monitoring
+      end
+
+      def ready=(callback)
+        notification = @ready_mutex.synchronize do
+          @ready = callback
+          take_ready_callback
+        end
+        notification&.call
+        callback
       end
 
       def subscribe(channel_name:, &block)
@@ -29,6 +41,7 @@ module Bitflyer
       end
 
       def connect
+        reset_readiness
         @websocket_client = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
         this = self
         @websocket_client.on(:message) { |payload| this.handle_message(payload: payload) }
@@ -88,6 +101,7 @@ module Bitflyer
         debug_log error
         return unless error.is_a? Errno::ECONNRESET
 
+        reset_readiness
         @disconnected&.call(error)
         reconnect
       end
@@ -112,10 +126,11 @@ module Bitflyer
 
       def handle_close(error:)
         debug_log error
+        reset_readiness
         @disconnected&.call(error)
       end
 
-      def setup_by_response(json:) # rubocop:disable Metrics/CyclomaticComplexity, Metrics/PerceivedComplexity
+      def setup_by_response(json:)
         body = JSON.parse json
         @ping_interval = body['pingInterval']&.to_i || 25_000
         @ping_timeout  = body['pingTimeout']&.to_i || 60_000
@@ -125,7 +140,7 @@ module Bitflyer
           authenticate
         else
           subscribe_channels
-          @ready&.call
+          notify_ready
         end
       end
 
@@ -148,7 +163,7 @@ module Bitflyer
 
         debug_log 'Authenticated'
         subscribe_channels
-        @ready&.call
+        notify_ready
       end
 
       def subscribe_channels
@@ -179,6 +194,27 @@ module Bitflyer
         return unless @debug
 
         p message
+      end
+
+      private
+
+      def notify_ready
+        notification = @ready_mutex.synchronize do
+          @ready_state = :ready if @ready_state == :pending
+          take_ready_callback
+        end
+        notification&.call
+      end
+
+      def take_ready_callback
+        return unless @ready_state == :ready && @ready
+
+        @ready_state = :notified
+        @ready
+      end
+
+      def reset_readiness
+        @ready_mutex.synchronize { @ready_state = :pending }
       end
     end
   end

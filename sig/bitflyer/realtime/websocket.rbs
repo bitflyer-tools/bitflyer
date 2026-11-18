@@ -5,6 +5,8 @@ module Bitflyer
       @key: String?
       @secret: String?
       @debug: bool
+      @ready_mutex: Thread::Mutex
+      @ready_state: :pending | :ready | :notified
 
       attr_accessor websocket_client: WebSocket::Client::Simple::Client
       attr_accessor channel_names: Array[Symbol]
@@ -51,6 +53,14 @@ module Bitflyer
       def emit_message: (json: String) -> void
 
       def debug_log: (untyped message) -> void
+
+      private
+
+      def notify_ready: () -> void
+
+      def take_ready_callback: () -> ready_callback?
+
+      def reset_readiness: () -> void
     end
   end
 end
