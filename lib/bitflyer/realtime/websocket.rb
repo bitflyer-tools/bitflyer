@@ -22,24 +22,30 @@ module Bitflyer
         @channel_names = []
         @channel_callbacks = {}
         @connection_lock = Monitor.new
+        @subscriptions_mutex = Thread::Mutex.new
         connect
         start_monitoring
       end
 
       def subscribe(channel_name:, &block)
         debug_log "Subscribe #{channel_name}"
-        @channel_names = (@channel_names + [channel_name]).uniq
-        @channel_callbacks[channel_name] = block
-        @websocket_client&.send "42#{['subscribe', channel_name].to_json}"
+        socket = @subscriptions_mutex.synchronize do
+          @channel_names = (@channel_names + [channel_name]).uniq
+          @channel_callbacks[channel_name] = block
+          @websocket_client if @session_ready
+        end
+        socket.send "42#{['subscribe', channel_name].to_json}" if socket&.open?
       end
 
       def connect
+        @subscriptions_mutex.synchronize { @session_ready = false }
         WebSocket::Client::Simple.connect("#{@host}/socket.io/?transport=websocket") do |socket|
           @websocket_client = socket
           @handshake_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + HANDSHAKE_TIMEOUT
           register_handlers(socket)
         end
-      rescue SocketError => e
+      rescue SocketError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::ETIMEDOUT,
+             Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
         @websocket_client = nil
         puts e
         puts e.backtrace&.join("\n")
@@ -165,9 +171,13 @@ module Bitflyer
       end
 
       def subscribe_channels
-        @channel_callbacks.each_key do |channel_name|
+        socket, channels = @subscriptions_mutex.synchronize do
+          @session_ready = true
+          [@websocket_client, @channel_callbacks.keys]
+        end
+        channels.each do |channel_name|
           debug_log "42#{{ subscribe: channel_name }.to_json}"
-          @websocket_client&.send "42#{['subscribe', channel_name].to_json}"
+          socket&.send "42#{['subscribe', channel_name].to_json}"
         end
       end
 

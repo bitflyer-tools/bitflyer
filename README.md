@@ -24,6 +24,9 @@ See https://lightning.bitflyer.jp/docs for details.
 
 See [public.rb](./lib/bitflyer/http/public.rb) / [private.rb](./lib/bitflyer/http/private.rb) for method definition.
 
+HTTP responses outside the 2xx range raise `Bitflyer::HTTP::ResponseError`. The error provides
+the numeric HTTP status in `status` and the raw response body in `body`.
+
 #### Example
 
 ```ruby 
@@ -96,7 +99,7 @@ bundle exec rake steep
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/unhappychoice/bitflyer. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [Contributor Covenant](http://contributor-covenant.org) code of conduct.
+Bug reports and pull requests are welcome on GitHub. See the [contributing guide](CONTRIBUTING.md) for setup and checks. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [Contributor Covenant](http://contributor-covenant.org) code of conduct.
 
 
 ## License
