@@ -1,0 +1,19 @@
+module WebSocket
+  class Driver
+    def self.client: (Bitflyer::Realtime::WebSocketTransport socket) -> Driver
+
+    def state: () -> Symbol?
+
+    def on: (Symbol event) { (untyped) -> void } -> void
+
+    def emit: (Symbol event, untyped payload) -> void
+
+    def start: () -> bool
+
+    def text: (String data) -> bool
+
+    def close: () -> bool
+
+    def parse: (String data) -> void
+  end
+end

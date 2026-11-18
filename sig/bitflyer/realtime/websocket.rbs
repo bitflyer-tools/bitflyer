@@ -6,7 +6,7 @@ module Bitflyer
       @secret: String?
       @debug: bool
 
-      attr_accessor websocket_client: WebSocket::Client::Simple::Client
+      attr_accessor websocket_client: WebSocketTransport
       attr_accessor channel_names: Array[Symbol]
       attr_accessor channel_callbacks: Hash[Symbol, message_callback]
       attr_accessor ping_interval: Integer?

@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
-require 'websocket-client-simple'
 require 'json'
 require 'openssl'
+require_relative 'websocket_transport'
 
 module Bitflyer
   module Realtime
@@ -29,11 +29,12 @@ module Bitflyer
       end
 
       def connect
-        @websocket_client = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
-        this = self
-        @websocket_client.on(:message) { |payload| this.handle_message(payload: payload) }
-        @websocket_client.on(:error) { |error| this.handle_error(error: error) }
-        @websocket_client.on(:close) { |error| this.handle_close(error: error) }
+        url = "#{@host}/socket.io/?transport=websocket"
+        @websocket_client = WebSocketTransport.new(url)
+        @websocket_client.on(:message) { |payload| handle_message(payload: payload) }
+        @websocket_client.on(:error) { |error| handle_error(error: error) }
+        @websocket_client.on(:close) { |error| handle_close(error: error) }
+        @websocket_client.start
       rescue SocketError => e
         puts e
         puts e.backtrace&.join("\n")
@@ -46,7 +47,7 @@ module Bitflyer
             if @websocket_client&.open?
               send_ping
               wait_pong
-            else
+            elsif !@websocket_client&.active?
               reconnect
             end
           end
@@ -76,20 +77,17 @@ module Bitflyer
       end
 
       def reconnect
-        return if @websocket_client&.open?
+        return if @websocket_client&.active?
 
         debug_log 'Reconnecting...'
 
-        @websocket_client.close if @websocket_client.open?
         connect
+      rescue OpenSSL::SSL::SSLError => e
+        debug_log e
       end
 
       def handle_error(error:)
         debug_log error
-        return unless error.is_a? Errno::ECONNRESET
-
-        @disconnected&.call(error)
-        reconnect
       end
 
       def handle_message(payload:) # rubocop:disable Metrics/CyclomaticComplexity

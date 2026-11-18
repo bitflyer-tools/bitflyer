@@ -1,0 +1,33 @@
+module Bitflyer
+  module Realtime
+    class WebSocketTransport
+      HANDSHAKE_TIMEOUT: Integer
+
+      attr_reader url: String
+
+      def initialize: (String url) -> void
+
+      def on: (Symbol event) { (untyped) -> void } -> void
+
+      def start: () -> Thread
+
+      def active?: () -> bool
+
+      def open?: () -> bool
+
+      def send: (String data) -> void
+
+      def close: () -> void
+
+      def write: (String data) -> Integer
+
+      private
+
+      def connect_tls: (URI::Generic uri) -> OpenSSL::SSL::SSLSocket
+
+      def read_messages: () -> void
+
+      def read_handshake: () -> void
+    end
+  end
+end
