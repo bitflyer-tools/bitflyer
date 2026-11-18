@@ -235,6 +235,43 @@ describe Bitflyer do
       write_released << true
     end
 
+    it 'stops the monitor when shutdown interrupts the pong timeout close frame' do
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
+      transport = Bitflyer::Realtime::Transport.new
+      close_started = Queue.new
+      write_released = Queue.new
+      raw_socket = double('socket', getc: nil)
+      handshake = double('handshake', finished?: true, version: 13)
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(transport)
+      allow(transport).to receive(:connect) do
+        transport.instance_variable_set(:@socket, raw_socket)
+        transport.instance_variable_set(:@handshake, handshake)
+        transport.instance_variable_set(:@handshaked, true)
+      end
+      allow(raw_socket).to receive(:write) do |frame|
+        close_started << frame.getbyte(0)
+        write_released.pop
+        raise IOError, 'stream closed in another thread'
+      end
+      allow(raw_socket).to receive(:close) { write_released << true }
+
+      session.ping_interval = 1_000
+      session.ping_timeout = 1_000
+      session.last_pong_at = connected_at.to_i - 2
+      monitor = session.instance_variable_get(:@monitor)
+      monitor.report_on_exception = false
+
+      Timeout.timeout(5) do
+        expect(close_started.pop).to eq(0x88)
+        client.shutdown
+      end
+
+      expect(raw_socket).to have_received(:close).once
+      expect(monitor).not_to be_alive
+    ensure
+      write_released << true
+    end
+
     it 'authenticates, resubscribes, and signals readiness when the greeting arrives during connect' do
       replacement = double('replacement transport', close_on_eof: nil, close: nil)
       callbacks = {}

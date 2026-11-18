@@ -104,7 +104,7 @@ module Bitflyer
         return unless now - last_pong_monotonic >= ping_interval + ping_timeout
 
         debug_log 'Timed out waiting pong'
-        socket&.close
+        close_after_pong_timeout(socket)
       end
 
       def last_ping_at=(timestamp)
@@ -262,25 +262,33 @@ module Bitflyer
         close_after_ping_reset(socket, e)
         false
       rescue IOError, SystemCallError
-        raise unless ping_interrupted?(socket)
+        raise unless heartbeat_interrupted?(socket)
 
         false
       rescue NoMethodError => e
         # The transport can clear its socket after the send has started.
-        raise unless e.name == :write && e.receiver.nil? && ping_interrupted?(socket)
+        raise unless e.name == :write && e.receiver.nil? && heartbeat_interrupted?(socket)
 
         false
       end
 
       def close_after_ping_reset(socket, error)
-        return if ping_interrupted?(socket)
+        return if heartbeat_interrupted?(socket)
 
         raise error unless socket.is_a?(Transport)
 
         socket.close_after_write_reset(error)
       end
 
-      def ping_interrupted?(socket)
+      def close_after_pong_timeout(socket)
+        socket&.close
+      rescue IOError, SystemCallError
+        raise unless heartbeat_interrupted?(socket)
+      rescue NoMethodError => e
+        raise unless e.name == :write && e.receiver.nil? && heartbeat_interrupted?(socket)
+      end
+
+      def heartbeat_interrupted?(socket)
         return true if socket.is_a?(Transport) && (socket.read_error || socket.closed?)
 
         @lifecycle_lock.synchronize { lifecycle_inactive? }
