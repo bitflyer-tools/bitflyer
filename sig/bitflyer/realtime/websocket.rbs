@@ -5,11 +5,19 @@ module Bitflyer
       @key: String?
       @secret: String?
       @debug: bool
+      @lifecycle_lock: Mutex
+      @monitor_wakeup: Thread::ConditionVariable
+      @stopped: bool
+      @authentication_error: RuntimeError?
+      @monitor: Thread?
+      @session_mutex: Thread::Mutex
       @pending_subscriptions: Hash[Integer, Symbol]
       @subscription_rejected: bool
       @awaiting_authentication: bool
-      @subscriptions_mutex: Thread::Mutex
       @session_ready: bool
+      @ready_state: :pending | :ready | :notified
+      @last_ping_monotonic: Integer?
+      @last_pong_monotonic: Integer?
 
       attr_accessor websocket_client: WebSocket::Client::Simple::Client?
       attr_accessor channel_names: Array[Symbol]
@@ -20,16 +28,17 @@ module Bitflyer
       attr_accessor last_pong_at: Integer?
       attr_accessor ready: ready_callback?
       attr_accessor disconnected: disconnected_callback?
-
       attr_accessor subscription_failed: subscription_failed_callback?
 
       def initialize: (host: String, key: String?, secret: String?, ?debug: bool) -> void
 
+      def shutdown: () -> void
+
+      def inspect: () -> String
+
       def subscribe: (channel_name: Symbol) { (untyped message) -> void } -> void
 
       def connect: () -> void
-
-      def start_monitoring: () -> Thread
 
       def send_ping: () -> void
 
@@ -37,11 +46,11 @@ module Bitflyer
 
       def reconnect: () -> void
 
-      def handle_error: (error: untyped) -> void
+      def handle_error: (error: untyped, ?transport: WebSocket::Client::Simple::Client?) -> void
 
       def handle_message: (payload: untyped) -> void
 
-      def handle_close: (error: untyped) -> void
+      def handle_close: (error: untyped, ?socket: WebSocket::Client::Simple::Client?) -> void
 
       def setup_by_response: (json: String) -> void
 
@@ -63,7 +72,25 @@ module Bitflyer
 
       private
 
-      def reset_session: () -> void
+      def start_monitoring: () -> Thread
+
+      def wait_for_monitor_tick: () -> bool
+
+      def lifecycle_inactive?: () -> bool
+
+      def notify_ready: (WebSocket::Client::Simple::Client?) -> void
+
+      def take_ready_callback: () -> ready_callback?
+
+      def reset_readiness: (?WebSocket::Client::Simple::Client?) -> bool
+
+      def clear_readiness: () -> void
+
+      def reject_authentication: (String json) -> void
+
+      def monotonic_milliseconds: () -> Integer
+
+      def monotonic_from_unix_seconds: (Integer?) -> Integer?
     end
   end
 end

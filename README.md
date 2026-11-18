@@ -12,8 +12,18 @@ bitflyer is a wrapper interface of [Bitflyer lightning API](https://lightning.bi
 
 ## Installation
 
+Requires Ruby 3.3 or later.
+
 ```sh
 gem install bitflyer
+```
+
+## Quick start
+
+After installing the gem, run this command to print the public BTC/JPY order book snapshot. The public client works without API credentials.
+
+```sh
+ruby -r bitflyer -e 'p Bitflyer.http_public_client.board(product_code: "BTC_JPY")'
 ```
 
 ## Usage
@@ -29,10 +39,9 @@ the numeric HTTP status in `status` and the raw response body in `body`.
 
 #### Example
 
-```ruby 
-public_client = Bitflyer.http_public_client
-p public_client.board # will print board snapshot
- 
+```ruby
+require 'bitflyer'
+
 private_client = Bitflyer.http_private_client('YOUR_API_KEY', 'YOUR_API_SECRET')
 p private_client.positions # will print your positions
 ```
@@ -53,6 +62,13 @@ To subscribe to the private `child_order_events` and `parent_order_events`, pass
 #### Connection status monitoring
 
 The `ready` callback is called when the `realtime_client` is ready to receive events (after the socket connection is established, the optional authentication has succeeded, and the channels have been subscribed). If connection is lost, the `disconnected` callback is called, and reconnection is attempted automatically. When the connection is restored and the server acknowledges all subscriptions for that setup, `ready` is called again. If the server rejects a setup subscription, `subscription_failed` receives the channel name as a symbol and the server error. That setup skips `ready`.
+If setup finishes before registration, assigning `ready` delivers the pending notification synchronously, once per connection.
+
+If the server rejects authentication, the client closes the connection and passes a `RuntimeError` with the server response to `disconnected`. Authentication rejection stops automatic reconnection.
+
+Call `client.shutdown` when you finish using a realtime client. It stops automatic reconnection, closes the connection, and stops the monitoring thread. You can call it more than once, including from a `ready` or subscription callback.
+Concurrent calls wait for the connection to close.
+Calling `shutdown` from a subscription callback skips any remaining events in the current WebSocket frame.
 
 #### Examples
 
