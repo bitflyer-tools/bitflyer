@@ -30,6 +30,8 @@ module Bitflyer
 
       def initialize: (String? key, String? secret) -> void
 
+      def inspect: () -> String
+
       def get: (String path, ?Hash[Symbol, untyped] params) -> Response
 
       def post: (String path, ?Hash[Symbol, untyped] body) -> Response

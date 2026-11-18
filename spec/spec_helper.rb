@@ -3,9 +3,9 @@ if ENV['COVERAGE'] == 'true'
   require_relative 'support/coverage_summary_formatter'
 
   SimpleCov.start do
-    use_merging false
-    track_files 'lib/**/*.rb'
-    add_filter { |file| !file.filename.start_with?("#{SimpleCov.root}/lib/") }
+    merging false
+    cover 'lib/**/*.rb'
+    history_limit 0
     formatter CoverageSummaryFormatter
   end
 end
