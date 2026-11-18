@@ -8,8 +8,8 @@ module Bitflyer
           @connection = Connection.new(nil, nil)
         end
 
-        def health
-          @connection.get('/v1/gethealth').body
+        def health(product_code: nil)
+          @connection.get('/v1/gethealth', product_code: product_code).body
         end
 
         def markets
