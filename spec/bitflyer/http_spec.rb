@@ -29,6 +29,14 @@ describe Bitflyer::HTTP::Connection do
       result = connection.get('/v1/gethealth')
       expect(result.body).to eq({ 'status' => 'ok' })
     end
+
+    context 'when the response body is invalid JSON' do
+      let(:response_body) { '{"status":' }
+
+      it 'returns the original response body' do
+        expect(connection.get('/v1/gethealth').body).to eq(response_body)
+      end
+    end
   end
 
   describe '#post' do
