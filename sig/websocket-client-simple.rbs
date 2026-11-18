@@ -2,10 +2,14 @@
 module WebSocket
   module Client
     module Simple
-      def self.connect: (String url, ?Hash[Symbol, untyped] options) ?{ (Client) -> void } -> Client
-
       class Client
+        attr_reader thread: Thread?
+
+        def connect: (String url, ?Hash[Symbol, untyped] options) -> void
+
         def on: (Symbol event) { (untyped) -> void } -> void
+
+        def emit: (Symbol event, *untyped data) -> void
 
         def send: (String data, ?Hash[Symbol, untyped] options) -> void
 

@@ -19,6 +19,6 @@ task :validate_public_signatures do
     sh 'gem', 'build', 'bitflyer.gemspec', '--output', package
     installed = Gem::Installer.at(package, install_dir: directory, ignore_dependencies: true).install
     signatures = File.join(installed.full_gem_path, 'sig')
-    sh 'rbs', '-I', signatures, '-r', 'uri', '-r', 'net-http', '-r', 'forwardable', '-r', 'monitor', 'validate'
+    sh 'rbs', '-I', signatures, '-r', 'uri', '-r', 'net-http', '-r', 'forwardable', 'validate'
   end
 end

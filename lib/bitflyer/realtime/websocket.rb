@@ -1,19 +1,18 @@
 # frozen_string_literal: true
 
-require 'websocket-client-simple'
 require 'json'
-require 'monitor'
 require 'openssl'
+require 'bitflyer/realtime/transport'
 
 module Bitflyer
   module Realtime
     class WebSocketClient # rubocop:disable Metrics/ClassLength
-      HANDSHAKE_TIMEOUT = 10
-      private_constant :HANDSHAKE_TIMEOUT
+      HANDSHAKE_TIMEOUT_MS = 10_000
+      private_constant :HANDSHAKE_TIMEOUT_MS
 
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
-                    :ready, :disconnected
-      attr_reader :last_ping_at, :last_pong_at
+                    :disconnected
+      attr_reader :ready, :last_ping_at, :last_pong_at
 
       def initialize(host:, key:, secret:, debug: false)
         @host = host
@@ -22,17 +21,42 @@ module Bitflyer
         @debug = debug
         @channel_names = []
         @channel_callbacks = {}
-        @connection_lock = Monitor.new
-        @subscriptions_mutex = Thread::Mutex.new
+        @lifecycle_lock = Mutex.new
+        @shutdown_lock = Mutex.new
+        @monitor_wakeup = ConditionVariable.new
+        @stopped = false
+        @authentication_error = nil
+        @session_mutex = Thread::Mutex.new
+        @session_ready = false
+        @ready_state = :pending
         connect
-        start_monitoring
+        @monitor = start_monitoring
+      end
+
+      def shutdown
+        return if @shutdown_lock.owned?
+
+        begin
+          @shutdown_lock.synchronize { close_connections }
+        ensure
+          @monitor&.join unless Thread.current == @monitor
+        end
       end
 
       def inspect = "#<#{self.class}>"
 
+      def ready=(callback)
+        notification = @session_mutex.synchronize do
+          @ready = callback
+          take_ready_callback
+        end
+        notification&.call
+        callback
+      end
+
       def subscribe(channel_name:, &block)
         debug_log "Subscribe #{channel_name}"
-        socket = @subscriptions_mutex.synchronize do
+        socket = @session_mutex.synchronize do
           @channel_names = (@channel_names + [channel_name]).uniq
           @channel_callbacks[channel_name] = block
           @websocket_client if @session_ready
@@ -41,37 +65,21 @@ module Bitflyer
       end
 
       def connect
-        @subscriptions_mutex.synchronize { @session_ready = false }
-        WebSocket::Client::Simple.connect("#{@host}/socket.io/?transport=websocket") do |socket|
-          @websocket_client = socket
-          @handshake_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + HANDSHAKE_TIMEOUT
-          register_handlers(socket)
-        end
+        close_expired_handshake
+        connection = start_connection
+        return unless connection
+
+        connected = wait_for_connection(connection)
       rescue SocketError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::ETIMEDOUT,
              Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
-        @websocket_client = nil
         puts e
         puts e.backtrace&.join("\n")
-      end
-
-      def start_monitoring
-        Thread.new do
-          loop do
-            sleep 1
-            @connection_lock.synchronize do
-              if @websocket_client&.open?
-                @handshake_deadline = nil
-                send_ping
-                wait_pong
-              else
-                reconnect
-              end
-            end
-          end
-        end
+      ensure
+        finish_connection(connection, !!connected) if connection
       end
 
       def send_ping
+        socket = @websocket_client
         last_ping_monotonic = @last_ping_monotonic
         ping_interval = @ping_interval
         return unless last_ping_monotonic && ping_interval
@@ -79,13 +87,18 @@ module Bitflyer
         now = monotonic_milliseconds
         return unless now - last_ping_monotonic >= ping_interval
 
-        debug_log 'Sent ping'
-        @websocket_client&.send '2'
-        @last_ping_monotonic = now
-        @last_ping_at = Time.now.to_i
+        return unless write_ping(socket)
+
+        @lifecycle_lock.synchronize do
+          if @websocket_client.equal?(socket)
+            @last_ping_monotonic = now
+            @last_ping_at = Time.now.to_i
+          end
+        end
       end
 
       def wait_pong
+        socket = @websocket_client
         last_pong_monotonic = @last_pong_monotonic
         ping_interval = @ping_interval
         ping_timeout = @ping_timeout
@@ -95,7 +108,7 @@ module Bitflyer
         return unless now - last_pong_monotonic >= ping_interval + ping_timeout
 
         debug_log 'Timed out waiting pong'
-        @websocket_client&.close
+        close_after_pong_timeout(socket)
       end
 
       def last_ping_at=(timestamp)
@@ -109,27 +122,24 @@ module Bitflyer
       end
 
       def reconnect
-        @connection_lock.synchronize do
-          socket = @websocket_client
-          return if socket&.open?
-          return if socket && !socket.closed? && handshake_pending?
-
-          debug_log 'Reconnecting...'
-          @websocket_client = nil
-          socket&.close
-          connect
-        end
+        debug_log 'Reconnecting...'
+        connect
       end
 
-      def handle_error(error:)
+      def handle_error(error:, transport: @websocket_client)
         debug_log error
-        return unless error.is_a? Errno::ECONNRESET
+        return unless error.is_a?(Errno::ECONNRESET) || error.is_a?(OpenSSL::SSL::SSLError)
+        return unless transport.is_a? Transport
+        return unless @lifecycle_lock.synchronize do
+          !lifecycle_inactive? && [@websocket_client, @connection&.first].include?(transport)
+        end
 
-        @handshake_deadline = nil
-        @disconnected&.call(error)
+        transport.close_after_read_error(error)
       end
 
       def handle_message(payload:) # rubocop:disable Metrics/CyclomaticComplexity
+        return if @lifecycle_lock.synchronize { lifecycle_inactive? }
+
         debug_log payload.data
         return unless payload.data =~ /^\d+/
 
@@ -147,12 +157,17 @@ module Bitflyer
         puts e.backtrace&.join("\n")
       end
 
-      def handle_close(error:)
+      def handle_close(error:, socket: @websocket_client)
         debug_log error
+        return unless @lifecycle_lock.synchronize do
+          connecting_socket = @connection&.first
+          !lifecycle_inactive? && (reset_readiness(socket) || (socket && connecting_socket.equal?(socket)))
+        end
+
         @disconnected&.call(error)
       end
 
-      def setup_by_response(json:) # rubocop:disable Metrics/CyclomaticComplexity, Metrics/PerceivedComplexity
+      def setup_by_response(json:)
         body = JSON.parse json
         @ping_interval = body['pingInterval']&.to_i || 25_000
         @ping_timeout  = body['pingTimeout']&.to_i || 60_000
@@ -162,7 +177,7 @@ module Bitflyer
           authenticate
         else
           subscribe_channels
-          @ready&.call
+          notify_ready
         end
       end
 
@@ -181,15 +196,15 @@ module Bitflyer
       end
 
       def authenticated(json:)
-        raise "Authentication failed: #{json}" if json != '[null]'
+        return reject_authentication(json) if json != '[null]'
 
         debug_log 'Authenticated'
         subscribe_channels
-        @ready&.call
+        notify_ready
       end
 
       def subscribe_channels
-        socket, channels = @subscriptions_mutex.synchronize do
+        socket, channels = @session_mutex.synchronize do
           @session_ready = true
           [@websocket_client, @channel_callbacks.keys]
         end
@@ -214,7 +229,11 @@ module Bitflyer
         channel_name, *messages = JSON.parse json
         return unless channel_name
 
-        messages.each { |message| @channel_callbacks[channel_name.to_sym]&.call(message) }
+        messages.each do |message|
+          break if @lifecycle_lock.synchronize { lifecycle_inactive? }
+
+          @channel_callbacks[channel_name.to_sym]&.call(message)
+        end
       end
 
       def debug_log(message)
@@ -225,21 +244,261 @@ module Bitflyer
 
       private
 
-      def handshake_pending?
-        deadline = @handshake_deadline
-        deadline && Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
+      def close_expired_handshake
+        socket = take_expired_handshake
+        return unless socket
+
+        begin
+          socket.close_for_shutdown
+        ensure
+          @lifecycle_lock.synchronize { @expiring_handshake = false }
+        end
       end
 
-      def register_handlers(socket)
-        client = self
-        dispatch = method(:with_current_socket)
-        socket.on(:message) { |payload| dispatch.call(socket) { client.handle_message(payload: payload) } }
-        socket.on(:error) { |error| dispatch.call(socket) { client.handle_error(error: error) } }
-        socket.on(:close) { |error| dispatch.call(socket) { client.handle_close(error: error) } }
+      def take_expired_handshake
+        @lifecycle_lock.synchronize do
+          socket = @websocket_client
+          deadline = @handshake_deadline
+          return unless socket.is_a?(Transport) && deadline && monotonic_milliseconds >= deadline
+          return unless pending_handshake?(socket)
+
+          @expiring_handshake = true
+          @handshake_deadline = nil
+          @session_mutex.synchronize do
+            @websocket_client = nil
+            clear_readiness
+          end
+          socket
+        end
       end
 
-      def with_current_socket(socket)
-        @connection_lock.synchronize { yield if @websocket_client.equal?(socket) }
+      def pending_handshake?(socket)
+        !lifecycle_inactive? && !@connection && !socket.open? && !socket.closed?
+      end
+
+      def close_connections
+        socket, connection = stop_lifecycle
+        if connection
+          transport, connector = connection
+          connector.join
+          transport.close_for_shutdown unless transport.equal?(socket)
+        end
+        if socket.is_a?(Transport)
+          socket.close_for_shutdown
+        else
+          socket&.close
+        end
+      end
+
+      def write_ping(socket)
+        debug_log 'Sent ping'
+        socket&.send '2'
+        true
+      rescue Errno::ECONNRESET => e
+        close_after_ping_reset(socket, e)
+        false
+      rescue IOError, SystemCallError
+        raise unless heartbeat_interrupted?(socket)
+
+        false
+      rescue NoMethodError => e
+        # The transport can clear its socket after the send has started.
+        raise unless e.name == :write && e.receiver.nil? && heartbeat_interrupted?(socket)
+
+        false
+      end
+
+      def close_after_ping_reset(socket, error)
+        return if heartbeat_interrupted?(socket)
+
+        raise error unless socket.is_a?(Transport)
+
+        socket.close_after_write_reset(error)
+      end
+
+      def close_after_pong_timeout(socket)
+        socket&.close
+      rescue IOError, SystemCallError
+        raise unless heartbeat_interrupted?(socket)
+      rescue NoMethodError => e
+        raise unless e.name == :write && e.receiver.nil? && heartbeat_interrupted?(socket)
+      end
+
+      def heartbeat_interrupted?(socket)
+        return true if socket.is_a?(Transport) && (socket.read_error || socket.closed?)
+
+        @lifecycle_lock.synchronize { lifecycle_inactive? }
+      end
+
+      def stop_lifecycle
+        @lifecycle_lock.synchronize do
+          next [nil, nil] if @stopped
+
+          @stopped = true
+          reset_readiness
+          @monitor_wakeup.signal
+          @connection&.last&.kill
+          [@websocket_client, @connection]
+        end
+      end
+
+      def start_connection
+        @lifecycle_lock.synchronize do
+          socket = @websocket_client
+          return if lifecycle_inactive? || @connection || @expiring_handshake || (socket && !socket.closed?)
+
+          reset_readiness(socket)
+          transport = Transport.new
+          register_transport_handlers(transport)
+          @handshake_deadline = monotonic_milliseconds + HANDSHAKE_TIMEOUT_MS
+          connector = Thread.new do
+            transport.connect "#{@host}/socket.io/?transport=websocket"
+            nil
+          rescue StandardError => e
+            e
+          end
+          @connection = [transport, connector]
+        end
+      end
+
+      def wait_for_connection(connection)
+        error = connection.last.value
+        raise error if error
+
+        true
+      rescue OpenSSL::SSL::SSLError
+        raise unless connection.first.read_error
+
+        false
+      end
+
+      def register_transport_handlers(transport)
+        this = self
+        activate = -> { activate_transport(transport) }
+        transport.on(:open) { activate.call }
+        transport.on(:message) do |payload|
+          this.handle_message(payload: payload) if this.websocket_client.equal?(transport)
+        end
+        transport.on(:error) { |error| this.handle_error(error: error, transport: transport) }
+        transport.on(:close) { |error| this.handle_close(error: error || transport.read_error, socket: transport) }
+      end
+
+      def activate_transport(transport)
+        @lifecycle_lock.synchronize do
+          return if lifecycle_inactive?
+          return unless @connection&.first.equal?(transport) || @websocket_client.equal?(transport)
+
+          replace_transport(transport)
+          @handshake_deadline = nil
+        end
+      end
+
+      def replace_transport(transport)
+        return if @websocket_client.equal?(transport)
+
+        @ping_interval = @ping_timeout = nil
+        self.last_ping_at = self.last_pong_at = nil
+        @session_mutex.synchronize do
+          @websocket_client = transport
+          clear_readiness
+        end
+      end
+
+      def finish_connection(connection, connected)
+        transport, connector = connection
+        close_transport = @lifecycle_lock.synchronize do
+          @connection = nil
+          return if @stopped
+
+          if connected
+            replace_transport(transport) unless @authentication_error
+            transport.close_on_eof
+          else
+            @handshake_deadline = nil
+          end
+          !connected
+        end
+        return unless close_transport
+
+        connector.kill
+        connector.join
+        transport.close
+      end
+
+      def start_monitoring
+        Thread.new do
+          while wait_for_monitor_tick
+            if @websocket_client&.open?
+              send_ping
+              wait_pong
+            else
+              reconnect
+            end
+          end
+        end
+      end
+
+      def wait_for_monitor_tick
+        @lifecycle_lock.synchronize do
+          @monitor_wakeup.wait(@lifecycle_lock, 1) unless lifecycle_inactive?
+          !lifecycle_inactive?
+        end
+      end
+
+      def lifecycle_inactive?
+        @stopped || !@authentication_error.nil?
+      end
+
+      def notify_ready
+        notification = @lifecycle_lock.synchronize do
+          return if lifecycle_inactive?
+
+          @session_mutex.synchronize do
+            @ready_state = :ready if @ready_state == :pending
+            take_ready_callback
+          end
+        end
+        notification&.call
+      end
+
+      def take_ready_callback
+        return unless @ready_state == :ready && @ready
+
+        @ready_state = :notified
+        @ready
+      end
+
+      def reset_readiness(socket = @websocket_client)
+        @session_mutex.synchronize do
+          return false unless @websocket_client.equal?(socket)
+
+          clear_readiness
+          true
+        end
+      end
+
+      def clear_readiness
+        @session_ready = false
+        @ready_state = :pending
+      end
+
+      def reject_authentication(json)
+        error = @lifecycle_lock.synchronize do
+          return if lifecycle_inactive?
+
+          @authentication_error = RuntimeError.new("Authentication failed: #{json}")
+          reset_readiness
+          @monitor_wakeup.signal
+          @authentication_error
+        end
+
+        begin
+          disconnect
+        rescue SystemCallError, IOError => e
+          debug_log e
+        ensure
+          @disconnected&.call(error)
+        end
       end
 
       def monotonic_milliseconds
