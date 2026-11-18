@@ -19,8 +19,12 @@ module Bitflyer
       @key: String?
       @secret: String?
       @uri: URI::Generic
+      @mutex: Thread::Mutex
+      @http: Net::HTTP?
 
       def initialize: (String? key, String? secret) -> void
+
+      def close: () -> void
 
       def inspect: () -> String
 
@@ -35,6 +39,10 @@ module Bitflyer
       def sign_request: (Net::HTTPRequest request, String path, ?String? body) -> void
 
       def execute: (Net::HTTPRequest request) -> Response
+
+      def send_request: (Net::HTTPRequest request) -> Net::HTTPResponse
+
+      def close_session: () -> void
 
       def parse_body: (String? body) -> untyped
     end

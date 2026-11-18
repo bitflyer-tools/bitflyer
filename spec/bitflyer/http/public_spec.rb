@@ -67,10 +67,10 @@ describe 'Public health requests' do
 
   describe 'GET /v1/gethealth' do
     let(:http) { instance_double(Net::HTTP) }
-    let(:http_response) { instance_double(Net::HTTPOK, body: '{"status":"NORMAL"}') }
+    let(:http_response) { instance_double(Net::HTTPOK, code: '200', body: '{"status":"NORMAL"}') }
 
     before do
-      allow(Net::HTTP).to receive(:start).and_yield(http)
+      allow(Net::HTTP).to receive(:start).and_return(http)
       allow(http).to receive(:request).and_return(http_response)
     end
 
