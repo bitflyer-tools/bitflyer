@@ -6,6 +6,8 @@ module Bitflyer
 
         def initialize: (String key, String secret) -> void
 
+        def inspect: () -> String
+
         def permissions: () -> untyped
 
         def balance: () -> untyped
@@ -14,13 +16,13 @@ module Bitflyer
 
         def addresses: () -> untyped
 
-        def coin_ins: () -> untyped
+        def coin_ins: (?count: Integer?, ?before: Integer?, ?after: Integer?) -> untyped
 
-        def coin_outs: () -> untyped
+        def coin_outs: (?count: Integer?, ?before: Integer?, ?after: Integer?) -> untyped
 
         def bank_accounts: () -> untyped
 
-        def deposits: () -> untyped
+        def deposits: (?count: Integer?, ?before: Integer?, ?after: Integer?) -> untyped
 
         def withdraw: (
           ?currency_code: String,
@@ -29,7 +31,7 @@ module Bitflyer
           ?code: String?
         ) -> untyped
 
-        def withdrawals: () -> untyped
+        def withdrawals: (?count: Integer?, ?before: Integer?, ?after: Integer?) -> untyped
 
         def send_child_order: (
           ?product_code: String,
@@ -48,10 +50,10 @@ module Bitflyer
         ) -> untyped
 
         def send_parent_order: (
+          parameters: Array[Hash[Symbol, untyped]],
           ?order_method: String?,
           ?minute_to_expire: Integer?,
-          ?time_in_force: String,
-          ?parameters: Array[Hash[Symbol, untyped]] | Hash[Symbol, untyped]
+          ?time_in_force: String
         ) -> untyped
 
         def cancel_parent_order: (
@@ -68,7 +70,9 @@ module Bitflyer
           ?before: Integer?,
           ?after: Integer?,
           ?child_order_state: String?,
-          ?parent_order_id: String?
+          ?parent_order_id: String?,
+          ?child_order_id: String?,
+          ?child_order_acceptance_id: String?
         ) -> untyped
 
         def parent_orders: (

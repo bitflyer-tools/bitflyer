@@ -12,13 +12,6 @@ describe Bitflyer::HTTP::Public::Client do
     allow(connection).to receive(:get).and_return(response)
   end
 
-  describe '#health' do
-    it 'calls GET /v1/gethealth' do
-      client.health
-      expect(connection).to have_received(:get).with('/v1/gethealth')
-    end
-  end
-
   describe '#markets' do
     it 'calls GET /v1/markets' do
       client.markets
@@ -65,6 +58,32 @@ describe Bitflyer::HTTP::Public::Client do
       frozen_time = Time.new(2025, 1, 10, 0, 0, 0, '+00:00')
       client.chats(from_date: frozen_time)
       expect(connection).to have_received(:get).with('/v1/getchats', from_date: frozen_time)
+    end
+  end
+end
+
+describe 'Public health requests' do
+  let(:client) { Bitflyer.http_public_client }
+
+  describe 'GET /v1/gethealth' do
+    let(:http) { instance_double(Net::HTTP) }
+    let(:http_response) { instance_double(Net::HTTPOK, code: '200', body: '{"status":"NORMAL"}') }
+
+    before do
+      allow(Net::HTTP).to receive(:start).and_yield(http)
+      allow(http).to receive(:request).and_return(http_response)
+    end
+
+    it 'calls GET /v1/gethealth' do
+      client.health
+      expect(http).to have_received(:request).with(have_attributes(method: 'GET', path: '/v1/gethealth'))
+    end
+
+    it 'calls GET /v1/gethealth with the requested product code' do
+      client.health(product_code: 'ETH_JPY')
+      expect(http).to have_received(:request).with(
+        have_attributes(method: 'GET', path: '/v1/gethealth?product_code=ETH_JPY')
+      )
     end
   end
 end

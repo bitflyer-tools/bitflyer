@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'bitflyer'
 require 'bitflyer/http/public'
 require 'bitflyer/http/private'
 require 'net/http'
@@ -14,6 +13,16 @@ module Bitflyer
 
     Response = Struct.new(:body)
 
+    class ResponseError < StandardError
+      attr_reader :status, :body
+
+      def initialize(status, body)
+        @status = status
+        @body = body
+        super("bitFlyer API returned HTTP #{status}")
+      end
+    end
+
     class Connection
       def initialize(key, secret)
         @key = key
@@ -21,19 +30,21 @@ module Bitflyer
         @uri = URI.parse(BASE_URL)
       end
 
+      def inspect = "#<#{self.class}>"
+
       def get(path, params = {})
         query = URI.encode_www_form(params.compact)
         full_path = query.empty? ? path : "#{path}?#{query}"
         request = Net::HTTP::Get.new(full_path, default_headers)
         sign_request(request, full_path)
-        Response.new(execute(request))
+        execute(request)
       end
 
       def post(path, body = {})
         request = Net::HTTP::Post.new(path, default_headers.merge('Content-Type' => 'application/json'))
         request.body = JSON.generate(body.compact)
         sign_request(request, path, request.body)
-        Response.new(execute(request))
+        execute(request)
       end
 
       private
@@ -58,10 +69,16 @@ module Bitflyer
 
       def execute(request)
         response = Net::HTTP.start(@uri.host.to_s, @uri.port, use_ssl: true) { |http| http.request(request) }
-        parse_body(response.body)
+        status = response.code.to_i
+        body = response.body
+        raise ResponseError.new(status, body) unless (200...300).cover?(status)
+
+        Response.new(parse_body(body))
       end
 
       def parse_body(body)
+        return if body.nil?
+
         JSON.parse(body)
       rescue JSON::ParserError
         body
