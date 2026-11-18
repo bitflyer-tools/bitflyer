@@ -75,4 +75,26 @@ describe 'Realtime ready notifications' do
 
     expect(notifications.size).to eq(1)
   end
+
+  { close: nil, error: Errno::ECONNRESET.new }.each do |event, error|
+    it "preserves the replacement socket's pending notification after a stale #{event}" do
+      replacement = double('replacement websocket', open?: true)
+      allow(WebSocket::Client::Simple).to receive(:connect).and_return(transport, replacement)
+      allow(transport).to receive(:open?).and_return(false)
+      allow(replacement).to receive(:on) { |name, &handler| handlers[name] = handler }
+      client = Bitflyer.realtime_client
+      disconnected = []
+      client.disconnected = ->(reason) { disconnected << reason }
+      stale_handler = handlers.fetch(event)
+
+      client.websocket_client.reconnect
+      receive_message('0{}')
+      stale_handler.call(error)
+      client.ready = callback
+      client.ready = callback
+
+      expect(notifications.size).to eq(1)
+      expect(disconnected).to be_empty
+    end
+  end
 end

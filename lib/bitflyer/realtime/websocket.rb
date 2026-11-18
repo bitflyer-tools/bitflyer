@@ -48,15 +48,17 @@ module Bitflyer
       end
 
       def connect
-        reset_readiness
         socket = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
         @ping_interval = @ping_timeout = nil
         self.last_ping_at = self.last_pong_at = nil
-        @websocket_client = socket
+        @session_mutex.synchronize do
+          @websocket_client = socket
+          clear_readiness
+        end
         this = self
         socket.on(:message) { |payload| this.handle_message(payload: payload) if this.websocket_client.equal?(socket) }
-        socket.on(:error) { |error| this.handle_error(error: error) }
-        socket.on(:close) { |error| this.handle_close(error: error) }
+        socket.on(:error) { |error| this.handle_error(error: error, socket: socket) }
+        socket.on(:close) { |error| this.handle_close(error: error, socket: socket) }
       rescue SocketError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::ETIMEDOUT,
              Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
         puts e
@@ -129,12 +131,13 @@ module Bitflyer
         connect
       end
 
-      def handle_error(error:)
+      def handle_error(error:, socket: @websocket_client)
         debug_log error
         return if @authentication_error
         return unless error.is_a? Errno::ECONNRESET
 
-        reset_readiness
+        return unless reset_readiness(socket)
+
         @disconnected&.call(error)
         reconnect
       end
@@ -158,11 +161,12 @@ module Bitflyer
         puts e, e.backtrace&.join("\n")
       end
 
-      def handle_close(error:)
+      def handle_close(error:, socket: @websocket_client)
         debug_log error
         return if @authentication_error
 
-        reset_readiness
+        return unless reset_readiness(socket)
+
         @disconnected&.call(error)
       end
 
@@ -254,11 +258,18 @@ module Bitflyer
         @ready
       end
 
-      def reset_readiness
+      def reset_readiness(socket = @websocket_client)
         @session_mutex.synchronize do
-          @session_ready = false
-          @ready_state = :pending
+          return false unless @websocket_client.equal?(socket)
+
+          clear_readiness
+          true
         end
+      end
+
+      def clear_readiness
+        @session_ready = false
+        @ready_state = :pending
       end
 
       def reject_authentication(json)

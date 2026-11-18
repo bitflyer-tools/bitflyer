@@ -38,11 +38,11 @@ module Bitflyer
 
       def reconnect: () -> void
 
-      def handle_error: (error: untyped) -> void
+      def handle_error: (error: untyped, ?socket: WebSocket::Client::Simple::Client?) -> void
 
       def handle_message: (payload: untyped) -> void
 
-      def handle_close: (error: untyped) -> void
+      def handle_close: (error: untyped, ?socket: WebSocket::Client::Simple::Client?) -> void
 
       def setup_by_response: (json: String) -> void
 
@@ -66,7 +66,9 @@ module Bitflyer
 
       def take_ready_callback: () -> ready_callback?
 
-      def reset_readiness: () -> void
+      def reset_readiness: (?WebSocket::Client::Simple::Client?) -> bool
+
+      def clear_readiness: () -> void
 
       def reject_authentication: (String json) -> void
 
