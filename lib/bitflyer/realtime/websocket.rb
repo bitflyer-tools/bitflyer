@@ -8,8 +8,8 @@ module Bitflyer
   module Realtime
     class WebSocketClient # rubocop:disable Metrics/ClassLength
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
-                    :ready, :disconnected
-      attr_reader :last_ping_at, :last_pong_at
+                    :disconnected
+      attr_reader :ready, :last_ping_at, :last_pong_at
 
       def initialize(host:, key:, secret:, debug: false)
         @host = host
@@ -19,16 +19,27 @@ module Bitflyer
         @channel_names = []
         @channel_callbacks = {}
         @authentication_error = nil
-        @subscriptions_mutex = Thread::Mutex.new
+        @session_mutex = Thread::Mutex.new
+        @session_ready = false
+        @ready_state = :pending
         connect
         start_monitoring
       end
 
       def inspect = "#<#{self.class}>"
 
+      def ready=(callback)
+        notification = @session_mutex.synchronize do
+          @ready = callback
+          take_ready_callback
+        end
+        notification&.call
+        callback
+      end
+
       def subscribe(channel_name:, &block)
         debug_log "Subscribe #{channel_name}"
-        socket = @subscriptions_mutex.synchronize do
+        socket = @session_mutex.synchronize do
           @channel_names = (@channel_names + [channel_name]).uniq
           @channel_callbacks[channel_name] = block
           @websocket_client if @session_ready
@@ -37,15 +48,17 @@ module Bitflyer
       end
 
       def connect
-        @subscriptions_mutex.synchronize { @session_ready = false }
         socket = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
         @ping_interval = @ping_timeout = nil
         self.last_ping_at = self.last_pong_at = nil
-        @websocket_client = socket
+        @session_mutex.synchronize do
+          @websocket_client = socket
+          clear_readiness
+        end
         this = self
         socket.on(:message) { |payload| this.handle_message(payload: payload) if this.websocket_client.equal?(socket) }
-        socket.on(:error) { |error| this.handle_error(error: error) }
-        socket.on(:close) { |error| this.handle_close(error: error) }
+        socket.on(:error) { |error| this.handle_error(error: error, socket: socket) }
+        socket.on(:close) { |error| this.handle_close(error: error, socket: socket) }
       rescue SocketError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::ETIMEDOUT,
              Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
         puts e
@@ -118,10 +131,12 @@ module Bitflyer
         connect
       end
 
-      def handle_error(error:)
+      def handle_error(error:, socket: @websocket_client)
         debug_log error
         return if @authentication_error
         return unless error.is_a? Errno::ECONNRESET
+
+        return unless reset_readiness(socket)
 
         @disconnected&.call(error)
         reconnect
@@ -146,14 +161,16 @@ module Bitflyer
         puts e, e.backtrace&.join("\n")
       end
 
-      def handle_close(error:)
+      def handle_close(error:, socket: @websocket_client)
         debug_log error
         return if @authentication_error
+
+        return unless reset_readiness(socket)
 
         @disconnected&.call(error)
       end
 
-      def setup_by_response(json:) # rubocop:disable Metrics/CyclomaticComplexity, Metrics/PerceivedComplexity
+      def setup_by_response(json:)
         body = JSON.parse json
         @ping_interval = body['pingInterval']&.to_i || 25_000
         @ping_timeout  = body['pingTimeout']&.to_i || 60_000
@@ -163,7 +180,7 @@ module Bitflyer
           authenticate
         else
           subscribe_channels
-          @ready&.call
+          notify_ready
         end
       end
 
@@ -186,11 +203,11 @@ module Bitflyer
 
         debug_log 'Authenticated'
         subscribe_channels
-        @ready&.call
+        notify_ready
       end
 
       def subscribe_channels
-        socket, channels = @subscriptions_mutex.synchronize do
+        socket, channels = @session_mutex.synchronize do
           @session_ready = true
           [@websocket_client, @channel_callbacks.keys]
         end
@@ -226,8 +243,38 @@ module Bitflyer
 
       private
 
+      def notify_ready
+        notification = @session_mutex.synchronize do
+          @ready_state = :ready if @ready_state == :pending
+          take_ready_callback
+        end
+        notification&.call
+      end
+
+      def take_ready_callback
+        return unless @ready_state == :ready && @ready
+
+        @ready_state = :notified
+        @ready
+      end
+
+      def reset_readiness(socket = @websocket_client)
+        @session_mutex.synchronize do
+          return false unless @websocket_client.equal?(socket)
+
+          clear_readiness
+          true
+        end
+      end
+
+      def clear_readiness
+        @session_ready = false
+        @ready_state = :pending
+      end
+
       def reject_authentication(json)
         @authentication_error = RuntimeError.new("Authentication failed: #{json}")
+        reset_readiness
         disconnect
       rescue SystemCallError, IOError => e
         debug_log e
