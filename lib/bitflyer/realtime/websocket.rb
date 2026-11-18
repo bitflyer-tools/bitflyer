@@ -39,9 +39,11 @@ module Bitflyer
       def connect
         @subscriptions_mutex.synchronize { @session_ready = false }
         socket = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
+        @ping_interval = @ping_timeout = nil
+        self.last_ping_at = self.last_pong_at = nil
         @websocket_client = socket
         this = self
-        socket.on(:message) { |payload| this.handle_message(payload: payload) }
+        socket.on(:message) { |payload| this.handle_message(payload: payload) if this.websocket_client.equal?(socket) }
         socket.on(:error) { |error| this.handle_error(error: error) }
         socket.on(:close) { |error| this.handle_close(error: error) }
       rescue SocketError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::ETIMEDOUT,
@@ -67,6 +69,7 @@ module Bitflyer
       end
 
       def send_ping
+        socket = @websocket_client
         last_ping_monotonic = @last_ping_monotonic
         ping_interval = @ping_interval
         return unless last_ping_monotonic && ping_interval
@@ -75,12 +78,15 @@ module Bitflyer
         return unless now - last_ping_monotonic >= ping_interval
 
         debug_log 'Sent ping'
-        @websocket_client&.send '2'
+        socket&.send '2'
+        return unless @websocket_client.equal?(socket)
+
         @last_ping_monotonic = now
         @last_ping_at = Time.now.to_i
       end
 
       def wait_pong
+        socket = @websocket_client
         last_pong_monotonic = @last_pong_monotonic
         ping_interval = @ping_interval
         ping_timeout = @ping_timeout
@@ -90,7 +96,7 @@ module Bitflyer
         return unless now - last_pong_monotonic >= ping_interval + ping_timeout
 
         debug_log 'Timed out waiting pong'
-        @websocket_client&.close
+        socket&.close
       end
 
       def last_ping_at=(timestamp)
@@ -137,8 +143,7 @@ module Bitflyer
         when 430 then authenticated(json: body)
         end
       rescue StandardError => e
-        puts e
-        puts e.backtrace&.join("\n")
+        puts e, e.backtrace&.join("\n")
       end
 
       def handle_close(error:)
