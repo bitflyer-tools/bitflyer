@@ -34,6 +34,11 @@ describe Bitflyer do
 
     after { @client&.shutdown }
 
+    let(:client) { @client = Bitflyer.realtime_client }
+    let(:session) { client.websocket_client }
+    let(:connected_at) { Time.at(1_000) }
+
+
     it 'returns a Realtime::Client instance' do
       @client = Bitflyer.realtime_client
       expect(@client).to be_a(Bitflyer::Realtime::Client)
@@ -212,6 +217,35 @@ describe Bitflyer do
         peer&.close
         replacement_peer&.close
       end
+    end
+
+    it 'exposes heartbeat state initialized and updated by the WebSocket session' do
+      allow(Time).to receive(:now).and_return(connected_at)
+      session.setup_by_response(json: '{"pingInterval":5000,"pingTimeout":6000}')
+
+      expect(client).to have_attributes(ping_interval: 5_000, ping_timeout: 6_000,
+                                        last_ping_at: connected_at.to_i, last_pong_at: connected_at.to_i)
+
+      allow(Time).to receive(:now).and_return(connected_at + 6)
+      expect(socket).to receive(:send).with('2')
+      session.send_ping
+      session.receive_pong
+
+      expect(client).to have_attributes(last_ping_at: connected_at.to_i + 6, last_pong_at: connected_at.to_i + 6)
+    end
+
+    it 'uses heartbeat values written through the public client when monitoring' do
+      allow(Time).to receive(:now).and_return(connected_at)
+      session.setup_by_response(json: '{}')
+      client.ping_interval = 2_000
+      client.ping_timeout = 1_000
+      client.last_ping_at = connected_at.to_i - 3
+      client.last_pong_at = connected_at.to_i - 4
+
+      expect(socket).to receive(:send).with('2')
+      expect(socket).to receive(:close)
+      session.send_ping
+      session.wait_pong
     end
   end
 end

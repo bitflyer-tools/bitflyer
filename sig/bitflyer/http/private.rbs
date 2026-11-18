@@ -48,10 +48,10 @@ module Bitflyer
         ) -> untyped
 
         def send_parent_order: (
+          parameters: Array[Hash[Symbol, untyped]],
           ?order_method: String?,
           ?minute_to_expire: Integer?,
-          ?time_in_force: String,
-          ?parameters: Array[Hash[Symbol, untyped]] | Hash[Symbol, untyped]
+          ?time_in_force: String
         ) -> untyped
 
         def cancel_parent_order: (
