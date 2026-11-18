@@ -310,6 +310,41 @@ describe Bitflyer do
       end
     end
 
+    it 'retries when the receiver clears the socket before the handshake write' do
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
+      resetting_transport = Bitflyer::Realtime::Transport.new
+      replacement = double('replacement transport', open?: true, connect: nil, on: nil, close: nil)
+      raw_socket = double('socket', close: nil)
+      allow(raw_socket).to receive(:getc).and_raise(Errno::ECONNRESET)
+      allow(TCPSocket).to receive(:new).and_return(raw_socket)
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket, resetting_transport, replacement)
+
+      connector = nil
+      allow(resetting_transport).to receive(:connect).and_wrap_original do |connect, url|
+        connector = Thread.current
+        connect.call(url)
+      end
+      allow(Thread).to receive(:new).and_wrap_original do |start, &block|
+        thread = start.call(&block)
+        thread.join(1) if Thread.current == connector
+        thread
+      end
+
+      reconnected = Queue.new
+      allow(replacement).to receive(:close_on_eof) { reconnected << true }
+      allow($stdout).to receive(:puts)
+      stub_const('Bitflyer::Realtime::SOCKET_HOST', 'ws://example.test')
+      @client = Bitflyer.realtime_client
+      disconnected = Queue.new
+      @client.disconnected = ->(error) { disconnected << error }
+      allow(socket).to receive_messages(open?: false, closed?: true)
+
+      Timeout.timeout(5) { reconnected.pop }
+      expect(disconnected.pop(true)).to be_a(Errno::ECONNRESET)
+      expect(raw_socket).to have_received(:close).once
+      expect(session.websocket_client).to equal(replacement)
+    end
+
     it 'exposes heartbeat state initialized and updated by the WebSocket session' do
       allow(Time).to receive(:now).and_return(connected_at)
       session.setup_by_response(json: '{"pingInterval":5000,"pingTimeout":6000}')
