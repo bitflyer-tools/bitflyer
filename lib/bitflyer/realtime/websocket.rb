@@ -19,6 +19,7 @@ module Bitflyer
         @channel_names = []
         @channel_callbacks = {}
         @lifecycle_lock = Mutex.new
+        @shutdown_lock = Mutex.new
         @monitor_wakeup = ConditionVariable.new
         @stopped = false
         @authentication_error = nil
@@ -30,19 +31,13 @@ module Bitflyer
       end
 
       def shutdown
-        socket, connection = stop_lifecycle
-        if connection
-          transport, connector = connection
-          connector.join
-          transport.close_for_shutdown unless transport.equal?(socket)
+        return if @shutdown_lock.owned?
+
+        begin
+          @shutdown_lock.synchronize { close_connections }
+        ensure
+          @monitor&.join unless Thread.current == @monitor
         end
-        if socket.is_a?(Transport)
-          socket.close_for_shutdown
-        else
-          socket&.close
-        end
-      ensure
-        @monitor&.join unless Thread.current == @monitor
       end
 
       def inspect = "#<#{self.class}>"
@@ -244,6 +239,20 @@ module Bitflyer
       end
 
       private
+
+      def close_connections
+        socket, connection = stop_lifecycle
+        if connection
+          transport, connector = connection
+          connector.join
+          transport.close_for_shutdown unless transport.equal?(socket)
+        end
+        if socket.is_a?(Transport)
+          socket.close_for_shutdown
+        else
+          socket&.close
+        end
+      end
 
       def write_ping(socket)
         debug_log 'Sent ping'

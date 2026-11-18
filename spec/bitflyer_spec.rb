@@ -79,6 +79,33 @@ describe Bitflyer do
       expect(Bitflyer::Realtime::Transport).to have_received(:new).once
     end
 
+    it 'waits for the connection to close in concurrent shutdown calls' do
+      close_started = Queue.new
+      release_close = Queue.new
+      monitor = session.instance_variable_get(:@monitor)
+      allow(socket).to receive(:close) do
+        close_started << true
+        release_close.pop
+      end
+
+      first_shutdown = Thread.new { client.shutdown }
+      Timeout.timeout(5) { close_started.pop }
+      expect(monitor.join(5)).to eq(monitor)
+
+      second_shutdown = Thread.new { client.shutdown }
+      Timeout.timeout(5) { Thread.pass while second_shutdown.status == 'run' }
+      expect(second_shutdown.status).to eq('sleep')
+
+      release_close << true
+      expect(first_shutdown.join(5)).to eq(first_shutdown)
+      expect(second_shutdown.join(5)).to eq(second_shutdown)
+      expect(socket).to have_received(:close).once
+    ensure
+      release_close << true
+      first_shutdown&.join(5)
+      second_shutdown&.join(5)
+    end
+
     {
       ready: '0{}',
       ticker_btc_jpy: '42["lightning_ticker_BTC_JPY",{}]'

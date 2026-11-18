@@ -22,8 +22,11 @@ module Bitflyer
 
     class WebSocketClient
       @connection: [Transport, Thread]?
+      @shutdown_lock: Mutex
 
       private
+
+      def close_connections: () -> void
 
       def write_ping: (WebSocket::Client::Simple::Client? socket) -> bool
 
