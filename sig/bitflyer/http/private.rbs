@@ -70,7 +70,9 @@ module Bitflyer
           ?before: Integer?,
           ?after: Integer?,
           ?child_order_state: String?,
-          ?parent_order_id: String?
+          ?parent_order_id: String?,
+          ?child_order_id: String?,
+          ?child_order_acceptance_id: String?
         ) -> untyped
 
         def parent_orders: (

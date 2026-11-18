@@ -5,6 +5,7 @@ module Bitflyer
       @key: String?
       @secret: String?
       @debug: bool
+      @authentication_error: RuntimeError?
       @session_mutex: Thread::Mutex
       @session_ready: bool
       @ready_state: :pending | :ready | :notified
@@ -66,6 +67,8 @@ module Bitflyer
       def take_ready_callback: () -> ready_callback?
 
       def reset_readiness: () -> void
+
+      def reject_authentication: (String json) -> void
 
       def monotonic_milliseconds: () -> Integer
 

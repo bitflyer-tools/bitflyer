@@ -18,6 +18,7 @@ module Bitflyer
         @debug = debug
         @channel_names = []
         @channel_callbacks = {}
+        @authentication_error = nil
         @session_mutex = Thread::Mutex.new
         @session_ready = false
         @ready_state = :pending
@@ -49,9 +50,11 @@ module Bitflyer
       def connect
         reset_readiness
         socket = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
+        @ping_interval = @ping_timeout = nil
+        self.last_ping_at = self.last_pong_at = nil
         @websocket_client = socket
         this = self
-        socket.on(:message) { |payload| this.handle_message(payload: payload) }
+        socket.on(:message) { |payload| this.handle_message(payload: payload) if this.websocket_client.equal?(socket) }
         socket.on(:error) { |error| this.handle_error(error: error) }
         socket.on(:close) { |error| this.handle_close(error: error) }
       rescue SocketError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::ETIMEDOUT,
@@ -64,6 +67,8 @@ module Bitflyer
         Thread.new do
           loop do
             sleep 1
+            break if @authentication_error
+
             if @websocket_client&.open?
               send_ping
               wait_pong
@@ -75,6 +80,7 @@ module Bitflyer
       end
 
       def send_ping
+        socket = @websocket_client
         last_ping_monotonic = @last_ping_monotonic
         ping_interval = @ping_interval
         return unless last_ping_monotonic && ping_interval
@@ -83,12 +89,15 @@ module Bitflyer
         return unless now - last_ping_monotonic >= ping_interval
 
         debug_log 'Sent ping'
-        @websocket_client&.send '2'
+        socket&.send '2'
+        return unless @websocket_client.equal?(socket)
+
         @last_ping_monotonic = now
         @last_ping_at = Time.now.to_i
       end
 
       def wait_pong
+        socket = @websocket_client
         last_pong_monotonic = @last_pong_monotonic
         ping_interval = @ping_interval
         ping_timeout = @ping_timeout
@@ -98,7 +107,7 @@ module Bitflyer
         return unless now - last_pong_monotonic >= ping_interval + ping_timeout
 
         debug_log 'Timed out waiting pong'
-        @websocket_client&.close
+        socket&.close
       end
 
       def last_ping_at=(timestamp)
@@ -112,6 +121,7 @@ module Bitflyer
       end
 
       def reconnect
+        return if @authentication_error
         return if @websocket_client&.open?
 
         debug_log 'Reconnecting...'
@@ -121,6 +131,7 @@ module Bitflyer
 
       def handle_error(error:)
         debug_log error
+        return if @authentication_error
         return unless error.is_a? Errno::ECONNRESET
 
         reset_readiness
@@ -129,6 +140,8 @@ module Bitflyer
       end
 
       def handle_message(payload:) # rubocop:disable Metrics/CyclomaticComplexity
+        return if @authentication_error
+
         debug_log payload.data
         return unless payload.data =~ /^\d+/
 
@@ -142,12 +155,13 @@ module Bitflyer
         when 430 then authenticated(json: body)
         end
       rescue StandardError => e
-        puts e
-        puts e.backtrace&.join("\n")
+        puts e, e.backtrace&.join("\n")
       end
 
       def handle_close(error:)
         debug_log error
+        return if @authentication_error
+
         reset_readiness
         @disconnected&.call(error)
       end
@@ -181,7 +195,7 @@ module Bitflyer
       end
 
       def authenticated(json:)
-        raise "Authentication failed: #{json}" if json != '[null]'
+        return reject_authentication(json) if json != '[null]'
 
         debug_log 'Authenticated'
         subscribe_channels
@@ -245,6 +259,16 @@ module Bitflyer
           @session_ready = false
           @ready_state = :pending
         end
+      end
+
+      def reject_authentication(json)
+        @authentication_error = RuntimeError.new("Authentication failed: #{json}")
+        reset_readiness
+        disconnect
+      rescue SystemCallError, IOError => e
+        debug_log e
+      ensure
+        @disconnected&.call(@authentication_error)
       end
 
       def monotonic_milliseconds
