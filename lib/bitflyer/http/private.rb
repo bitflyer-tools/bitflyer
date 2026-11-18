@@ -86,7 +86,9 @@ module Bitflyer
           @connection.post('/v1/me/cancelchildorder', body).body
         end
 
-        def send_parent_order(order_method: nil, minute_to_expire: nil, time_in_force: 'GTC', parameters: {})
+        def send_parent_order(parameters:, order_method: nil, minute_to_expire: nil, time_in_force: 'GTC')
+          raise ArgumentError, 'parameters must be an array' unless parameters.is_a?(Array)
+
           body = {
             order_method: order_method,
             minute_to_expire: minute_to_expire,
@@ -181,7 +183,7 @@ module Bitflyer
         end
 
         def trading_commission(product_code: 'BTC_JPY')
-          @connection.get('v1/me/gettradingcommission', product_code: product_code).body
+          @connection.get('/v1/me/gettradingcommission', product_code: product_code).body
         end
       end
     end

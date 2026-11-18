@@ -8,6 +8,13 @@ module Bitflyer
       def self.new: (untyped body) -> instance
     end
 
+    class ResponseError < StandardError
+      attr_reader status: Integer
+      attr_reader body: String?
+
+      def initialize: (Integer status, String? body) -> void
+    end
+
     class Connection
       @key: String?
       @secret: String?
@@ -27,9 +34,9 @@ module Bitflyer
 
       def sign_request: (Net::HTTPRequest request, String path, ?String? body) -> void
 
-      def execute: (Net::HTTPRequest request) -> untyped
+      def execute: (Net::HTTPRequest request) -> Response
 
-      def parse_body: (String body) -> untyped
+      def parse_body: (String? body) -> untyped
     end
   end
 end

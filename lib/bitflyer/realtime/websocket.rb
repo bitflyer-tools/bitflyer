@@ -6,7 +6,7 @@ require 'openssl'
 
 module Bitflyer
   module Realtime
-    class WebSocketClient
+    class WebSocketClient # rubocop:disable Metrics/ClassLength
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
                     :last_ping_at, :last_pong_at, :ready, :disconnected
 
@@ -17,6 +17,7 @@ module Bitflyer
         @debug = debug
         @channel_names = []
         @channel_callbacks = {}
+        @subscriptions_mutex = Thread::Mutex.new
         connect
         start_monitoring
       end
@@ -25,18 +26,24 @@ module Bitflyer
 
       def subscribe(channel_name:, &block)
         debug_log "Subscribe #{channel_name}"
-        @channel_names = (@channel_names + [channel_name]).uniq
-        @channel_callbacks[channel_name] = block
-        @websocket_client.send "42#{['subscribe', channel_name].to_json}"
+        socket = @subscriptions_mutex.synchronize do
+          @channel_names = (@channel_names + [channel_name]).uniq
+          @channel_callbacks[channel_name] = block
+          @websocket_client if @session_ready
+        end
+        socket.send "42#{['subscribe', channel_name].to_json}" if socket&.open?
       end
 
       def connect
-        @websocket_client = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
+        @subscriptions_mutex.synchronize { @session_ready = false }
+        socket = WebSocket::Client::Simple.connect "#{@host}/socket.io/?transport=websocket"
+        @websocket_client = socket
         this = self
-        @websocket_client.on(:message) { |payload| this.handle_message(payload: payload) }
-        @websocket_client.on(:error) { |error| this.handle_error(error: error) }
-        @websocket_client.on(:close) { |error| this.handle_close(error: error) }
-      rescue SocketError => e
+        socket.on(:message) { |payload| this.handle_message(payload: payload) }
+        socket.on(:error) { |error| this.handle_error(error: error) }
+        socket.on(:close) { |error| this.handle_close(error: error) }
+      rescue SocketError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::ETIMEDOUT,
+             Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
         puts e
         puts e.backtrace&.join("\n")
       end
@@ -62,7 +69,7 @@ module Bitflyer
         return unless Time.now.to_i - last_ping_at > ping_interval / 1000
 
         debug_log 'Sent ping'
-        @websocket_client.send '2'
+        @websocket_client&.send '2'
         @last_ping_at = Time.now.to_i
       end
 
@@ -74,7 +81,7 @@ module Bitflyer
         return unless Time.now.to_i - last_pong_at > (ping_interval + ping_timeout) / 1000
 
         debug_log 'Timed out waiting pong'
-        @websocket_client.close
+        @websocket_client&.close
       end
 
       def reconnect
@@ -82,7 +89,6 @@ module Bitflyer
 
         debug_log 'Reconnecting...'
 
-        @websocket_client.close if @websocket_client.open?
         connect
       end
 
@@ -142,7 +148,7 @@ module Bitflyer
           nonce: nonce,
           signature: signature
         }
-        @websocket_client.send "420#{['auth', auth_params].to_json}"
+        @websocket_client&.send "420#{['auth', auth_params].to_json}"
       end
 
       def authenticated(json:)
@@ -154,9 +160,13 @@ module Bitflyer
       end
 
       def subscribe_channels
-        @channel_callbacks.each_key do |channel_name|
+        socket, channels = @subscriptions_mutex.synchronize do
+          @session_ready = true
+          [@websocket_client, @channel_callbacks.keys]
+        end
+        channels.each do |channel_name|
           debug_log "42#{{ subscribe: channel_name }.to_json}"
-          @websocket_client.send "42#{['subscribe', channel_name].to_json}"
+          socket&.send "42#{['subscribe', channel_name].to_json}"
         end
       end
 
@@ -167,7 +177,7 @@ module Bitflyer
 
       def disconnect
         debug_log 'Disconnecting from server...'
-        @websocket_client.close
+        @websocket_client&.close
       end
 
       def emit_message(json:)
