@@ -8,7 +8,7 @@ module Bitflyer
 
         def close: () -> void
 
-        def health: () -> untyped
+        def health: (?product_code: String) -> untyped
 
         def markets: () -> untyped
 

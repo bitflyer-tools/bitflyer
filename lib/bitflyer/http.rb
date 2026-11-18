@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'bitflyer'
 require 'bitflyer/http/public'
 require 'bitflyer/http/private'
 require 'net/http'
@@ -36,6 +35,8 @@ module Bitflyer
       def close
         @mutex.synchronize { close_session }
       end
+
+      def inspect = "#<#{self.class}>"
 
       def get(path, params = {})
         query = URI.encode_www_form(params.compact)
