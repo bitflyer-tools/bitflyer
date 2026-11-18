@@ -14,6 +14,16 @@ module Bitflyer
 
     Response = Struct.new(:body)
 
+    class ResponseError < StandardError
+      attr_reader :status, :body
+
+      def initialize(status, body)
+        @status = status
+        @body = body
+        super("bitFlyer API returned HTTP #{status}")
+      end
+    end
+
     class Connection
       def initialize(key, secret)
         @key = key
@@ -31,13 +41,13 @@ module Bitflyer
         query = URI.encode_www_form(params.compact)
         full_path = query.empty? ? path : "#{path}?#{query}"
         request = Net::HTTP::Get.new(full_path, default_headers)
-        Response.new(execute(request))
+        execute(request)
       end
 
       def post(path, body = {})
         request = Net::HTTP::Post.new(path, default_headers.merge('Content-Type' => 'application/json'))
         request.body = JSON.generate(body.compact)
-        Response.new(execute(request))
+        execute(request)
       end
 
       private
@@ -62,7 +72,11 @@ module Bitflyer
 
       def execute(request)
         response = @mutex.synchronize { send_request(request) }
-        parse_body(response.body)
+        status = response.code.to_i
+        body = response.body
+        raise ResponseError.new(status, body) unless (200...300).cover?(status)
+
+        Response.new(parse_body(body))
       end
 
       def send_request(request)
@@ -82,6 +96,8 @@ module Bitflyer
       end
 
       def parse_body(body)
+        return if body.nil?
+
         JSON.parse(body)
       rescue JSON::ParserError
         body

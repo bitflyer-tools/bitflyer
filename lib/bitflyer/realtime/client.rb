@@ -18,7 +18,9 @@ module Bitflyer
       extend Forwardable
 
       def_delegators :@websocket_client, :ready=, :disconnected=
-      attr_accessor :websocket_client, :ping_interval, :ping_timeout, :last_ping_at, :last_pong_at
+      def_delegators :@websocket_client, :ping_interval, :ping_interval=, :ping_timeout, :ping_timeout=,
+                     :last_ping_at, :last_ping_at=, :last_pong_at, :last_pong_at=
+      attr_accessor :websocket_client
 
       Realtime::CHANNEL_NAMES.each do |channel_name|
         define_method "#{channel_name.gsub('lightning_', '').downcase.to_sym}=" do |callback|

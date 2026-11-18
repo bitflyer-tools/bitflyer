@@ -54,6 +54,22 @@ describe 'HTTPS connection reuse' do
     server_result
   end
 
+  it 'reuses the connection after an HTTP error response' do
+    serve do
+      with_socket do |socket|
+        read_request(socket)
+        socket.write("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
+        respond(socket)
+      end
+    end
+
+    expect { client.ticker }.to raise_error(Bitflyer::HTTP::ResponseError) { |error|
+      expect(error).to have_attributes(status: 503, body: '')
+    }
+    expect(client.ticker).to eq('status' => 'ok')
+    server_result
+  end
+
   context 'with a private client' do
     let(:client) { Bitflyer.http_private_client('key', 'secret') }
 
