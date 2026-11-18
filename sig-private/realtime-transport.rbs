@@ -1,0 +1,54 @@
+module Bitflyer
+  module Realtime
+    class Transport < WebSocket::Client::Simple::Client
+      @socket: (TCPSocket | OpenSSL::SSL::SSLSocket)?
+      @pipe_broken: bool
+      @closed: bool?
+
+      attr_reader read_error: (Errno::ECONNRESET | OpenSSL::SSL::SSLError)?
+
+      def close_after_read_error: (Errno::ECONNRESET | OpenSSL::SSL::SSLError) -> void
+
+      def close_after_write_reset: (Errno::ECONNRESET) -> void
+
+      def close_for_shutdown: () -> void
+
+      def close_on_eof: () -> void
+
+      private
+
+      def close_from_reader: () -> void
+    end
+
+    class WebSocketClient
+      @connection: [Transport, Thread]?
+      @shutdown_lock: Mutex
+
+      private
+
+      def close_connections: () -> void
+
+      def write_ping: (WebSocket::Client::Simple::Client? socket) -> bool
+
+      def close_after_ping_reset: (WebSocket::Client::Simple::Client? socket, Errno::ECONNRESET) -> void
+
+      def close_after_pong_timeout: (WebSocket::Client::Simple::Client? socket) -> void
+
+      def heartbeat_interrupted?: (WebSocket::Client::Simple::Client? socket) -> bool
+
+      def stop_lifecycle: () -> [WebSocket::Client::Simple::Client?, [Transport, Thread]?]
+
+      def start_connection: () -> [Transport, Thread]?
+
+      def wait_for_connection: ([Transport, Thread]) -> bool
+
+      def register_transport_handlers: (Transport) -> void
+
+      def activate_transport: (Transport) -> void
+
+      def replace_transport: (Transport) -> void
+
+      def finish_connection: ([Transport, Thread], bool connected) -> void
+    end
+  end
+end
