@@ -12,6 +12,8 @@ bitflyer is a wrapper interface of [Bitflyer lightning API](https://lightning.bi
 
 ## Installation
 
+Requires Ruby 3.3 or later.
+
 ```sh
 gem install bitflyer
 ```

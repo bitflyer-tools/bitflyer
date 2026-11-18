@@ -9,6 +9,8 @@ module Bitflyer
       @debug: bool
       @subscriptions_mutex: Thread::Mutex
       @session_ready: bool
+      @last_ping_monotonic: Integer?
+      @last_pong_monotonic: Integer?
 
       @connection_lock: Monitor
       @handshake_deadline: Float?
@@ -24,6 +26,8 @@ module Bitflyer
       attr_accessor disconnected: disconnected_callback?
 
       def initialize: (host: String, key: String?, secret: String?, ?debug: bool) -> void
+
+      def inspect: () -> String
 
       def subscribe: (channel_name: Symbol) { (untyped message) -> void } -> void
 
@@ -66,6 +70,10 @@ module Bitflyer
       def register_handlers: (WebSocket::Client::Simple::Client socket) -> void
 
       def with_current_socket: (WebSocket::Client::Simple::Client socket) { () -> void } -> void
+
+      def monotonic_milliseconds: () -> Integer
+
+      def monotonic_from_unix_seconds: (Integer?) -> Integer?
     end
   end
 end

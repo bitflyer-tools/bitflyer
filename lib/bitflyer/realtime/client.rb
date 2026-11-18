@@ -31,6 +31,8 @@ module Bitflyer
       def initialize(key = nil, secret = nil)
         @websocket_client = Bitflyer::Realtime::WebSocketClient.new(host: SOCKET_HOST, key: key, secret: secret)
       end
+
+      def inspect = "#<#{self.class}>"
     end
   end
 end
