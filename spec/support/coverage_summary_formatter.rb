@@ -10,8 +10,7 @@ class CoverageSummaryFormatter
       coverage_row('**Total**', result)
     ]
     result.files.sort_by(&:filename).each do |file|
-      path = file.filename.delete_prefix("#{SimpleCov.root}/")
-      summary << coverage_row("`#{path}`", file)
+      summary << coverage_row("`#{file.project_filename}`", file)
     end
 
     summary_path = ENV['GITHUB_STEP_SUMMARY']
@@ -21,7 +20,7 @@ class CoverageSummaryFormatter
   private
 
   def coverage_row(label, coverage)
-    lines = coverage.coverage_statistics.fetch(:line)
+    lines = coverage.coverage_statistics(:line)
     "| #{label} | #{lines.covered} | #{lines.total} | #{'%.2f' % lines.percent}% |"
   end
 end
