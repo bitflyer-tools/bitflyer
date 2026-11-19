@@ -56,7 +56,7 @@ The next request on that client opens a new connection.
 Accessor format is like `{event_name}_{product_code}`.
 You can set lambda to get realtime events.
 
-`{event_name}` and `{product_code}` is defined at [client.rb](./lib/bitflyer/realtime/client.rb).
+`{event_name}` and `{product_code}` are defined in [channels.rb](./lib/bitflyer/realtime/channels.rb).
 
 #### Private events
 
@@ -114,6 +114,9 @@ bundle config set --local with typecheck
 bundle install
 bundle exec rake steep
 ```
+
+After changing the realtime channel list, regenerate the callback setter signatures with
+`ruby script/generate_realtime_signatures.rb`. CI checks that the shipped declarations are up to date.
 
 
 ## Contributing
