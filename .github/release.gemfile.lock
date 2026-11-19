@@ -1,0 +1,18 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    gem-release (2.2.4)
+
+PLATFORMS
+  ruby
+  x86_64-linux
+
+DEPENDENCIES
+  gem-release (= 2.2.4)
+
+CHECKSUMS
+  bundler (4.1.0) sha256=d7b7a797b988e544a0677a9c6ed78146f2f63d05ae1af8bc7d9426cf88b46377
+  gem-release (2.2.4) sha256=2f11124c1580c811507c3b47e875e420cf3ed792a98105b49df11971e6e94db3
+
+BUNDLED WITH
+  4.1.0
