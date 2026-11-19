@@ -8,6 +8,10 @@ module Bitflyer
           @connection = Connection.new(nil, nil)
         end
 
+        def close
+          @connection.close
+        end
+
         def health(product_code: nil)
           @connection.get('/v1/gethealth', product_code: product_code).body
         end

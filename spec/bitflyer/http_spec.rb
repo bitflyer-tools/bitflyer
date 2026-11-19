@@ -17,10 +17,10 @@ describe Bitflyer::HTTP::Connection do
     let(:http_response) { instance_double(Net::HTTPOK, code: '200', body: response_body) }
 
     before do
-      allow(Net::HTTP).to receive(:start) do |_host, _port, **_opts, &block|
+      allow(Net::HTTP).to receive(:start) do |_host, _port, **_opts|
         http = double('http')
         allow(http).to receive(:request).and_return(http_response)
-        block.call(http)
+        http
       end
       allow(Time).to receive_message_chain(:now, :to_i).and_return(1_000_000)
     end
@@ -45,10 +45,10 @@ describe Bitflyer::HTTP::Connection do
     let(:http_response) { instance_double(Net::HTTPOK, code: '200', body: response_body) }
 
     before do
-      allow(Net::HTTP).to receive(:start) do |_host, _port, **_opts, &block|
+      allow(Net::HTTP).to receive(:start) do |_host, _port, **_opts|
         http = double('http')
         allow(http).to receive(:request).and_return(http_response)
-        block.call(http)
+        http
       end
       allow(Time).to receive_message_chain(:now, :to_i).and_return(1_000_000)
     end
@@ -64,7 +64,7 @@ describe Bitflyer::HTTP::Connection do
 
     before do
       transport = instance_double(Net::HTTP, request: response)
-      allow(Net::HTTP).to receive(:start).and_yield(transport)
+      allow(Net::HTTP).to receive(:start).and_return(transport)
     end
 
     context 'when cancellation returns an empty 200 response' do
@@ -118,13 +118,13 @@ describe Bitflyer::HTTP::Connection do
     let(:captured_request) { nil }
 
     before do
-      allow(Net::HTTP).to receive(:start) do |_host, _port, **_opts, &block|
+      allow(Net::HTTP).to receive(:start) do |_host, _port, **_opts|
         http = double('http')
         allow(http).to receive(:request) do |req|
           @captured_request = req
           http_response
         end
-        block.call(http)
+        http
       end
       allow(Time).to receive_message_chain(:now, :to_i).and_return(1_000_000)
     end
@@ -179,13 +179,13 @@ describe Bitflyer::HTTP::Connection do
     let(:http_response) { instance_double(Net::HTTPOK, code: '200', body: '{}') }
 
     before do
-      allow(Net::HTTP).to receive(:start) do |_host, _port, **_opts, &block|
+      allow(Net::HTTP).to receive(:start) do |_host, _port, **_opts|
         http = double('http')
         allow(http).to receive(:request) do |req|
           @captured_request = req
           http_response
         end
-        block.call(http)
+        http
       end
       allow(Time).to receive_message_chain(:now, :to_i).and_return(1_000_000)
     end
