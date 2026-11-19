@@ -539,6 +539,32 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     expect(ready).to have_received(:call).twice
   end
 
+  it 'ignores an acknowledgment that was being read when the socket was replaced' do
+    client = realtime_client
+    client.ticker_btc_jpy = ->(_message) {}
+    receive_frame('0{}')
+
+    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil)
+    next_handlers = {}
+    stub_transport(next_transport, next_handlers)
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(next_transport)
+
+    payload = double('old acknowledgment')
+    allow(payload).to receive(:data) do
+      allow(transport).to receive(:closed?).and_return(true)
+      client.websocket_client.reconnect
+      receive_frame('0{}', next_handlers)
+      '431[null]'
+    end
+    handlers.fetch(:message).call(payload)
+
+    expect(next_transport).to have_received(:send).with('421["subscribe","lightning_ticker_BTC_JPY"]')
+    expect(ready).not_to have_received(:call)
+
+    receive_frame('431[null]', next_handlers)
+    expect(ready).to have_received(:call).once
+  end
+
   it 'becomes ready immediately when setup has no subscriptions' do
     realtime_client
     receive_frame('0{}')

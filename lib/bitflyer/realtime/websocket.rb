@@ -149,7 +149,7 @@ module Bitflyer
         debug_log error
       end
 
-      def handle_message(payload:) # rubocop:disable Metrics/CyclomaticComplexity
+      def handle_message(payload:, socket: @websocket_client) # rubocop:disable Metrics/CyclomaticComplexity
         return if @lifecycle_lock.synchronize { lifecycle_inactive? }
 
         data = payload.data
@@ -163,7 +163,8 @@ module Bitflyer
         when '41' then disconnect
         when '42' then emit_message(json: prefix.post_match)
         when '430' then authenticated(json: prefix.post_match)
-        when /\A43[1-9]\d*\z/ then acknowledge_subscription(id: prefix[0][2..].to_i, json: prefix.post_match)
+        when /\A43[1-9]\d*\z/
+          acknowledge_subscription(id: prefix[0][2..].to_i, json: prefix.post_match, socket: socket)
         end
       rescue StandardError => e
         puts e
@@ -238,15 +239,17 @@ module Bitflyer
         notify_ready(socket)
       end
 
-      def acknowledge_subscription(id:, json:)
-        socket, channel, error = @session_mutex.synchronize do
+      def acknowledge_subscription(id:, json:, socket: @websocket_client)
+        channel, error = @session_mutex.synchronize do
+          return unless @websocket_client.equal?(socket)
+
           channel = @pending_subscriptions[id]
           return unless channel
 
           error = JSON.parse(json).first
           @pending_subscriptions.delete(id)
           @subscription_rejected = true if error && id <= @last_setup_subscription_id
-          [@websocket_client, channel, error]
+          [channel, error]
         end
         @subscription_failed&.call(channel, error) if error
         notify_ready(socket)
@@ -398,7 +401,7 @@ module Bitflyer
         activate = -> { activate_transport(transport) }
         transport.on(:open) { activate.call }
         transport.on(:message) do |payload|
-          this.handle_message(payload: payload) if this.websocket_client.equal?(transport)
+          this.handle_message(payload: payload, socket: transport) if this.websocket_client.equal?(transport)
         end
         transport.on(:close) { |error| this.handle_close(error: error, socket: transport) }
       end

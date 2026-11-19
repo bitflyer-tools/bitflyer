@@ -52,7 +52,7 @@ module Bitflyer
 
       def handle_error: (error: untyped) -> void
 
-      def handle_message: (payload: untyped) -> void
+      def handle_message: (payload: untyped, ?socket: Transport?) -> void
 
       def handle_close: (error: untyped, ?socket: Transport?) -> void
 
@@ -64,7 +64,7 @@ module Bitflyer
 
       def subscribe_channels: () -> void
 
-      def acknowledge_subscription: (id: Integer, json: String) -> void
+      def acknowledge_subscription: (id: Integer, json: String, ?socket: Transport?) -> void
 
       def receive_pong: () -> void
 
