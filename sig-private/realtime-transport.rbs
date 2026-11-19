@@ -1,6 +1,13 @@
 module Bitflyer
   module Realtime
     class Transport < WebSocket::Client::Simple::Client
+      READ_SIZE: Integer
+      HEADER_END: String
+
+      @url: String
+      @thread: Thread?
+      @handshake: ::WebSocket::Handshake::Client
+      @handshaked: bool
       @socket: (TCPSocket | OpenSSL::SSL::SSLSocket)?
       @pipe_broken: bool
       @closed: bool?
@@ -13,10 +20,16 @@ module Bitflyer
 
       def close_for_shutdown: () -> void
 
-      def close_on_eof: () -> void
-
       private
 
+      def connect_socket: (URI::Generic, Hash[Symbol, untyped]) -> (TCPSocket | OpenSSL::SSL::SSLSocket)
+      def ssl_context: (Hash[Symbol, untyped]) -> OpenSSL::SSL::SSLContext
+      def receive_frames: ((TCPSocket | OpenSSL::SSL::SSLSocket)) -> void
+      def once: (Symbol) { (untyped) -> void } -> void
+      def process_chunk: (String, ::WebSocket::Frame::Incoming::Client, String) -> void
+      def read_chunk: ((TCPSocket | OpenSSL::SSL::SSLSocket)) -> String?
+      def receive_upgrade: (String, String) -> String?
+      def deliver_frames: (::WebSocket::Frame::Incoming::Client, String) -> void
       def close_from_reader: () -> void
     end
 
@@ -59,6 +72,26 @@ module Bitflyer
       def replace_transport: (Transport) -> void
 
       def finish_connection: ([Transport, Thread], bool connected) -> void
+    end
+  end
+end
+
+module WebSocket
+  def self.should_raise=: (bool) -> bool
+
+  module Handshake
+    class Client
+      def initialize: (url: String, headers: untyped) -> void
+      def <<: (String) -> untyped
+    end
+  end
+
+  module Frame
+    class Incoming
+      class Client
+        def <<: (String) -> untyped
+        def next: () -> Client?
+      end
     end
   end
 end

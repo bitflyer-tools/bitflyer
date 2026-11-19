@@ -3,7 +3,7 @@
 require 'spec_helper'
 
 describe 'Realtime ready notifications' do
-  let(:transport) { instance_double(Bitflyer::Realtime::Transport, closed?: false, close_on_eof: nil, read_error: nil) }
+  let(:transport) { instance_double(Bitflyer::Realtime::Transport, closed?: false, read_error: nil) }
   let(:handlers) { {} }
   let(:notifications) { Queue.new }
   let(:callback) { -> { notifications << :ready } }
@@ -95,7 +95,7 @@ describe 'Realtime ready notifications' do
 
   { close: nil, error: Errno::ECONNRESET.new }.each do |event, error|
     it "preserves the replacement socket's pending notification after a stale #{event}" do
-      replacement = instance_double(Bitflyer::Realtime::Transport, close_on_eof: nil)
+      replacement = instance_double(Bitflyer::Realtime::Transport)
       stub_connection(replacement)
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(transport, replacement)
       allow(transport).to receive(:closed?).and_return(true)

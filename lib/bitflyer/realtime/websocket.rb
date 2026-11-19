@@ -412,7 +412,6 @@ module Bitflyer
 
           if connected
             replace_transport(transport) unless @authentication_error
-            transport.close_on_eof
           else
             @handshake_deadline = nil
           end

@@ -35,7 +35,7 @@ describe Bitflyer do
   describe '.realtime_client' do
     let(:socket) do
       double('websocket transport', open?: true, closed?: false, connect: nil, on: nil, close: nil,
-             close_on_eof: nil, read_error: nil, send: nil)
+             read_error: nil, send: nil)
     end
 
     before do
@@ -54,6 +54,13 @@ describe Bitflyer do
       allow(Time).to receive(:now).and_return(connected_at)
       allow(Process).to receive(:clock_gettime).and_call_original
       allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond).and_return(10_000)
+    end
+
+    def notify_on_replacement(replacement, queue)
+      allow_any_instance_of(Bitflyer::Realtime::WebSocketClient).to receive(:replace_transport).and_wrap_original do |replace, transport|
+        replace.call(transport)
+        queue << true if replacement.equal?(transport)
+      end
     end
 
     it 'returns a Realtime::Client instance' do
@@ -146,10 +153,10 @@ describe Bitflyer do
 
     it 'automatically reconnects after the transport closes while active' do
       replacement = double('replacement transport', open?: true, closed?: false, connect: nil, on: nil, close: nil,
-                           close_on_eof: nil, read_error: nil)
+                           read_error: nil)
       reconnected = Queue.new
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket, replacement)
-      allow(replacement).to receive(:close_on_eof) { reconnected << true }
+      notify_on_replacement(replacement, reconnected)
       @client = Bitflyer.realtime_client
       allow(socket).to receive(:open?).and_return(false)
       allow(socket).to receive(:closed?).and_return(true)
@@ -164,7 +171,7 @@ describe Bitflyer do
       transport = Bitflyer::Realtime::Transport.new
       ping_started = Queue.new
       write_released = Queue.new
-      raw_socket = double('socket', getc: nil)
+      raw_socket = double('socket')
       handshake = double('handshake', finished?: true, version: 13)
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(transport)
       allow(transport).to receive(:connect) do
@@ -202,7 +209,7 @@ describe Bitflyer do
       transport = Bitflyer::Realtime::Transport.new
       ping_started = Queue.new
       write_released = Queue.new
-      raw_socket = double('socket', getc: nil, close: nil)
+      raw_socket = double('socket', close: nil)
       handshake = double('handshake', finished?: true)
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(transport)
       allow(transport).to receive(:connect) do
@@ -240,7 +247,7 @@ describe Bitflyer do
       transport = Bitflyer::Realtime::Transport.new
       close_started = Queue.new
       write_released = Queue.new
-      raw_socket = double('socket', getc: nil)
+      raw_socket = double('socket')
       handshake = double('handshake', finished?: true, version: 13)
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(transport)
       allow(transport).to receive(:connect) do
@@ -273,7 +280,7 @@ describe Bitflyer do
     end
 
     it 'authenticates, resubscribes, and signals readiness when the greeting arrives during connect' do
-      replacement = double('replacement transport', close_on_eof: nil, close: nil)
+      replacement = double('replacement transport', close: nil)
       callbacks = {}
       ready = Queue.new
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket, replacement)
@@ -357,31 +364,42 @@ describe Bitflyer do
       end
     end
 
-    it 'reconnects after the peer closes during the WebSocket handshake' do
-      allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
-      TCPServer.open('127.0.0.1', 0) do |server|
-        stub_const('Bitflyer::Realtime::SOCKET_HOST', "http://127.0.0.1:#{server.addr[1]}")
-        @client = Bitflyer.realtime_client
-        transport = @client.websocket_client.websocket_client
-        disconnected = Queue.new
-        @client.disconnected = ->(error) { disconnected << error }
+    [false, true].each do |upgraded|
+      it "reconnects after EOF #{upgraded ? 'after' : 'during'} the WebSocket handshake" do
+        allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
+        TCPServer.open('127.0.0.1', 0) do |server|
+          stub_const('Bitflyer::Realtime::SOCKET_HOST', "http://127.0.0.1:#{server.addr[1]}")
+          @client = Bitflyer.realtime_client
+          transport = @client.websocket_client.websocket_client
+          disconnected = Queue.new
+          @client.disconnected = ->(error) { disconnected << error }
 
-        peer = replacement_peer = nil
-        Timeout.timeout(5) do
-          peer = server.accept
-          peer.each_line { |line| break if line == "\r\n" }
-          peer.close
-          disconnected.pop
-          replacement_peer = server.accept
-          replacement_peer.each_line { |line| break if line == "\r\n" }
-          expect(transport).to be_closed
-          expect(transport.thread.join(1)).to eq(transport.thread)
-          expect(Bitflyer::Realtime::Transport).to have_received(:new).twice
+          ready = Queue.new
+          @client.ready = -> { ready << true }
+          peer = replacement_peer = nil
+          Timeout.timeout(5) do
+            peer = server.accept
+            request = peer.gets("\r\n\r\n")
+            if upgraded
+              handshake = WebSocket::Handshake::Server.new
+              handshake << request
+              greeting = WebSocket::Frame::Outgoing::Server.new(version: 13, type: :text, data: '0{}')
+              peer.write(handshake.to_s + greeting.to_s)
+              ready.pop
+            end
+            peer.close
+            expect(disconnected.pop).to be_nil
+            replacement_peer = server.accept
+            replacement_peer.each_line { |line| break if line == "\r\n" }
+            expect(transport).to be_closed
+            expect(transport.thread.join(1)).to eq(transport.thread)
+            expect(Bitflyer::Realtime::Transport).to have_received(:new).twice
+          end
+        ensure
+          @client&.shutdown
+          peer&.close
+          replacement_peer&.close
         end
-      ensure
-        @client&.shutdown
-        peer&.close
-        replacement_peer&.close
       end
     end
 
@@ -463,7 +481,7 @@ describe Bitflyer do
         ping_started = Queue.new
         write_released = Queue.new
         reconnected = Queue.new
-        raw_socket = double('socket', getc: nil, close: nil)
+        raw_socket = double('socket', close: nil)
         handshake = double('handshake', finished?: true, version: 13)
         if write_error
           allow(raw_socket).to receive(:write) do
@@ -489,8 +507,9 @@ describe Bitflyer do
           transport.instance_variable_set(:@handshaked, true)
           transport.once(:__close) { |error| transport.emit(:close, error) }
         end
-        allow(replacement).to receive(:close_on_eof) { reconnected << true }
+        notify_on_replacement(replacement, reconnected)
         read_error = Errno::ECONNRESET.new if disconnect == :reset
+        allow(raw_socket).to receive(:readpartial).and_raise(read_error || EOFError)
         disconnected = Queue.new
         client.disconnected = ->(error) { disconnected << error }
         client.ping_interval = 0
@@ -500,7 +519,7 @@ describe Bitflyer do
           ping_started.pop
           reader = Thread.new do
             transport.instance_variable_set(:@thread, Thread.current)
-            read_error ? transport.emit(:error, read_error) : raw_socket.getc
+            transport.__send__(:receive_frames, raw_socket)
           end
           reader.join
           write_released << true
@@ -516,19 +535,19 @@ describe Bitflyer do
     end
 
     [Errno::ECONNRESET, OpenSSL::SSL::SSLError].each do |read_error|
-      it "retries when #{read_error} clears the socket before the handshake write" do
+      it "retries when #{read_error} closes the socket before connection setup finishes" do
         allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
         interrupted_transport = Bitflyer::Realtime::Transport.new
         replacement = double('replacement transport', open?: true, connect: nil, on: nil, close: nil)
-        raw_socket = double('socket', close: nil)
+        raw_socket = double('socket', close: nil, write: nil)
         peer = raw_socket
         url = 'ws://example.test'
         if read_error == OpenSSL::SSL::SSLError
-          peer = instance_double(OpenSSL::SSL::SSLSocket, connect: nil, close: nil, 'sync_close=': nil, 'hostname=': nil)
+          peer = instance_double(OpenSSL::SSL::SSLSocket, connect: nil, close: nil, write: nil, 'sync_close=': nil, 'hostname=': nil)
           allow(OpenSSL::SSL::SSLSocket).to receive(:new).and_return(peer)
           url = 'wss://example.test'
         end
-        allow(peer).to receive(:getc).and_raise(read_error)
+        allow(peer).to receive(:readpartial).and_raise(read_error)
         allow(TCPSocket).to receive(:new).and_return(raw_socket)
         allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket, interrupted_transport, replacement)
 
@@ -544,7 +563,7 @@ describe Bitflyer do
         end
 
         reconnected = Queue.new
-        allow(replacement).to receive(:close_on_eof) { reconnected << true }
+        notify_on_replacement(replacement, reconnected)
         allow($stdout).to receive(:puts)
         stub_const('Bitflyer::Realtime::SOCKET_HOST', url)
         disconnected = Queue.new
