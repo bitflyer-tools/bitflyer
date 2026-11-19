@@ -49,6 +49,27 @@ p private_client.positions # will print your positions
 Each HTTP client reuses its HTTPS connection across requests. Call `client.close` to release it.
 The next request on that client opens a new connection.
 
+#### Stream execution history
+
+`each_execution` on either HTTP client fetches pages on demand and yields one execution at a time
+in API response order. It uses the lowest execution ID on each page as the next exclusive `before`
+cursor. Pass a saved execution ID as `before` to resume from older records, and use `after` to set
+an exclusive lower bound.
+
+```ruby
+public_client = Bitflyer.http_public_client
+history = public_client.each_execution(product_code: 'BTC_JPY', before: 123_456, count: 50, max_pages: 5)
+history.lazy.take(75).each { |execution| p execution }
+
+private_client.each_execution(child_order_acceptance_id: 'YOUR_ORDER_ACCEPTANCE_ID') do |fill|
+  p fill
+end
+```
+
+`max_pages` defaults to 10 requests per traversal. Set it to 0 to skip fetching. Iteration also
+stops when a page is empty, when the cursor stops moving backward, or when the caller stops
+consuming the enumerator. Request errors propagate to the caller.
+
 ### Realtime API
 
 #### Public events
@@ -56,7 +77,7 @@ The next request on that client opens a new connection.
 Accessor format is like `{event_name}_{product_code}`.
 You can set lambda to get realtime events.
 
-`{event_name}` and `{product_code}` is defined at [client.rb](./lib/bitflyer/realtime/client.rb).
+`{event_name}` and `{product_code}` are defined in [channels.rb](./lib/bitflyer/realtime/channels.rb).
 
 #### Private events
 
@@ -115,6 +136,9 @@ bundle config set --local with typecheck
 bundle install
 bundle exec rake steep
 ```
+
+After changing the realtime channel list, regenerate the callback setter signatures with
+`ruby script/generate_realtime_signatures.rb`. CI checks that the shipped declarations are up to date.
 
 
 ## Contributing

@@ -3,6 +3,72 @@
 require 'spec_helper'
 require 'timeout'
 
+RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
+  let(:transport_class) { Bitflyer::Realtime::Transport }
+  let(:original) { transport_class.new }
+  let(:replacement) { transport_class.new }
+  let(:client) { described_class.new(host: 'wss://example.com', key: nil, secret: nil) }
+  let(:setup_message) { Struct.new(:data).new('0{}') }
+
+  before do
+    [original, replacement].each do |transport|
+      allow(transport).to receive(:connect)
+      allow(transport).to receive(:close_for_shutdown) { transport.emit(:close, nil) }
+    end
+    allow(transport_class).to receive(:new).and_return(original, replacement)
+    allow_any_instance_of(described_class).to receive(:start_monitoring)
+    allow(Process).to receive(:clock_gettime).and_call_original
+    allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond) { @now }
+    @now = 100_000
+  end
+
+  after { client.shutdown }
+
+  it 'keeps a pending handshake on the same socket past the first monitor tick' do
+    client.ready = -> { @ready = true }
+
+    @now += 1_000
+    client.reconnect
+    allow(original).to receive(:open?).and_return(true)
+    original.emit(:open)
+    original.emit(:message, setup_message)
+
+    expect(client.websocket_client).to equal(original)
+    expect(original).not_to have_received(:close_for_shutdown)
+    expect(replacement).not_to have_received(:connect)
+    expect(@ready).to be(true)
+  end
+
+  it 'closes a timed-out socket before replacing it and ignores its late events' do
+    expect(original).to receive(:close_for_shutdown).ordered.and_call_original
+    expect(replacement).to receive(:connect).ordered
+    disconnected = []
+    client.disconnected = ->(error) { disconnected << error }
+
+    @now += 10_000
+    client.reconnect
+    original.emit(:open)
+    original.emit(:message, setup_message)
+    original.emit(:error, Errno::ECONNRESET.new)
+    original.emit(:close, nil)
+
+    expect(client.websocket_client).to equal(replacement)
+    expect(client.last_pong_at).to be_nil
+    expect(disconnected).to be_empty
+  end
+
+  it 'retries a closed socket before its handshake deadline' do
+    disconnected = []
+    client.disconnected = ->(error) { disconnected << error }
+    allow(original).to receive(:closed?).and_return(true)
+    original.emit(:close, nil)
+    client.reconnect
+
+    expect(client.websocket_client).to equal(replacement)
+    expect(disconnected).to eq([nil])
+  end
+end
+
 describe Bitflyer::Realtime::WebSocketClient do
   let(:socket) do
     instance_double(Bitflyer::Realtime::Transport, open?: true, closed?: false, send: nil, close: nil,
@@ -418,7 +484,9 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
       expect(transport).to have_received(:send).with('421["subscribe","child_order_events"]')
       expect(ready).not_to have_received(:call)
 
-      receive_frame('431[null]')
+      receive_frame("431[\n  null\n]")
+      expect(ready).to have_received(:call).once
+
       receive_frame('430[null]')
       receive_frame('431[null]')
       expect(ready).to have_received(:call).once
@@ -437,6 +505,79 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 
       expect(subscription_failed).to have_received(:call).with(:child_order_events, { 'message' => 'Access denied' }).once
       expect(ready).not_to have_received(:call)
+    end
+  end
+end
+
+describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
+  let(:socket) { instance_double(Bitflyer::Realtime::Transport, on: nil, send: nil, close: nil, connect: nil, close_on_eof: nil) }
+  let(:host) { 'wss://example.test' }
+  let(:key) { nil }
+  let(:secret) { nil }
+  let(:client) { described_class.new(host: host, key: key, secret: secret) }
+  let(:ready) { double('ready callback', call: nil) }
+
+  before do
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket)
+    allow(socket).to receive(:on).with(:message) { |&callback| @receive = callback }
+    allow_any_instance_of(described_class).to receive(:start_monitoring)
+    client.ready = ready
+  end
+
+  def receive_frame(data)
+    @receive.call(double('frame', data: data))
+  end
+
+  it 'sets heartbeat intervals and signals readiness on handshake' do
+    receive_frame('0{"pingInterval":10000,"pingTimeout":5000}')
+
+    expect(client.ping_interval).to eq(10_000)
+    expect(client.ping_timeout).to eq(5_000)
+    expect(ready).to have_received(:call).once
+  end
+
+  it 'updates the last pong time on a heartbeat response' do
+    allow(Time).to receive(:now).and_return(Time.at(123))
+
+    receive_frame('3')
+
+    expect(client.last_pong_at).to eq(123)
+  end
+
+  it 'closes the socket on disconnect' do
+    receive_frame('41')
+
+    expect(socket).to have_received(:close).once
+  end
+
+  it 'delivers the complete decoded large board event to its callback' do
+    callback = double('board callback', call: nil)
+    channel = :lightning_board_BTC_JPY
+    board = {
+      'mid_price' => 5_000_000,
+      'bids' => Array.new(3_000) { |index| { 'price' => 5_000_000 - index, 'size' => 0.125 } },
+      'asks' => [{ 'price' => 5_000_001, 'size' => 0.25 }]
+    }
+    client.subscribe(channel_name: channel) { |message| callback.call(message) }
+
+    receive_frame("42#{JSON.pretty_generate([channel, board])}")
+
+    expect(callback).to have_received(:call).with(board).once
+  end
+
+  context 'with API credentials' do
+    let(:key) { 'key' }
+    let(:secret) { 'secret' }
+
+    it 'requests authentication on handshake and signals readiness on acknowledgement' do
+      receive_frame('0{}')
+
+      expect(socket).to have_received(:send).with(start_with('420["auth",')).once
+      expect(ready).not_to have_received(:call)
+
+      receive_frame('430[null]')
+
+      expect(ready).to have_received(:call).once
     end
   end
 end
