@@ -78,7 +78,7 @@ module Bitflyer
 
       def lifecycle_inactive?: () -> bool
 
-      def notify_ready: (WebSocket::Client::Simple::Client?) -> void
+      def notify_ready: (Transport?) -> void
 
       def take_ready_callback: () -> ready_callback?
 

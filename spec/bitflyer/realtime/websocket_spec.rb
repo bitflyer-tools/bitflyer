@@ -391,7 +391,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 end
 
 RSpec.describe Bitflyer::Realtime::WebSocketClient do
-  let(:transport) { instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false, close_on_eof: nil, read_error: nil) }
+  let(:transport) { instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false) }
   let(:handlers) { {} }
   let(:ready) { spy('ready callback') }
   let(:subscription_failed) { spy('subscription failure callback') }
@@ -447,7 +447,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     receive_frame('431[null]')
     expect(ready).to have_received(:call).once
 
-    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil, close_on_eof: nil)
+    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil)
     next_handlers = {}
     stub_transport(next_transport, next_handlers)
     allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(next_transport)
