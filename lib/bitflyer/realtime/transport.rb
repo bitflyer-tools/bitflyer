@@ -1,62 +1,153 @@
 # frozen_string_literal: true
 
-require 'websocket-client-simple'
+require 'openssl'
+require 'socket'
+require 'timeout'
+require 'uri'
+require 'websocket/driver'
 
 module Bitflyer
   module Realtime
-    class Transport < WebSocket::Client::Simple::Client
-      attr_reader :read_error
+    class Transport
+      HANDSHAKE_TIMEOUT = 10
 
-      def connect(url, options = {})
-        super
-      rescue NoMethodError => e
-        # The receiver can clear the socket before the handshake request is written.
-        error = @read_error
-        raise unless error && e.name == :write && e.receiver.nil?
+      attr_reader :url, :thread
 
-        raise error
+      def initialize
+        @driver_lock = Mutex.new
+        @close_lock = Mutex.new
+        @handlers = {}
+        @closed = false
       end
 
-      def close_after_read_error(error)
-        @read_error = error
-        close_for_shutdown
+      def on(event, &handler)
+        @handlers[event] = handler
       end
 
-      def close_after_write_reset(error)
-        @pipe_broken = true
-        emit :__close, error
+      def connect(url)
+        uri = URI.parse(url)
+        raise ArgumentError, 'Realtime connections require TLS' unless %w[https wss].include?(uri.scheme)
+
+        @url = url.sub(/\Ahttps:/, 'wss:')
+        @socket = connect_tls(uri)
+        setup_driver.start
+        @thread = Thread.new { read_messages }
+      ensure
+        terminate(notify: false) unless @thread
+      end
+
+      def open?
+        !closed? && @driver&.state == :open
+      end
+
+      def closed?
+        @socket.nil? || @closed
+      end
+
+      def send(data)
+        @driver_lock.synchronize { @driver&.text(data) if open? }
+      rescue IOError, SystemCallError, OpenSSL::SSL::SSLError => e
+        terminate(e)
+        false
+      end
+
+      def close
+        @driver_lock.synchronize { @driver&.close if open? }
+      rescue IOError, SystemCallError, OpenSSL::SSL::SSLError
+        nil
+      ensure
+        terminate
       end
 
       def close_for_shutdown
-        # A close frame can block on the same socket as the pending write.
-        @pipe_broken = true
-        Thread.current == thread ? close_from_reader : close
+        terminate
       end
 
-      def close_on_eof
+      def write(data)
         socket = @socket
-        return unless socket
+        raise IOError, 'WebSocket is closed' if closed? || !socket
 
-        transport = self
-        read_byte = socket.method(:getc)
-        # The upstream reader retries forever when getc returns EOF.
-        socket.define_singleton_method(:getc) do
-          byte = read_byte.call
-          transport.close if byte.nil?
-          byte
-        end
+        socket.write(data)
       end
 
       private
 
-      def close_from_reader
-        return if @closed
+      def setup_driver
+        @events = []
+        driver = WebSocket::Driver.client(self)
+        %i[open message error close].each do |event|
+          driver.on(event) { |event_data| @events << [event, event_data] }
+        end
+        @driver = driver
+      end
 
-        # The read loop exits after the current callback returns.
-        @closed = true
-        @socket&.close
-        @socket = nil
-        emit :__close
+      def connect_tls(uri)
+        hostname = uri.hostname
+        raise ArgumentError, 'Realtime connections require a TLS hostname' unless hostname
+
+        trust_store = OpenSSL::X509::Store.new
+        trust_store.set_default_paths
+        context = OpenSSL::SSL::SSLContext.new
+        context.set_params(verify_mode: OpenSSL::SSL::VERIFY_PEER, verify_hostname: true, cert_store: trust_store)
+        tcp = TCPSocket.new(hostname, uri.port || 443)
+        socket = OpenSSL::SSL::SSLSocket.new(tcp, context)
+        socket.sync_close = true
+        socket.hostname = hostname
+        connected = socket.connect
+      ensure
+        tcp&.close unless connected
+      end
+
+      def read_messages
+        socket = @socket
+        return unless socket
+
+        read_handshake(socket)
+        parse(socket.readpartial(4096)) until closed?
+      rescue EOFError
+        nil
+      rescue IOError, SystemCallError, OpenSSL::SSL::SSLError, Timeout::Error => e
+        failure = e
+      ensure
+        terminate(failure)
+      end
+
+      def read_handshake(socket)
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + HANDSHAKE_TIMEOUT
+        until closed? || open?
+          remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          raise Timeout::Error, 'WebSocket upgrade timed out' unless remaining.positive?
+
+          parse(Timeout.timeout(remaining) { socket.readpartial(4096) })
+        end
+      end
+
+      def parse(data)
+        events = @driver_lock.synchronize do
+          @driver&.parse(data)
+          @events.shift(@events.size)
+        end
+        # Callbacks can send messages or shut down the client.
+        events.each do |event, payload|
+          break if closed?
+
+          case event
+          when :error then terminate(payload)
+          when :close then terminate
+          else @handlers[event]&.call(payload)
+          end
+        end
+      end
+
+      def terminate(error = nil, notify: true)
+        socket = @close_lock.synchronize do
+          return if @closed
+
+          @closed = true
+          @socket&.close
+          @socket
+        end
+        @handlers[:close]&.call(error) if socket && notify
       end
     end
   end

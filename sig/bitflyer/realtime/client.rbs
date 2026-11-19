@@ -15,6 +15,8 @@ module Bitflyer
 
     type disconnected_callback = ^(untyped error) -> void
 
+    type subscription_failed_callback = ^(Symbol channel, untyped error) -> void
+
     class Client
       extend Forwardable
 
@@ -33,6 +35,8 @@ module Bitflyer
       def ready=: (ready_callback? callback) -> ready_callback?
 
       def disconnected=: (disconnected_callback? callback) -> disconnected_callback?
+
+      def subscription_failed=: (subscription_failed_callback? callback) -> subscription_failed_callback?
 
       # BEGIN GENERATED CHANNEL SETTERS
       def board_snapshot_btc_jpy=: (message_callback callback) -> message_callback
