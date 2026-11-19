@@ -119,7 +119,8 @@ describe Bitflyer::Realtime::WebSocketClient do
     Timeout.timeout(5) { reconnected.pop }
     errors = []
     notifications = []
-    @client.disconnected = ->(error) { errors << error }
+    callback = ->(error) { errors << error }
+    @client.disconnected = callback
     allow(socket).to receive(:close) do
       allow(socket).to receive_messages(open?: false, closed?: true)
       handlers.fetch(:close).call(nil)
@@ -128,11 +129,58 @@ describe Bitflyer::Realtime::WebSocketClient do
     receive_message('0{}')
     receive_message('430[{"message":"Invalid API key"}]')
     @client.ready = -> { notifications << :ready }
+    @client.disconnected = callback
 
     expect(@monitor.join(5)).to eq(@monitor)
     expect(socket).not_to have_received(:send).with('42["subscribe","child_order_events"]')
     expect(socket).to have_received(:connect).twice
     expect(notifications).to be_empty
+    expect(errors.map(&:message)).to eq(['Authentication failed: [{"message":"Invalid API key"}]'])
+  end
+
+  it 'delivers the original authentication error when a callback is registered after construction' do
+    allow(socket).to receive(:connect) do
+      handlers.fetch(:open).call
+      receive_message('430[{"message":"Invalid API key"}]')
+    end
+    @client = Bitflyer.realtime_client('key', 'secret')
+    errors = []
+    callback = ->(error) { errors << error }
+
+    @client.ready = -> { raise 'Authentication rejection must not signal readiness' }
+    @client.disconnected = nil
+    @client.disconnected = callback
+    @client.disconnected = callback
+
+    expect(errors).to contain_exactly(an_instance_of(RuntimeError).and(
+      have_attributes(message: 'Authentication failed: [{"message":"Invalid API key"}]')
+    ))
+  end
+
+  it 'delivers an authentication error once when registration overlaps rejection' do
+    @attempts = [nil]
+    @client = Bitflyer.realtime_client('key', 'secret')
+    closing = Queue.new
+    finish_close = Queue.new
+    allow(socket).to receive(:close) do
+      closing << true
+      finish_close.pop
+      handlers.fetch(:close).call(nil)
+    end
+    errors = []
+    callback = ->(error) { errors << error }
+    rejection = Thread.new { receive_message('430[{"message":"Invalid API key"}]') }
+
+    begin
+      Timeout.timeout(5) { closing.pop }
+      @client.disconnected = callback
+    ensure
+      finish_close << true
+      rejection.join
+      allow(socket).to receive(:close).and_return(nil)
+    end
+    @client.disconnected = callback
+
     expect(errors.map(&:message)).to eq(['Authentication failed: [{"message":"Invalid API key"}]'])
   end
 end
