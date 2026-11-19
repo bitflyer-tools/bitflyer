@@ -22,9 +22,23 @@ module Bitflyer
         close_for_shutdown
       end
 
-      def close_after_write_reset(error)
-        @pipe_broken = true
-        emit :__close, error
+      def write_message(message)
+        return false if closed?
+
+        send message
+        !closed?
+      rescue Errno::ECONNRESET => e
+        close_after_write_reset(e)
+        false
+      rescue IOError, SystemCallError
+        raise unless write_interrupted?
+
+        false
+      rescue NoMethodError => e
+        # Closing the connection can clear the socket while a send is in progress.
+        raise unless e.name == :write && e.receiver.nil? && write_interrupted?
+
+        false
       end
 
       def close_for_shutdown
@@ -49,14 +63,25 @@ module Bitflyer
 
       private
 
-      def close_from_reader
+      def close_after_write_reset(error)
+        return if write_interrupted?
+
+        @pipe_broken = true
+        Thread.current == thread ? close_from_reader(error) : emit(:__close, error)
+      end
+
+      def write_interrupted?
+        closed? || !@read_error.nil?
+      end
+
+      def close_from_reader(error = nil)
         return if @closed
 
         # The read loop exits after the current callback returns.
         @closed = true
         @socket&.close
         @socket = nil
-        emit :__close
+        emit :__close, error
       end
     end
   end

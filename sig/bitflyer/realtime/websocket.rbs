@@ -54,7 +54,7 @@ module Bitflyer
 
       def authenticated: (json: String) -> void
 
-      def subscribe_channels: () -> void
+      def subscribe_channels: () -> WebSocket::Client::Simple::Client?
 
       def receive_pong: () -> void
 
@@ -71,8 +71,6 @@ module Bitflyer
       def wait_for_monitor_tick: () -> bool
 
       def lifecycle_inactive?: () -> bool
-
-      def notify_ready: () -> void
 
       def take_ready_callback: () -> ready_callback?
 

@@ -66,6 +66,7 @@ To subscribe to the private `child_order_events` and `parent_order_events`, pass
 
 The `ready` callback is called when the `realtime_client` is ready to receive events (after the socket connection is established, the optional authentication has succeeded, and the channels have been subscribed). If connection is lost, the `disconnected` callback is called, and reconnection is attempted automatically. When connection is restored, `ready` is called again.
 If setup finishes before registration, assigning `ready` delivers the pending notification synchronously, once per connection.
+If a WebSocket write detects a connection reset, the client reports the reset to `disconnected` and replays registered subscriptions after reconnecting.
 
 If the server rejects authentication, the client closes the connection and passes a `RuntimeError` with the server response to `disconnected`. Authentication rejection stops automatic reconnection.
 

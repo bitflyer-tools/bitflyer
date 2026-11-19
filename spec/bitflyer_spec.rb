@@ -414,42 +414,89 @@ describe Bitflyer do
       end
     end
 
-    it 'reconnects when the ping write detects a reset before the reader' do
-      allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
-      TCPServer.open('127.0.0.1', 0) do |server|
-        stub_const('Bitflyer::Realtime::SOCKET_HOST', "http://127.0.0.1:#{server.addr[1]}")
-        transport = session.websocket_client
-        ready = Queue.new
-        disconnected = Queue.new
-        client.ready = -> { ready << true }
-        client.disconnected = ->(error) { disconnected << error }
-        reset = Errno::ECONNRESET.new
+    %i[heartbeat authentication live_subscription subscription_replay].each do |write|
+      it "reconnects when a #{write} write detects a reset before the reader" do
+        allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
+        TCPServer.open('127.0.0.1', 0) do |server|
+          stub_const('Bitflyer::Realtime::SOCKET_HOST', "http://127.0.0.1:#{server.addr[1]}")
+          credentials = write == :authentication ? %w[key secret] : []
+          @client = Bitflyer.realtime_client(*credentials)
+          transport = @client.websocket_client.websocket_client
+          ready = Queue.new
+          disconnected = Queue.new
+          messages = Queue.new
+          callback = ->(message) { messages << message }
+          @client.ready = -> { ready << true }
+          @client.disconnected = ->(error) { disconnected << error }
+          reset = Errno::ECONNRESET.new
 
-        peer = replacement_peer = nil
-        Timeout.timeout(5) do
-          peer = server.accept
-          handshake = WebSocket::Handshake::Server.new
-          handshake << peer.gets("\r\n\r\n")
-          peer.write(handshake.to_s)
-          peer.write(WebSocket::Frame::Outgoing::Server.new(version: handshake.version, type: :text,
-                                                             data: '0{}').to_s)
-          ready.pop
+          peer = replacement_peer = nil
+          Timeout.timeout(5) do
+            peer = server.accept
+            handshake = accept_websocket(peer)
+            raw_socket = transport.instance_variable_get(:@socket)
 
-          raw_socket = transport.instance_variable_get(:@socket)
-          allow(raw_socket).to receive(:write).and_raise(reset)
-          client.ping_interval = 0
+            if %i[heartbeat live_subscription].include?(write)
+              send_websocket_message(peer, handshake, '0{}')
+              ready.pop
+            end
 
-          expect(disconnected.pop).to equal(reset)
-          replacement_peer = server.accept
-          expect(replacement_peer.gets("\r\n\r\n")).to start_with('GET /socket.io/')
-          expect(transport).to be_closed
-          expect(transport.thread.join(1)).to eq(transport.thread)
-          expect(disconnected).to be_empty
+            allow(raw_socket).to receive(:write).and_raise(reset)
+            case write
+            when :heartbeat
+              @client.ping_interval = 0
+            when :live_subscription
+              @client.ticker_btc_jpy = callback
+            else
+              @client.ticker_btc_jpy = callback if write == :subscription_replay
+              send_websocket_message(peer, handshake, '0{}')
+            end
+
+            expect(disconnected.pop).to equal(reset)
+            expect(ready).to be_empty
+            replacement_peer = server.accept
+            replacement_handshake = accept_websocket(replacement_peer)
+            expect(transport).to be_closed
+            expect(transport.thread.join(1)).to eq(transport.thread)
+            expect(disconnected).to be_empty
+
+            send_websocket_message(replacement_peer, replacement_handshake, '0{}')
+            if write == :authentication
+              expect(read_websocket_message(replacement_peer, replacement_handshake)).to start_with('420["auth",')
+              send_websocket_message(replacement_peer, replacement_handshake, '430[null]')
+            end
+            ready.pop
+            if %i[live_subscription subscription_replay].include?(write)
+              expect(read_websocket_message(replacement_peer, replacement_handshake)).to eq('42["subscribe","lightning_ticker_BTC_JPY"]')
+              send_websocket_message(replacement_peer, replacement_handshake, '42["lightning_ticker_BTC_JPY",{"price":1}]')
+              expect(messages.pop).to eq('price' => 1)
+            end
+          end
+        ensure
+          @client&.shutdown
+          peer&.close
+          replacement_peer&.close
         end
-      ensure
-        @client&.shutdown
-        peer&.close
-        replacement_peer&.close
+      end
+    end
+
+    def accept_websocket(peer)
+      handshake = WebSocket::Handshake::Server.new
+      handshake << peer.gets("\r\n\r\n")
+      peer.write(handshake.to_s)
+      handshake
+    end
+
+    def send_websocket_message(peer, handshake, message)
+      peer.write(WebSocket::Frame::Outgoing::Server.new(version: handshake.version, type: :text, data: message).to_s)
+    end
+
+    def read_websocket_message(peer, handshake)
+      frame = WebSocket::Frame::Incoming::Server.new(version: handshake.version)
+      loop do
+        frame << peer.readpartial(4096)
+        message = frame.next
+        return message.data if message
       end
     end
 

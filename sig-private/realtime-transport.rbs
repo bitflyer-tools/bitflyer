@@ -9,7 +9,7 @@ module Bitflyer
 
       def close_after_read_error: (Errno::ECONNRESET | OpenSSL::SSL::SSLError) -> void
 
-      def close_after_write_reset: (Errno::ECONNRESET) -> void
+      def write_message: (String) -> bool
 
       def close_for_shutdown: () -> void
 
@@ -17,7 +17,11 @@ module Bitflyer
 
       private
 
-      def close_from_reader: () -> void
+      def close_after_write_reset: (Errno::ECONNRESET) -> void
+
+      def write_interrupted?: () -> bool
+
+      def close_from_reader: (?Errno::ECONNRESET?) -> void
     end
 
     class WebSocketClient
@@ -30,6 +34,12 @@ module Bitflyer
 
       private
 
+      def notify_ready_after_subscribing: () -> void
+
+      def notify_ready: (WebSocket::Client::Simple::Client) -> void
+
+      def write_message: (WebSocket::Client::Simple::Client?, String) -> bool
+
       def close_expired_handshake: () -> void
 
       def take_expired_handshake: () -> Transport?
@@ -37,10 +47,6 @@ module Bitflyer
       def pending_handshake?: (Transport) -> bool
 
       def close_connections: () -> void
-
-      def write_ping: (WebSocket::Client::Simple::Client? socket) -> bool
-
-      def close_after_ping_reset: (WebSocket::Client::Simple::Client? socket, Errno::ECONNRESET) -> void
 
       def close_after_pong_timeout: (WebSocket::Client::Simple::Client? socket) -> void
 
