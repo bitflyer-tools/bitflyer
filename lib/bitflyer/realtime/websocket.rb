@@ -7,6 +7,9 @@ require 'bitflyer/realtime/transport'
 module Bitflyer
   module Realtime
     class WebSocketClient # rubocop:disable Metrics/ClassLength
+      SESSION_RESPONSE_TIMEOUT_MS = 10_000
+      private_constant :SESSION_RESPONSE_TIMEOUT_MS
+
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
                     :disconnected
       attr_reader :ready, :last_ping_at, :last_pong_at
@@ -104,7 +107,7 @@ module Bitflyer
         return unless now - last_pong_monotonic >= ping_interval + ping_timeout
 
         debug_log 'Timed out waiting pong'
-        close_after_pong_timeout(socket)
+        close_timed_out_socket(socket)
       end
 
       def last_ping_at=(timestamp)
@@ -164,11 +167,8 @@ module Bitflyer
       end
 
       def setup_by_response(json:)
-        body = JSON.parse json
-        @ping_interval = body['pingInterval']&.to_i || 25_000
-        @ping_timeout  = body['pingTimeout']&.to_i || 60_000
-        @last_ping_at = @last_pong_at = Time.now.to_i
-        @last_ping_monotonic = @last_pong_monotonic = monotonic_milliseconds
+        return unless apply_setup(JSON.parse(json))
+
         if @key && @secret
           authenticate
         else
@@ -192,6 +192,12 @@ module Bitflyer
       end
 
       def authenticated(json:)
+        @lifecycle_lock.synchronize do
+          deadline = @session_deadline
+          return unless deadline.is_a?(Array) && deadline[1] == :authentication
+
+          @session_deadline = nil
+        end
         return reject_authentication(json) if json != '[null]'
 
         debug_log 'Authenticated'
@@ -280,7 +286,7 @@ module Bitflyer
         socket.close_after_write_reset(error)
       end
 
-      def close_after_pong_timeout(socket)
+      def close_timed_out_socket(socket)
         socket&.close
       rescue IOError, SystemCallError
         raise unless heartbeat_interrupted?(socket)
@@ -347,13 +353,19 @@ module Bitflyer
       end
 
       def activate_transport(transport)
-        @lifecycle_lock.synchronize { replace_transport(transport) unless lifecycle_inactive? }
+        @lifecycle_lock.synchronize do
+          return if lifecycle_inactive?
+
+          replace_transport(transport)
+          @session_deadline = [monotonic_milliseconds + SESSION_RESPONSE_TIMEOUT_MS, :setup]
+        end
       end
 
       def replace_transport(transport)
         return if @websocket_client.equal?(transport)
 
         @ping_interval = @ping_timeout = nil
+        @session_deadline = nil
         self.last_ping_at = self.last_pong_at = nil
         @session_mutex.synchronize do
           @websocket_client = transport
@@ -383,14 +395,51 @@ module Bitflyer
       def start_monitoring
         Thread.new do
           while wait_for_monitor_tick
-            if @websocket_client&.open?
+            socket = @websocket_client
+            if !socket&.open?
+              reconnect
+            elsif !session_expired?(socket)
               send_ping
               wait_pong
-            else
-              reconnect
             end
           end
         end
+      end
+
+      def apply_setup(body)
+        @lifecycle_lock.synchronize do
+          deadline = @session_deadline
+          return false if deadline == :expired
+
+          initialize_heartbeat(body)
+          @session_deadline = authentication_deadline unless deadline.is_a?(Array) && deadline[1] == :authentication
+          true
+        end
+      end
+
+      def authentication_deadline
+        [monotonic_milliseconds + SESSION_RESPONSE_TIMEOUT_MS, :authentication] if @key && @secret
+      end
+
+      def initialize_heartbeat(body)
+        @ping_interval = body['pingInterval']&.to_i || 25_000
+        @ping_timeout = body['pingTimeout']&.to_i || 60_000
+        @last_ping_at = @last_pong_at = Time.now.to_i
+        @last_ping_monotonic = @last_pong_monotonic = monotonic_milliseconds
+      end
+
+      def session_expired?(socket)
+        stage = @lifecycle_lock.synchronize do
+          deadline = @session_deadline
+          return false if lifecycle_inactive? || !@websocket_client.equal?(socket) || !deadline.is_a?(Array)
+          return false if monotonic_milliseconds < deadline[0]
+
+          @session_deadline = :expired
+          deadline[1]
+        end
+        debug_log "Timed out waiting for Socket.IO #{stage} response"
+        close_timed_out_socket(socket)
+        true
       end
 
       def wait_for_monitor_tick

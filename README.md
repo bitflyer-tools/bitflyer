@@ -67,6 +67,8 @@ To subscribe to the private `child_order_events` and `parent_order_events`, pass
 The `ready` callback is called when the `realtime_client` is ready to receive events (after the socket connection is established, the optional authentication has succeeded, and the channels have been subscribed). If connection is lost, the `disconnected` callback is called, and reconnection is attempted automatically. When connection is restored, `ready` is called again.
 If setup finishes before registration, assigning `ready` delivers the pending notification synchronously, once per connection.
 
+The client closes and retries a connection if the Socket.IO setup packet or the authentication response takes 10 seconds to arrive. Each step has its own deadline, independent of heartbeat activity.
+
 If the server rejects authentication, the client closes the connection and passes a `RuntimeError` with the server response to `disconnected`. Authentication rejection stops automatic reconnection.
 
 Call `client.shutdown` when you finish using a realtime client. It stops automatic reconnection, closes the connection, and stops the monitoring thread. You can call it more than once, including from a `ready` or subscription callback.

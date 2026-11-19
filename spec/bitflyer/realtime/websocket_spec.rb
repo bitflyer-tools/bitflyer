@@ -89,6 +89,75 @@ describe Bitflyer::Realtime::WebSocketClient do
     expect(@client.websocket_client.websocket_client).to eq(socket)
   end
 
+  context 'when a session stalls before readiness' do
+    let(:reconnected) { Queue.new }
+    let(:pongs) { Queue.new }
+    let(:notifications) { Queue.new }
+
+    before do
+      @attempts = [nil, nil]
+      @session_time = 0
+      allow(Process).to receive(:clock_gettime).and_call_original
+      allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond) { @session_time }
+      allow(socket).to receive(:close) do
+        allow(socket).to receive_messages(open?: false, closed?: true)
+        handlers.fetch(:close).call(nil)
+      end
+      allow(socket).to receive(:close_on_eof) do
+        retrying = socket.closed?
+        allow(socket).to receive_messages(open?: true, closed?: false)
+        reconnected << true if retrying
+      end
+      allow(socket).to receive(:send).with('2') do
+        receive_message('3')
+        pongs << true
+      end
+    end
+
+    it 'retries an open socket that never sends the Socket.IO setup packet' do
+      @client = Bitflyer.realtime_client
+      @client.ready = -> { notifications << :ready }
+      @session_time = 10_000
+
+      Timeout.timeout(5) { reconnected.pop }
+      expect(socket).to have_received(:close).once
+      expect(socket).to have_received(:connect).twice
+      expect(notifications).to be_empty
+
+      receive_message('0{"pingInterval":1000}')
+      expect(notifications.pop(true)).to eq(:ready)
+      @session_time += 10_000
+      Timeout.timeout(5) { pongs.pop }
+      expect(socket).to have_received(:close).once
+    end
+
+    it 'retries when authentication stalls despite a current heartbeat' do
+      @client = Bitflyer.realtime_client('key', 'secret')
+      @client.ready = -> { notifications << :ready }
+      @session_time = 9_000
+      receive_message('0{"pingInterval":1000,"pingTimeout":1000}')
+
+      @session_time = 10_000
+      Timeout.timeout(5) { pongs.pop }
+      @session_time = 18_000
+      Timeout.timeout(5) { pongs.pop }
+      receive_message('0{"pingInterval":1000,"pingTimeout":1000}')
+      @session_time = 19_000
+      Timeout.timeout(5) { reconnected.pop }
+
+      expect(socket).to have_received(:close).once
+      expect(socket).to have_received(:connect).twice
+      expect(notifications).to be_empty
+
+      receive_message('0{"pingInterval":1000}')
+      receive_message('430[null]')
+      expect(notifications.pop(true)).to eq(:ready)
+      @session_time += 10_000
+      Timeout.timeout(5) { pongs.pop }
+      expect(socket).to have_received(:close).once
+    end
+  end
+
   it 'waits for authentication before replaying private subscriptions' do
     allow_any_instance_of(described_class).to receive(:start_monitoring)
     @attempts = [SocketError.new('DNS lookup failed'), nil]

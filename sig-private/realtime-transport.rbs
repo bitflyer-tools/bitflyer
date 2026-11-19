@@ -21,8 +21,11 @@ module Bitflyer
     end
 
     class WebSocketClient
+      SESSION_RESPONSE_TIMEOUT_MS: Integer
+
       @connection: [Transport, Thread]?
       @shutdown_lock: Mutex
+      @session_deadline: [Integer, :setup | :authentication] | :expired | nil
 
       private
 
@@ -32,7 +35,15 @@ module Bitflyer
 
       def close_after_ping_reset: (WebSocket::Client::Simple::Client? socket, Errno::ECONNRESET) -> void
 
-      def close_after_pong_timeout: (WebSocket::Client::Simple::Client? socket) -> void
+      def close_timed_out_socket: (WebSocket::Client::Simple::Client? socket) -> void
+
+      def apply_setup: (untyped body) -> bool
+
+      def authentication_deadline: () -> [Integer, :authentication]?
+
+      def initialize_heartbeat: (untyped body) -> void
+
+      def session_expired?: (WebSocket::Client::Simple::Client socket) -> bool
 
       def heartbeat_interrupted?: (WebSocket::Client::Simple::Client? socket) -> bool
 
