@@ -7,6 +7,9 @@ require 'bitflyer/realtime/transport'
 module Bitflyer
   module Realtime
     class WebSocketClient # rubocop:disable Metrics/ClassLength
+      CONNECTION_TIMEOUT = 10
+      private_constant :CONNECTION_TIMEOUT
+
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
                     :disconnected
       attr_reader :ready, :last_ping_at, :last_pong_at
@@ -325,7 +328,13 @@ module Bitflyer
       end
 
       def wait_for_connection(connection)
-        error = connection.last.value
+        connector = connection.last
+        unless connector.join(CONNECTION_TIMEOUT)
+          debug_log 'Timed out establishing the WebSocket transport'
+          return false
+        end
+
+        error = connector.value
         raise error if error
 
         true
@@ -377,7 +386,7 @@ module Bitflyer
 
         connector.kill
         connector.join
-        transport.close
+        transport.close_for_shutdown
       end
 
       def start_monitoring

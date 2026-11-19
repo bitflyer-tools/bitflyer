@@ -21,6 +21,8 @@ module Bitflyer
     end
 
     class WebSocketClient
+      CONNECTION_TIMEOUT: Integer
+
       @connection: [Transport, Thread]?
       @shutdown_lock: Mutex
 
