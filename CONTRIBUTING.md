@@ -12,6 +12,9 @@ bundle config set --local with typecheck
 bundle install
 ```
 
+See the [architecture guide](docs/architecture.md) for the HTTP and realtime
+client structure and where to start reading the code.
+
 ## Run the checks
 
 Run the same test, lint, and type-check commands used by
