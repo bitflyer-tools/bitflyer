@@ -3,6 +3,28 @@
 require 'spec_helper'
 
 describe Bitflyer::HTTP::Private::Client do
+  describe '#each_execution' do
+    it 'yields fills to a block and forwards order filters on every page' do
+      connection = instance_double(Bitflyer::HTTP::Connection)
+      allow(Bitflyer::HTTP::Connection).to receive(:new).with('test_key', 'test_secret').and_return(connection)
+      client = Bitflyer.http_private_client('test_key', 'test_secret')
+      filters = {
+        product_code: 'ETH_JPY', count: 2, after: 20,
+        child_order_id: 'order-id', child_order_acceptance_id: 'acceptance-id'
+      }
+      fill = { 'id' => 40 }
+      expect(connection).to receive(:get).with('/v1/me/getexecutions', filters.merge(before: 50))
+                                         .ordered.and_return(Bitflyer::HTTP::Response.new([fill]))
+      expect(connection).to receive(:get).with('/v1/me/getexecutions', filters.merge(before: 40))
+                                         .ordered.and_return(Bitflyer::HTTP::Response.new([]))
+
+      fills = []
+      client.each_execution(**filters, before: 50) { |execution| fills << execution }
+
+      expect(fills).to eq([fill])
+    end
+  end
+
   describe '#child_orders' do
     let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
     let(:connection) { instance_double(Bitflyer::HTTP::Connection) }
