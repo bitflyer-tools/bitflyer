@@ -18,6 +18,7 @@ GEM
     ffi (1.17.4-x86_64-darwin)
     ffi (1.17.4-x86_64-linux-gnu)
     fileutils (1.8.1)
+    gem-release (2.2.4)
     io-console (0.9.5)
     json (3.1.0)
     language_server-protocol (3.17.0.6)
@@ -121,6 +122,7 @@ PLATFORMS
 DEPENDENCIES
   bitflyer!
   bundler (~> 4.0)
+  gem-release (= 2.2.4)
   pry
   rake
   rspec
@@ -142,6 +144,7 @@ CHECKSUMS
   ffi (1.17.4-x86_64-darwin) sha256=aa70390523cf3235096cf64962b709b4cfbd5c082a2cb2ae714eb0fe2ccda496
   ffi (1.17.4-x86_64-linux-gnu) sha256=9d3db14c2eae074b382fa9c083fe95aec6e0a1451da249eab096c34002bc752d
   fileutils (1.8.1) sha256=2d541a1ee34a9ed5c4f054be8fb819a26b5d654488a31dc8806917cf448b9cc3
+  gem-release (2.2.4) sha256=2f11124c1580c811507c3b47e875e420cf3ed792a98105b49df11971e6e94db3
   io-console (0.9.5) sha256=83dd9bbf4c4680416629245b39cd4212eb5f4d9a4ea91804870c1f6b846414d5
   json (3.1.0) sha256=3ce7ccf8fde58960177a3a756c31f292a4c1e1dedee884547096a5b0604e3bd8
   language_server-protocol (3.17.0.6) sha256=5ef2c0c138f8267e1bc631d3328347d354f96724b0af22f2c79516120443b7f0
