@@ -140,7 +140,7 @@ describe 'Public health requests' do
     let(:http_response) { instance_double(Net::HTTPOK, code: '200', body: '{"status":"NORMAL"}') }
 
     before do
-      allow(Net::HTTP).to receive(:start).and_yield(http)
+      allow(Net::HTTP).to receive(:start).and_return(http)
       allow(http).to receive(:request).and_return(http_response)
     end
 
