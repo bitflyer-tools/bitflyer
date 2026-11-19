@@ -96,6 +96,25 @@ module Bitflyer
           ?child_order_acceptance_id: String?
         ) -> untyped
 
+        def each_execution: (
+          ?product_code: String,
+          ?count: Integer?,
+          ?before: Integer?,
+          ?after: Integer?,
+          ?child_order_id: String?,
+          ?child_order_acceptance_id: String?,
+          ?max_pages: Integer
+        ) -> Enumerator[untyped, untyped]
+                          | (
+          ?product_code: String,
+          ?count: Integer?,
+          ?before: Integer?,
+          ?after: Integer?,
+          ?child_order_id: String?,
+          ?child_order_acceptance_id: String?,
+          ?max_pages: Integer
+        ) { (untyped) -> void } -> nil
+
         def balance_history: (?currency_code: String?, ?count: Integer?, ?before: Integer?, ?after: Integer?) -> untyped
 
         def positions: (?product_code: String) -> untyped
