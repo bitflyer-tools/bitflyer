@@ -36,11 +36,11 @@ module Bitflyer
         def withdrawals: (?count: Integer?, ?before: Integer?, ?after: Integer?) -> untyped
 
         def send_child_order: (
+          child_order_type: String,
+          side: String,
+          size: Numeric,
           ?product_code: String,
-          ?child_order_type: String?,
-          ?side: String?,
           ?price: Numeric?,
-          ?size: Numeric?,
           ?minute_to_expire: Integer?,
           ?time_in_force: String
         ) -> untyped

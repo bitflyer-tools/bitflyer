@@ -34,6 +34,9 @@ See https://lightning.bitflyer.jp/docs for details.
 
 See [public.rb](./lib/bitflyer/http/public.rb) / [private.rb](./lib/bitflyer/http/private.rb) for method definition.
 
+`send_child_order` requires `child_order_type`, `side`, and `size`. A `LIMIT` order also requires
+`price`. Missing or nil required values raise `ArgumentError` before an HTTP request is made.
+
 HTTP responses outside the 2xx range raise `Bitflyer::HTTP::ResponseError`. The error provides
 the numeric HTTP status in `status` and the raw response body in `body`.
 
