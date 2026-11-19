@@ -8,6 +8,7 @@ module Bitflyer
       @lifecycle_lock: Mutex
       @monitor_wakeup: Thread::ConditionVariable
       @stopped: bool
+      @reconnect_delay: Float?
       @authentication_error: RuntimeError?
       @monitor: Thread?
       @session_mutex: Thread::Mutex
@@ -68,7 +69,13 @@ module Bitflyer
 
       def start_monitoring: () -> Thread
 
-      def wait_for_monitor_tick: () -> bool
+      def wait_for_monitor_tick: () -> (:retry | :poll)?
+
+      def poll_transport: () -> void
+
+      def advance_reconnect_delay: () -> void
+
+      def jittered_reconnect_delay: () -> Float
 
       def lifecycle_inactive?: () -> bool
 

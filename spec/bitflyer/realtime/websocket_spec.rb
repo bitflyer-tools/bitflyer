@@ -79,16 +79,18 @@ describe Bitflyer::Realtime::WebSocketClient do
   before do
     allow(socket).to receive(:on) { |event, &handler| handlers[event] = handler }
     allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket)
-    allow(socket).to receive(:connect) do
-      attempt = @attempts.shift
-      raise attempt if attempt
-
-      handlers.fetch(:open).call
-    end
+    allow(socket).to receive(:connect) { connect_socket }
     allow($stdout).to receive(:puts)
   end
 
   after { @client&.shutdown }
+
+  def connect_socket
+    attempt = @attempts.shift
+    raise attempt if attempt
+
+    handlers.fetch(:open).call
+  end
 
   def receive_message(data)
     handlers.fetch(:message).call(double('WebSocket payload', data: data))
@@ -143,16 +145,59 @@ describe Bitflyer::Realtime::WebSocketClient do
     expect(socket).to have_received(:send).with('42["subscribe","lightning_ticker_BTC_JPY"]').once
   end
 
-  it 'keeps the monitor alive after a refused retry' do
-    @attempts = [SocketError.new('DNS lookup failed'), Errno::ECONNREFUSED.new, nil]
-    reconnected = Queue.new
-    allow(socket).to receive(:close_on_eof) { reconnected << true }
+  def measure_retries(random:, ticks:)
+    wakeup = ConditionVariable.new
+    waiting = Queue.new
+    delays = []
+    now = 0
+    allow(Process).to receive(:clock_gettime).and_call_original
+    allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond) { now }
+    allow(ConditionVariable).to receive(:new).and_return(wakeup)
+    allow_any_instance_of(described_class).to receive(:rand).and_return(random)
+    allow(wakeup).to receive(:wait).and_wrap_original do |wait, lock, delay|
+      delays << delay
+      if delays.size == ticks
+        waiting << true
+        wait.call(lock, delay)
+      else
+        now += (delay * 1000).to_i
+      end
+    end
 
     @client = Bitflyer.realtime_client
+    allow(ConditionVariable).to receive(:new).and_call_original
+    Timeout.timeout(5) { waiting.pop }
+    Timeout.timeout(5) { @client.shutdown }
+    delays
+  end
 
-    Timeout.timeout(5) { reconnected.pop }
-    expect(socket).to have_received(:connect).exactly(3).times
-    expect(@client.websocket_client.websocket_client).to eq(socket)
+  it 'increases retry delays to a cap and interrupts the capped wait on shutdown' do
+    @attempts = Array.new(8) { Errno::ECONNREFUSED.new }
+
+    expect(measure_retries(random: 0.5, ticks: 8)).to eq([0.75, 1.5, 3, 6, 12, 22.5, 22.5, 22.5])
+    expect(socket).to have_received(:connect).exactly(8).times
+  end
+
+  it 'uses different retry delays across clients with different jitter samples' do
+    delays = [0.25, 0.75].map do |random|
+      @attempts = [Errno::ECONNREFUSED.new, Errno::ECONNREFUSED.new]
+      measure_retries(random: random, ticks: 2)
+    end
+
+    expect(delays).to eq([[0.625, 1.25], [0.875, 1.75]])
+  end
+
+  it 'resets the delay when a session becomes ready before disconnecting' do
+    @attempts = [Errno::ECONNREFUSED.new, Errno::ECONNREFUSED.new, nil, Errno::ECONNREFUSED.new]
+    allow(socket).to receive(:connect) do
+      connect_socket
+      receive_message('0{}')
+      allow(socket).to receive_messages(open?: false, closed?: true)
+      handlers.fetch(:close).call(nil)
+    end
+
+    expect(measure_retries(random: 0.5, ticks: 4)).to eq([0.75, 1.5, 0.75, 1.5])
+    expect(socket).to have_received(:connect).exactly(4).times
   end
 
   it 'waits for authentication before replaying private subscriptions' do
