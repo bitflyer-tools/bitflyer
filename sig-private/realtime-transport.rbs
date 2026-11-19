@@ -1,23 +1,27 @@
 module Bitflyer
   module Realtime
-    class Transport < WebSocket::Client::Simple::Client
-      @socket: (TCPSocket | OpenSSL::SSL::SSLSocket)?
-      @pipe_broken: bool
-      @closed: bool?
-
-      attr_reader read_error: (Errno::ECONNRESET | OpenSSL::SSL::SSLError)?
-
-      def close_after_read_error: (Errno::ECONNRESET | OpenSSL::SSL::SSLError) -> void
-
-      def close_after_write_reset: (Errno::ECONNRESET) -> void
-
-      def close_for_shutdown: () -> void
-
-      def close_on_eof: () -> void
+    class Transport
+      @socket: (OpenSSL::SSL::SSLSocket | TCPSocket)?
+      @closed: bool
+      @driver: WebSocket::Driver?
+      @driver_lock: Mutex
+      @close_lock: Mutex
+      @handlers: Hash[Symbol, ^(untyped) -> void]
+      @events: Array[[Symbol, untyped]]
 
       private
 
-      def close_from_reader: () -> void
+      def setup_driver: () -> WebSocket::Driver
+
+      def connect_tls: (URI::Generic) -> (OpenSSL::SSL::SSLSocket | TCPSocket)
+
+      def read_messages: () -> void
+
+      def read_handshake: (OpenSSL::SSL::SSLSocket | TCPSocket) -> void
+
+      def parse: (String) -> void
+
+      def terminate: (?untyped error, ?notify: bool) -> void
     end
 
     class WebSocketClient
@@ -38,19 +42,12 @@ module Bitflyer
 
       def close_connections: () -> void
 
-      def write_ping: (WebSocket::Client::Simple::Client? socket) -> bool
 
-      def close_after_ping_reset: (WebSocket::Client::Simple::Client? socket, Errno::ECONNRESET) -> void
-
-      def close_after_pong_timeout: (WebSocket::Client::Simple::Client? socket) -> void
-
-      def heartbeat_interrupted?: (WebSocket::Client::Simple::Client? socket) -> bool
-
-      def stop_lifecycle: () -> [WebSocket::Client::Simple::Client?, [Transport, Thread]?]
+      def stop_lifecycle: () -> [Transport?, [Transport, Thread]?]
 
       def start_connection: () -> [Transport, Thread]?
 
-      def wait_for_connection: ([Transport, Thread]) -> bool
+      def wait_for_connection: ([Transport, Thread]) -> void
 
       def register_transport_handlers: (Transport) -> void
 

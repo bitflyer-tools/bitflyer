@@ -8,12 +8,15 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
   let(:original) { transport_class.new }
   let(:replacement) { transport_class.new }
   let(:client) { described_class.new(host: 'wss://example.com', key: nil, secret: nil) }
+  let(:handlers) { Hash.new { |sockets, transport| sockets[transport] = {} } }
   let(:setup_message) { Struct.new(:data).new('0{}') }
 
   before do
     [original, replacement].each do |transport|
       allow(transport).to receive(:connect)
-      allow(transport).to receive(:close_for_shutdown) { transport.emit(:close, nil) }
+      allow(transport).to receive_messages(open?: false, closed?: false)
+      allow(transport).to receive(:on) { |event, &handler| handlers[transport][event] = handler }
+      allow(transport).to receive(:close_for_shutdown) { handlers[transport].fetch(:close).call(nil) }
     end
     allow(transport_class).to receive(:new).and_return(original, replacement)
     allow_any_instance_of(described_class).to receive(:start_monitoring)
@@ -30,8 +33,8 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
     @now += 1_000
     client.reconnect
     allow(original).to receive(:open?).and_return(true)
-    original.emit(:open)
-    original.emit(:message, setup_message)
+    handlers[original].fetch(:open).call
+    handlers[original].fetch(:message).call(setup_message)
 
     expect(client.websocket_client).to equal(original)
     expect(original).not_to have_received(:close_for_shutdown)
@@ -47,10 +50,9 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
 
     @now += 10_000
     client.reconnect
-    original.emit(:open)
-    original.emit(:message, setup_message)
-    original.emit(:error, Errno::ECONNRESET.new)
-    original.emit(:close, nil)
+    handlers[original].fetch(:open).call
+    handlers[original].fetch(:message).call(setup_message)
+    handlers[original].fetch(:close).call(nil)
 
     expect(client.websocket_client).to equal(replacement)
     expect(client.last_pong_at).to be_nil
@@ -61,7 +63,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
     disconnected = []
     client.disconnected = ->(error) { disconnected << error }
     allow(original).to receive(:closed?).and_return(true)
-    original.emit(:close, nil)
+    handlers[original].fetch(:close).call(nil)
     client.reconnect
 
     expect(client.websocket_client).to equal(replacement)
@@ -72,7 +74,7 @@ end
 describe Bitflyer::Realtime::WebSocketClient do
   let(:socket) do
     instance_double(Bitflyer::Realtime::Transport, open?: true, closed?: false, send: nil, close: nil,
-                    close_on_eof: nil, close_for_shutdown: nil, read_error: nil)
+                    close_for_shutdown: nil)
   end
   let(:handlers) { {} }
 
@@ -84,6 +86,7 @@ describe Bitflyer::Realtime::WebSocketClient do
       raise attempt if attempt
 
       handlers.fetch(:open).call
+      @reconnected&.push(true)
     end
     allow($stdout).to receive(:puts)
   end
@@ -151,12 +154,11 @@ describe Bitflyer::Realtime::WebSocketClient do
 
   it 'keeps the monitor alive after a refused retry' do
     @attempts = [SocketError.new('DNS lookup failed'), Errno::ECONNREFUSED.new, nil]
-    reconnected = Queue.new
-    allow(socket).to receive(:close_on_eof) { reconnected << true }
+    @reconnected = Queue.new
 
     @client = Bitflyer.realtime_client
 
-    Timeout.timeout(5) { reconnected.pop }
+    Timeout.timeout(5) { @reconnected.pop }
     expect(socket).to have_received(:connect).exactly(3).times
     expect(@client.websocket_client.websocket_client).to eq(socket)
   end
@@ -183,14 +185,13 @@ describe Bitflyer::Realtime::WebSocketClient do
 
   it 'stops retrying and leaves queued subscriptions unsent when authentication is rejected' do
     @attempts = [SocketError.new('DNS lookup failed'), nil]
-    reconnected = Queue.new
-    allow(socket).to receive(:close_on_eof) { reconnected << true }
+    @reconnected = Queue.new
     allow_any_instance_of(described_class).to receive(:start_monitoring).and_wrap_original do |start|
       @monitor = start.call
     end
     @client = Bitflyer.realtime_client('key', 'secret')
     @client.child_order_events = ->(_event) {}
-    Timeout.timeout(5) { reconnected.pop }
+    Timeout.timeout(5) { @reconnected.pop }
     errors = []
     notifications = []
     @client.disconnected = ->(error) { errors << error }
@@ -218,7 +219,7 @@ describe Bitflyer::Realtime::WebSocketClient, 'when replacing a socket' do
 
   before do
     [original_socket, replacement_socket].each do |socket|
-      allow(socket).to receive_messages(connect: nil, close_on_eof: nil)
+      allow(socket).to receive_messages(connect: nil)
       allow(socket).to receive(:on) do |event, &handler|
         message_handlers[socket] = handler if event == :message
       end
@@ -270,7 +271,7 @@ end
 RSpec.describe Bitflyer::Realtime::WebSocketClient do
   subject(:client) { described_class.new(host: 'wss://example.test', key: key, secret: secret) }
 
-  let(:socket) { instance_double(Bitflyer::Realtime::Transport, on: nil, send: nil, close: nil, connect: nil, close_on_eof: nil) }
+  let(:socket) { instance_double(Bitflyer::Realtime::Transport, on: nil, send: nil, close: nil, connect: nil) }
   let(:key) { nil }
   let(:secret) { nil }
 
@@ -510,7 +511,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 end
 
 describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
-  let(:socket) { instance_double(Bitflyer::Realtime::Transport, on: nil, send: nil, close: nil, connect: nil, close_on_eof: nil) }
+  let(:socket) { instance_double(Bitflyer::Realtime::Transport, on: nil, send: nil, close: nil, connect: nil, open?: true) }
   let(:host) { 'wss://example.test' }
   let(:key) { nil }
   let(:secret) { nil }

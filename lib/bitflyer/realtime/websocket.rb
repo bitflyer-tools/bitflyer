@@ -68,7 +68,8 @@ module Bitflyer
         connection = start_connection
         return unless connection
 
-        connected = wait_for_connection(connection)
+        wait_for_connection(connection)
+        connected = true
       rescue SocketError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::ETIMEDOUT,
              Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
         puts e
@@ -86,7 +87,8 @@ module Bitflyer
         now = monotonic_milliseconds
         return unless now - last_ping_monotonic >= ping_interval
 
-        return unless write_ping(socket)
+        debug_log 'Sent ping'
+        return if socket&.send('2') == false
 
         @lifecycle_lock.synchronize do
           if @websocket_client.equal?(socket)
@@ -107,7 +109,7 @@ module Bitflyer
         return unless now - last_pong_monotonic >= ping_interval + ping_timeout
 
         debug_log 'Timed out waiting pong'
-        close_after_pong_timeout(socket)
+        socket&.close
       end
 
       def last_ping_at=(timestamp)
@@ -123,17 +125,12 @@ module Bitflyer
       def reconnect
         debug_log 'Reconnecting...'
         connect
+      rescue OpenSSL::SSL::SSLError => e
+        debug_log e
       end
 
-      def handle_error(error:, transport: @websocket_client)
+      def handle_error(error:)
         debug_log error
-        return unless error.is_a?(Errno::ECONNRESET) || error.is_a?(OpenSSL::SSL::SSLError)
-        return unless transport.is_a? Transport
-        return unless @lifecycle_lock.synchronize do
-          !lifecycle_inactive? && [@websocket_client, @connection&.first].include?(transport)
-        end
-
-        transport.close_after_read_error(error)
       end
 
       def handle_message(payload:) # rubocop:disable Metrics/CyclomaticComplexity
@@ -311,51 +308,7 @@ module Bitflyer
           connector.join
           transport.close_for_shutdown unless transport.equal?(socket)
         end
-        if socket.is_a?(Transport)
-          socket.close_for_shutdown
-        else
-          socket&.close
-        end
-      end
-
-      def write_ping(socket)
-        debug_log 'Sent ping'
-        socket&.send '2'
-        true
-      rescue Errno::ECONNRESET => e
-        close_after_ping_reset(socket, e)
-        false
-      rescue IOError, SystemCallError
-        raise unless heartbeat_interrupted?(socket)
-
-        false
-      rescue NoMethodError => e
-        # The transport can clear its socket after the send has started.
-        raise unless e.name == :write && e.receiver.nil? && heartbeat_interrupted?(socket)
-
-        false
-      end
-
-      def close_after_ping_reset(socket, error)
-        return if heartbeat_interrupted?(socket)
-
-        raise error unless socket.is_a?(Transport)
-
-        socket.close_after_write_reset(error)
-      end
-
-      def close_after_pong_timeout(socket)
-        socket&.close
-      rescue IOError, SystemCallError
-        raise unless heartbeat_interrupted?(socket)
-      rescue NoMethodError => e
-        raise unless e.name == :write && e.receiver.nil? && heartbeat_interrupted?(socket)
-      end
-
-      def heartbeat_interrupted?(socket)
-        return true if socket.is_a?(Transport) && (socket.read_error || socket.closed?)
-
-        @lifecycle_lock.synchronize { lifecycle_inactive? }
+        socket&.close_for_shutdown
       end
 
       def stop_lifecycle
@@ -392,12 +345,6 @@ module Bitflyer
       def wait_for_connection(connection)
         error = connection.last.value
         raise error if error
-
-        true
-      rescue OpenSSL::SSL::SSLError
-        raise unless connection.first.read_error
-
-        false
       end
 
       def register_transport_handlers(transport)
@@ -407,8 +354,7 @@ module Bitflyer
         transport.on(:message) do |payload|
           this.handle_message(payload: payload) if this.websocket_client.equal?(transport)
         end
-        transport.on(:error) { |error| this.handle_error(error: error, transport: transport) }
-        transport.on(:close) { |error| this.handle_close(error: error || transport.read_error, socket: transport) }
+        transport.on(:close) { |error| this.handle_close(error: error, socket: transport) }
       end
 
       def activate_transport(transport)
@@ -440,7 +386,6 @@ module Bitflyer
 
           if connected
             replace_transport(transport) unless @authentication_error
-            transport.close_on_eof
           else
             @handshake_deadline = nil
           end
@@ -450,7 +395,7 @@ module Bitflyer
 
         connector.kill
         connector.join
-        transport.close
+        transport.close_for_shutdown
       end
 
       def start_monitoring
