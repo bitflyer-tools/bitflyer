@@ -136,17 +136,17 @@ module Bitflyer
       def handle_message(payload:) # rubocop:disable Metrics/CyclomaticComplexity
         return if @lifecycle_lock.synchronize { lifecycle_inactive? }
 
-        debug_log payload.data
-        return unless payload.data =~ /^\d+/
+        data = payload.data
+        debug_log data
+        prefix = /\A\d+/.match(data)
+        return unless prefix
 
-        code, body = payload.data.scan(/^(\d+)(.*)$/)[0]
-
-        case code.to_i
-        when 0 then setup_by_response(json: body)
+        case prefix[0].to_i
+        when 0 then setup_by_response(json: prefix.post_match)
         when 3 then receive_pong
         when 41 then disconnect
-        when 42 then emit_message(json: body)
-        when 430 then authenticated(json: body)
+        when 42 then emit_message(json: prefix.post_match)
+        when 430 then authenticated(json: prefix.post_match)
         end
       rescue StandardError => e
         puts e
