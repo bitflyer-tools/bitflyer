@@ -39,8 +39,8 @@ module Bitflyer
           ?product_code: String,
           ?child_order_type: String?,
           ?side: String?,
-          ?price: Numeric?,
-          ?size: Numeric?,
+          ?price: (Integer | Float)?,
+          ?size: (Integer | Float)?,
           ?minute_to_expire: Integer?,
           ?time_in_force: String
         ) -> untyped
@@ -51,8 +51,9 @@ module Bitflyer
           ?child_order_acceptance_id: String?
         ) -> untyped
 
+        # Condition sizes, prices, and trigger prices accept Integer or finite Float. Offsets accept Integer.
         def send_parent_order: (
-          parameters: Array[Hash[Symbol, untyped]],
+          parameters: Array[Hash[Symbol, untyped] | Hash[String, untyped]],
           ?order_method: String?,
           ?minute_to_expire: Integer?,
           ?time_in_force: String
@@ -101,6 +102,12 @@ module Bitflyer
         def positions: (?product_code: String) -> untyped
 
         def trading_commission: (?product_code: String) -> untyped
+
+        private
+
+        def validate_order_numbers: (Hash[untyped, untyped] fields) -> void
+
+        def json_number?: (untyped value) -> bool
       end
     end
   end

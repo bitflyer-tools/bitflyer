@@ -37,6 +37,10 @@ See [public.rb](./lib/bitflyer/http/public.rb) / [private.rb](./lib/bitflyer/htt
 HTTP responses outside the 2xx range raise `Bitflyer::HTTP::ResponseError`. The error provides
 the numeric HTTP status in `status` and the raw response body in `body`.
 
+Order quantities and prices accept integers and finite floats. This also applies to the trigger price
+in parent order conditions. Pass expiration minutes and trailing offsets as integers. The client
+raises `ArgumentError` before sending an order with an unsupported value such as a `BigDecimal`.
+
 #### Example
 
 ```ruby
