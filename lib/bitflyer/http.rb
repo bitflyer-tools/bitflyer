@@ -13,6 +13,36 @@ module Bitflyer
 
     Response = Struct.new(:body)
 
+    module ExecutionHistory
+      DEFAULT_MAX_PAGES = 10
+
+      def self.stream(before, max_pages)
+        validate_page_budget(max_pages)
+
+        Enumerator.new do |yielder|
+          cursor = before
+          max_pages.times do
+            page = yield(cursor)
+            break if page.empty?
+
+            next_cursor = page.map { |execution| execution.fetch('id') }.min
+            break if cursor && next_cursor >= cursor
+
+            page.each { |execution| yielder << execution }
+            cursor = next_cursor
+          end
+        end
+      end
+
+      def self.validate_page_budget(max_pages)
+        return if max_pages.is_a?(Integer) && max_pages >= 0
+
+        raise ArgumentError, 'max_pages must be a non-negative integer'
+      end
+      private_class_method :validate_page_budget
+    end
+    private_constant :ExecutionHistory
+
     class ResponseError < StandardError
       attr_reader :status, :body
 
