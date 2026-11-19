@@ -33,7 +33,7 @@ module Bitflyer
           ?code: String?
         ) -> untyped
 
-        def withdrawals: (?count: Integer?, ?before: Integer?, ?after: Integer?) -> untyped
+        def withdrawals: (?count: Integer?, ?before: Integer?, ?after: Integer?, ?message_id: String?) -> untyped
 
         def send_child_order: (
           ?product_code: String,
