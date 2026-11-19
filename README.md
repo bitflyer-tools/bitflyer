@@ -34,6 +34,10 @@ See https://lightning.bitflyer.jp/docs for details.
 
 See [public.rb](./lib/bitflyer/http/public.rb) / [private.rb](./lib/bitflyer/http/private.rb) for method definition.
 
+For a successful (2xx) HTTP response, the client returns the parsed Ruby value if the body is valid JSON.
+If the body is non-JSON text or an empty string, the client returns the original string.
+If the response has no body, the client returns `nil`.
+
 HTTP responses outside the 2xx range raise `Bitflyer::HTTP::ResponseError`. The error provides
 the numeric HTTP status in `status` and the raw response body in `body`.
 
@@ -105,7 +109,7 @@ client.disconnected = ->(error) { p "Client got disconnected" }
 ### Type signatures
 
 The gem ships [RBS](https://github.com/ruby/rbs) signatures in `sig/`, so [Steep](https://github.com/soutaro/steep) and other RBS-based tools
-can check code that uses it. API responses are parsed JSON and are typed as `untyped`.
+can check code that uses it. API responses are typed as `untyped`.
 
 To type check the gem itself:
 
