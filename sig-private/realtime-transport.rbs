@@ -53,6 +53,7 @@ module Bitflyer
       def initialize_heartbeat: (untyped body) -> void
 
       def session_expired?: (WebSocket::Client::Simple::Client socket) -> bool
+      def session_deadline_elapsed?: ([Integer, :setup | :authentication] deadline) -> bool
 
       def heartbeat_interrupted?: (WebSocket::Client::Simple::Client? socket) -> bool
 

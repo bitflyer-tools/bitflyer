@@ -197,6 +197,7 @@ module Bitflyer
         @lifecycle_lock.synchronize do
           deadline = @session_deadline
           return unless deadline.is_a?(Array) && deadline[1] == :authentication
+          return if session_deadline_elapsed?(deadline)
 
           @session_deadline = nil
         end
@@ -449,6 +450,7 @@ module Bitflyer
         @lifecycle_lock.synchronize do
           deadline = @session_deadline
           return false if deadline == :expired
+          return false if deadline.is_a?(Array) && session_deadline_elapsed?(deadline)
 
           initialize_heartbeat(body)
           @session_deadline = authentication_deadline unless deadline.is_a?(Array) && deadline[1] == :authentication
@@ -471,7 +473,7 @@ module Bitflyer
         stage = @lifecycle_lock.synchronize do
           deadline = @session_deadline
           return false if lifecycle_inactive? || !@websocket_client.equal?(socket) || !deadline.is_a?(Array)
-          return false if monotonic_milliseconds < deadline[0]
+          return false unless session_deadline_elapsed?(deadline)
 
           @session_deadline = :expired
           deadline[1]
@@ -479,6 +481,10 @@ module Bitflyer
         debug_log "Timed out waiting for Socket.IO #{stage} response"
         close_timed_out_socket(socket)
         true
+      end
+
+      def session_deadline_elapsed?(deadline)
+        monotonic_milliseconds >= deadline[0]
       end
 
       def wait_for_monitor_tick

@@ -197,6 +197,41 @@ describe Bitflyer::Realtime::WebSocketClient do
       end
     end
 
+    it 'ignores a setup packet received at the deadline before the monitor runs' do
+      allow_any_instance_of(described_class).to receive(:start_monitoring)
+      @client = Bitflyer.realtime_client
+      @client.ready = -> { notifications << :ready }
+      @client.ticker_btc_jpy = ->(_event) {}
+      @session_time = 10_000
+
+      receive_message('0{}')
+
+      expect(socket).not_to have_received(:send)
+      expect(notifications).to be_empty
+      expect(@client.websocket_client.send(:session_expired?, socket)).to be(true)
+      expect(socket).to have_received(:close).once
+    end
+
+    { 'success' => '[null]', 'rejection' => '[{"message":"denied"}]' }.each do |result, response|
+      it "ignores an authentication #{result} received at the deadline before the monitor runs" do
+        allow_any_instance_of(described_class).to receive(:start_monitoring)
+        @client = Bitflyer.realtime_client('key', 'secret')
+        @client.ready = -> { notifications << :ready }
+        @client.disconnected = ->(_error) { notifications << :disconnected }
+        @client.child_order_events = ->(_event) {}
+        @session_time = 9_000
+        receive_message('0{}')
+        @session_time = 19_000
+
+        receive_message("430#{response}")
+
+        expect(socket).not_to have_received(:send).with('42["subscribe","child_order_events"]')
+        expect(notifications).to be_empty
+        expect(@client.websocket_client.send(:session_expired?, socket)).to be(true)
+        expect(socket).to have_received(:close).once
+      end
+    end
+
     it 'retries an open socket that never sends the Socket.IO setup packet' do
       @client = Bitflyer.realtime_client
       @client.ready = -> { notifications << :ready }
