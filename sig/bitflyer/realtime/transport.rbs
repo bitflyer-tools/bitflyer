@@ -1,0 +1,28 @@
+module Bitflyer
+  module Realtime
+    class Transport
+      HANDSHAKE_TIMEOUT: Integer
+
+      attr_reader url: String?
+      attr_reader thread: Thread?
+
+      def initialize: () -> void
+
+      def connect: (String url) -> void
+
+      def on: (Symbol event) { (untyped) -> void } -> void
+
+      def closed?: () -> bool
+
+      def open?: () -> bool
+
+      def send: (String data) -> bool?
+
+      def close: () -> void
+
+      def close_for_shutdown: () -> void
+
+      def write: (String data) -> Integer
+    end
+  end
+end
