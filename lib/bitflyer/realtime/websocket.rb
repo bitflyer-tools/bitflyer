@@ -7,8 +7,9 @@ require 'bitflyer/realtime/transport'
 module Bitflyer
   module Realtime
     class WebSocketClient # rubocop:disable Metrics/ClassLength
+      HANDSHAKE_TIMEOUT_MS = 10_000
       SESSION_RESPONSE_TIMEOUT_MS = 10_000
-      private_constant :SESSION_RESPONSE_TIMEOUT_MS
+      private_constant :HANDSHAKE_TIMEOUT_MS, :SESSION_RESPONSE_TIMEOUT_MS
 
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
                     :disconnected
@@ -65,6 +66,7 @@ module Bitflyer
       end
 
       def connect
+        close_expired_handshake
         connection = start_connection
         return unless connection
 
@@ -139,17 +141,17 @@ module Bitflyer
       def handle_message(payload:) # rubocop:disable Metrics/CyclomaticComplexity
         return if @lifecycle_lock.synchronize { lifecycle_inactive? }
 
-        debug_log payload.data
-        return unless payload.data =~ /^\d+/
+        data = payload.data
+        debug_log data
+        prefix = /\A\d+/.match(data)
+        return unless prefix
 
-        code, body = payload.data.scan(/^(\d+)(.*)$/)[0]
-
-        case code.to_i
-        when 0 then setup_by_response(json: body)
+        case prefix[0].to_i
+        when 0 then setup_by_response(json: prefix.post_match)
         when 3 then receive_pong
         when 41 then disconnect
-        when 42 then emit_message(json: body)
-        when 430 then authenticated(json: body)
+        when 42 then emit_message(json: prefix.post_match)
+        when 430 then authenticated(json: prefix.post_match)
         end
       rescue StandardError => e
         puts e
@@ -246,6 +248,38 @@ module Bitflyer
 
       private
 
+      def close_expired_handshake
+        socket = take_expired_handshake
+        return unless socket
+
+        begin
+          socket.close_for_shutdown
+        ensure
+          @lifecycle_lock.synchronize { @expiring_handshake = false }
+        end
+      end
+
+      def take_expired_handshake
+        @lifecycle_lock.synchronize do
+          socket = @websocket_client
+          deadline = @handshake_deadline
+          return unless socket.is_a?(Transport) && deadline && monotonic_milliseconds >= deadline
+          return unless pending_handshake?(socket)
+
+          @expiring_handshake = true
+          @handshake_deadline = nil
+          @session_mutex.synchronize do
+            @websocket_client = nil
+            clear_readiness
+          end
+          socket
+        end
+      end
+
+      def pending_handshake?(socket)
+        !lifecycle_inactive? && !@connection && !socket.open? && !socket.closed?
+      end
+
       def close_connections
         socket, connection = stop_lifecycle
         if connection
@@ -315,11 +349,12 @@ module Bitflyer
       def start_connection
         @lifecycle_lock.synchronize do
           socket = @websocket_client
-          return if lifecycle_inactive? || @connection || (socket && !socket.closed?)
+          return if lifecycle_inactive? || @connection || @expiring_handshake || (socket && !socket.closed?)
 
           reset_readiness(socket)
           transport = Transport.new
           register_transport_handlers(transport)
+          @handshake_deadline = monotonic_milliseconds + HANDSHAKE_TIMEOUT_MS
           connector = Thread.new do
             transport.connect "#{@host}/socket.io/?transport=websocket"
             nil
@@ -355,8 +390,10 @@ module Bitflyer
       def activate_transport(transport)
         @lifecycle_lock.synchronize do
           return if lifecycle_inactive?
+          return unless @connection&.first.equal?(transport) || @websocket_client.equal?(transport)
 
           replace_transport(transport)
+          @handshake_deadline = nil
           @session_deadline = [monotonic_milliseconds + SESSION_RESPONSE_TIMEOUT_MS, :setup]
         end
       end
@@ -382,6 +419,8 @@ module Bitflyer
           if connected
             replace_transport(transport) unless @authentication_error
             transport.close_on_eof
+          else
+            @handshake_deadline = nil
           end
           !connected
         end
