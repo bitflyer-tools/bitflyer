@@ -3,6 +3,72 @@
 require 'spec_helper'
 require 'timeout'
 
+RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
+  let(:transport_class) { Bitflyer::Realtime::Transport }
+  let(:original) { transport_class.new }
+  let(:replacement) { transport_class.new }
+  let(:client) { described_class.new(host: 'wss://example.com', key: nil, secret: nil) }
+  let(:setup_message) { Struct.new(:data).new('0{}') }
+
+  before do
+    [original, replacement].each do |transport|
+      allow(transport).to receive(:connect)
+      allow(transport).to receive(:close_for_shutdown) { transport.emit(:close, nil) }
+    end
+    allow(transport_class).to receive(:new).and_return(original, replacement)
+    allow_any_instance_of(described_class).to receive(:start_monitoring)
+    allow(Process).to receive(:clock_gettime).and_call_original
+    allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond) { @now }
+    @now = 100_000
+  end
+
+  after { client.shutdown }
+
+  it 'keeps a pending handshake on the same socket past the first monitor tick' do
+    client.ready = -> { @ready = true }
+
+    @now += 1_000
+    client.reconnect
+    allow(original).to receive(:open?).and_return(true)
+    original.emit(:open)
+    original.emit(:message, setup_message)
+
+    expect(client.websocket_client).to equal(original)
+    expect(original).not_to have_received(:close_for_shutdown)
+    expect(replacement).not_to have_received(:connect)
+    expect(@ready).to be(true)
+  end
+
+  it 'closes a timed-out socket before replacing it and ignores its late events' do
+    expect(original).to receive(:close_for_shutdown).ordered.and_call_original
+    expect(replacement).to receive(:connect).ordered
+    disconnected = []
+    client.disconnected = ->(error) { disconnected << error }
+
+    @now += 10_000
+    client.reconnect
+    original.emit(:open)
+    original.emit(:message, setup_message)
+    original.emit(:error, Errno::ECONNRESET.new)
+    original.emit(:close, nil)
+
+    expect(client.websocket_client).to equal(replacement)
+    expect(client.last_pong_at).to be_nil
+    expect(disconnected).to be_empty
+  end
+
+  it 'retries a closed socket before its handshake deadline' do
+    disconnected = []
+    client.disconnected = ->(error) { disconnected << error }
+    allow(original).to receive(:closed?).and_return(true)
+    original.emit(:close, nil)
+    client.reconnect
+
+    expect(client.websocket_client).to equal(replacement)
+    expect(disconnected).to eq([nil])
+  end
+end
+
 describe Bitflyer::Realtime::WebSocketClient do
   let(:socket) do
     instance_double(Bitflyer::Realtime::Transport, open?: true, closed?: false, send: nil, close: nil,
