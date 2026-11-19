@@ -103,14 +103,20 @@ describe Bitflyer::Realtime::WebSocketClient do
     @client.ticker_btc_jpy = ->(event) { events << event }
     @client.websocket_client.reconnect
     @client.executions_btc_jpy = ->(_event) {}
+    ready = spy('ready callback')
+    @client.ready = ready
     expect(socket).not_to have_received(:send)
 
     receive_message('0{}')
-    expect(socket).to have_received(:send).with('42["subscribe","lightning_ticker_BTC_JPY"]').once
-    expect(socket).to have_received(:send).with('42["subscribe","lightning_executions_BTC_JPY"]').once
+    expect(socket).to have_received(:send).with('421["subscribe","lightning_ticker_BTC_JPY"]').once
+    expect(socket).to have_received(:send).with('422["subscribe","lightning_executions_BTC_JPY"]').once
 
     receive_message('42["lightning_ticker_BTC_JPY",{"ltp":100}]')
     expect(events).to eq([{ 'ltp' => 100 }])
+    receive_message('431[null]')
+    expect(ready).not_to have_received(:call)
+    receive_message('432[null]')
+    expect(ready).to have_received(:call).once
   end
 
   it 'stops delivering events from the current frame when a subscription callback shuts down' do
@@ -140,7 +146,7 @@ describe Bitflyer::Realtime::WebSocketClient do
     expect(socket).not_to have_received(:send)
 
     receive_message('0{}')
-    expect(socket).to have_received(:send).with('42["subscribe","lightning_ticker_BTC_JPY"]').once
+    expect(socket).to have_received(:send).with('421["subscribe","lightning_ticker_BTC_JPY"]').once
   end
 
   it 'keeps the monitor alive after a refused retry' do
@@ -163,13 +169,15 @@ describe Bitflyer::Realtime::WebSocketClient do
     @client.websocket_client.reconnect
 
     receive_message('0{}')
-    expect(socket).not_to have_received(:send).with('42["subscribe","child_order_events"]')
+    expect(socket).not_to have_received(:send).with('421["subscribe","child_order_events"]')
 
     receive_message('430[null]')
-    expect(socket).to have_received(:send).with('42["subscribe","child_order_events"]').once
+    expect(socket).to have_received(:send).with('421["subscribe","child_order_events"]').once
 
     notifications = []
     @client.ready = -> { notifications << :ready }
+    expect(notifications).to be_empty
+    receive_message('431[null]')
     expect(notifications).to eq([:ready])
   end
 
@@ -196,7 +204,7 @@ describe Bitflyer::Realtime::WebSocketClient do
     @client.ready = -> { notifications << :ready }
 
     expect(@monitor.join(5)).to eq(@monitor)
-    expect(socket).not_to have_received(:send).with('42["subscribe","child_order_events"]')
+    expect(socket).not_to have_received(:send).with('421["subscribe","child_order_events"]')
     expect(socket).to have_received(:connect).twice
     expect(notifications).to be_empty
     expect(errors.map(&:message)).to eq(['Authentication failed: [{"message":"Invalid API key"}]'])
@@ -377,6 +385,126 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
         expect(event).to eq('auth')
         expect(params.fetch('timestamp')).to eq(1_000)
       end
+    end
+  end
+end
+
+RSpec.describe Bitflyer::Realtime::WebSocketClient do
+  let(:transport) { instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false, close_on_eof: nil, read_error: nil) }
+  let(:handlers) { {} }
+  let(:ready) { spy('ready callback') }
+  let(:subscription_failed) { spy('subscription failure callback') }
+  let(:key) { nil }
+  let(:secret) { nil }
+
+  before do
+    stub_transport(transport, handlers)
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(transport)
+    allow_any_instance_of(described_class).to receive(:start_monitoring)
+  end
+
+  def stub_transport(socket, events)
+    allow(socket).to receive(:on) { |event, &handler| events[event] = handler }
+    allow(socket).to receive(:connect) { events.fetch(:open).call }
+  end
+
+  def receive_frame(frame, events = handlers)
+    events.fetch(:message).call(double(data: frame))
+  end
+
+  def realtime_client
+    Bitflyer.realtime_client(key, secret).tap do |client|
+      client.ready = ready
+      client.subscription_failed = subscription_failed
+    end
+  end
+
+  it 'waits for every subscription acknowledgment and ignores duplicates and unknown IDs' do
+    client = realtime_client
+    client.ticker_btc_jpy = ->(_message) {}
+    client.executions_btc_jpy = ->(_message) {}
+
+    receive_frame('0{}')
+    expect(transport).to have_received(:send).with('421["subscribe","lightning_ticker_BTC_JPY"]')
+    expect(transport).to have_received(:send).with('422["subscribe","lightning_executions_BTC_JPY"]')
+    expect(ready).not_to have_received(:call)
+
+    receive_frame('432[null]')
+    receive_frame('432[null]')
+    receive_frame('439[null]')
+    expect(ready).not_to have_received(:call)
+
+    receive_frame('431[]')
+    receive_frame('431[]')
+    expect(ready).to have_received(:call).once
+  end
+
+  it 'waits for new acknowledgments after reconnecting and ignores replies from the previous socket' do
+    client = realtime_client
+    client.ticker_btc_jpy = ->(_message) {}
+    receive_frame('0{}')
+    receive_frame('431[null]')
+    expect(ready).to have_received(:call).once
+
+    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil, close_on_eof: nil)
+    next_handlers = {}
+    stub_transport(next_transport, next_handlers)
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(next_transport)
+
+    allow(transport).to receive(:closed?).and_return(true)
+    handlers.fetch(:close).call(nil)
+    client.websocket_client.reconnect
+    receive_frame('0{}', next_handlers)
+    receive_frame('431[null]')
+    expect(ready).to have_received(:call).once
+
+    receive_frame('431[null]', next_handlers)
+    expect(ready).to have_received(:call).twice
+  end
+
+  it 'becomes ready immediately when setup has no subscriptions' do
+    realtime_client
+    receive_frame('0{}')
+    expect(ready).to have_received(:call).once
+  end
+
+  context 'with credentials' do
+    let(:key) { 'key' }
+    let(:secret) { 'secret' }
+
+    it 'waits for the private subscription after authentication' do
+      client = realtime_client
+      client.child_order_events = ->(_message) {}
+
+      receive_frame('0{}')
+      expect(transport).to have_received(:send).with(start_with('420["auth",'))
+      expect(transport).not_to have_received(:send).with('421["subscribe","child_order_events"]')
+
+      receive_frame('430[null]')
+      expect(transport).to have_received(:send).with('421["subscribe","child_order_events"]')
+      expect(ready).not_to have_received(:call)
+
+      receive_frame("431[\n  null\n]")
+      expect(ready).to have_received(:call).once
+
+      receive_frame('430[null]')
+      receive_frame('431[null]')
+      expect(ready).to have_received(:call).once
+    end
+
+    it 'reports a rejected channel and keeps ready pending after the other subscription succeeds' do
+      client = realtime_client
+      client.child_order_events = ->(_message) {}
+      client.ticker_btc_jpy = ->(_message) {}
+
+      receive_frame('0{}')
+      receive_frame('430[null]')
+      receive_frame('431[{"message":"Access denied"}]')
+      receive_frame('431[{"message":"Access denied"}]')
+      receive_frame('432[null]')
+
+      expect(subscription_failed).to have_received(:call).with(:child_order_events, { 'message' => 'Access denied' }).once
+      expect(ready).not_to have_received(:call)
     end
   end
 end

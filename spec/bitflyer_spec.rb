@@ -284,6 +284,7 @@ describe Bitflyer do
         callbacks[:open]&.call
         callbacks[:message]&.call(double(data: '0{"pingInterval":25000}'))
         callbacks[:message]&.call(double(data: '430[null]'))
+        callbacks[:message]&.call(double(data: '431[null]'))
       end
 
       @client = Bitflyer.realtime_client('key', 'secret')
@@ -293,7 +294,7 @@ describe Bitflyer do
       @client.websocket_client.reconnect
 
       expect(replacement).to have_received(:send).with(start_with('420["auth",')).ordered
-      expect(replacement).to have_received(:send).with('42["subscribe","lightning_ticker_BTC_JPY"]').ordered
+      expect(replacement).to have_received(:send).with('421["subscribe","lightning_ticker_BTC_JPY"]').ordered
       expect(ready.size).to eq(1)
     end
 

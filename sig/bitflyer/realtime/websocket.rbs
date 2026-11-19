@@ -11,6 +11,9 @@ module Bitflyer
       @authentication_error: RuntimeError?
       @monitor: Thread?
       @session_mutex: Thread::Mutex
+      @pending_subscriptions: Hash[Integer, Symbol]
+      @subscription_rejected: bool
+      @awaiting_authentication: bool
       @session_ready: bool
       @ready_state: :pending | :ready | :notified
       @last_ping_monotonic: Integer?
@@ -25,6 +28,7 @@ module Bitflyer
       attr_accessor last_pong_at: Integer?
       attr_accessor ready: ready_callback?
       attr_accessor disconnected: disconnected_callback?
+      attr_accessor subscription_failed: subscription_failed_callback?
 
       def initialize: (host: String, key: String?, secret: String?, ?debug: bool) -> void
 
@@ -56,6 +60,8 @@ module Bitflyer
 
       def subscribe_channels: () -> void
 
+      def acknowledge_subscription: (id: Integer, json: String) -> void
+
       def receive_pong: () -> void
 
       def disconnect: () -> void
@@ -72,7 +78,7 @@ module Bitflyer
 
       def lifecycle_inactive?: () -> bool
 
-      def notify_ready: () -> void
+      def notify_ready: (WebSocket::Client::Simple::Client?) -> void
 
       def take_ready_callback: () -> ready_callback?
 
