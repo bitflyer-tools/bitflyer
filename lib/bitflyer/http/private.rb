@@ -181,6 +181,28 @@ module Bitflyer
           @connection.get('/v1/me/getexecutions', query).body
         end
 
+        def each_execution(
+          product_code: 'BTC_JPY',
+          count: nil,
+          before: nil,
+          after: nil,
+          child_order_id: nil,
+          child_order_acceptance_id: nil,
+          max_pages: ExecutionHistory::DEFAULT_MAX_PAGES,
+          &block
+        )
+          stream = ExecutionHistory.stream(before, max_pages) do |cursor|
+            executions(
+              product_code: product_code, count: count, before: cursor, after: after,
+              child_order_id: child_order_id, child_order_acceptance_id: child_order_acceptance_id
+            )
+          end
+          return stream unless block
+
+          stream.each(&block)
+          nil
+        end
+
         def balance_history(currency_code: nil, count: nil, before: nil, after: nil)
           query = {
             currency_code: currency_code,
