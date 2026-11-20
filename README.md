@@ -26,6 +26,8 @@ After installing the gem, run this command to print the public BTC/JPY order boo
 ruby -r bitflyer -e 'p Bitflyer.http_public_client.board(product_code: "BTC_JPY")'
 ```
 
+See the [getting started guide](docs/getting-started.md) for a script that lists markets and fetches an order book.
+
 ## Usage
 
 See https://lightning.bitflyer.jp/docs for details.
