@@ -34,7 +34,7 @@ describe Bitflyer do
 
   describe '.realtime_client' do
     let(:socket) do
-      double('websocket transport', open?: true, closed?: false, connect: nil, on: nil, close: nil,
+      double('websocket transport', open?: true, closed?: false, reconnectable?: false, connect: nil, on: nil, close: nil,
              close_for_shutdown: nil, send: nil)
     end
 
@@ -169,14 +169,14 @@ describe Bitflyer do
     end
 
     it 'automatically reconnects after the transport closes while active' do
-      replacement = double('replacement transport', open?: true, closed?: false, connect: nil, on: nil, close: nil,
+      replacement = double('replacement transport', open?: true, closed?: false, reconnectable?: false, connect: nil, on: nil, close: nil,
                            close_for_shutdown: nil)
       reconnected = Queue.new
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket, replacement)
       allow(replacement).to receive(:connect) { reconnected << true }
       @client = Bitflyer.realtime_client
       allow(socket).to receive(:open?).and_return(false)
-      allow(socket).to receive(:closed?).and_return(true)
+      allow(socket).to receive(:reconnectable?).and_return(true)
 
       Timeout.timeout(3) { reconnected.pop }
       @client.shutdown
@@ -295,7 +295,7 @@ describe Bitflyer do
     end
 
     it 'authenticates, resubscribes, and signals readiness when the greeting arrives during connect' do
-      replacement = double('replacement transport', closed?: false, close_for_shutdown: nil, close: nil)
+      replacement = double('replacement transport', closed?: false, reconnectable?: false, close_for_shutdown: nil, close: nil)
       callbacks = {}
       ready = Queue.new
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket, replacement)
@@ -312,7 +312,7 @@ describe Bitflyer do
       @client = Bitflyer.realtime_client('key', 'secret')
       @client.ready = -> { ready << true }
       @client.ticker_btc_jpy = ->(_message) {}
-      allow(socket).to receive(:closed?).and_return(true)
+      allow(socket).to receive(:reconnectable?).and_return(true)
       @client.websocket_client.reconnect
 
       expect(replacement).to have_received(:send).with(start_with('420["auth",')).ordered
@@ -361,7 +361,7 @@ describe Bitflyer do
         @client = Bitflyer.realtime_client
         monitor = @client.websocket_client.instance_variable_get(:@monitor)
         allow(socket).to receive(:open?).and_return(false)
-        allow(socket).to receive(:closed?).and_return(true)
+        allow(socket).to receive(:reconnectable?).and_return(true)
 
         peer = nil
         Timeout.timeout(5) do
@@ -561,7 +561,7 @@ describe Bitflyer do
         allow(replacement).to receive(:connect) { reconnected << true }
         allow($stdout).to receive(:puts)
         client
-        allow(socket).to receive_messages(open?: false, closed?: true)
+        allow(socket).to receive_messages(open?: false, reconnectable?: true)
 
         Timeout.timeout(5) { reconnected.pop }
         expect(peer).to have_received(:close).once
@@ -606,7 +606,7 @@ describe Bitflyer do
       client.disconnected = disconnected
 
       allow(socket).to receive(:close) do
-        allow(socket).to receive(:closed?).and_return(true)
+        allow(socket).to receive(:reconnectable?).and_return(true)
         handlers.fetch(:close).call(nil)
       end
       receive_frame('0{}')
