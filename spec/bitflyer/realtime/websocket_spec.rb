@@ -570,6 +570,20 @@ describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
     let(:key) { 'key' }
     let(:secret) { 'secret' }
 
+    it 'logs only a fixed diagnostic for a malformed private event and delivers the next event' do
+      events = []
+      client.subscribe(channel_name: :child_order_events) { |event| events << event }
+      receive_frame('0{}')
+      receive_frame('430[null]')
+      receive_frame('431[null]')
+
+      expect do
+        receive_frame('42["child_order_events",{X,"order_id":"demo-order"}]')
+        receive_frame('42["child_order_events",{"order_id":"next-order"}]')
+      end.to output("Failed to parse realtime JSON frame\n").to_stdout
+      expect(events).to eq([{ 'order_id' => 'next-order' }])
+    end
+
     it 'requests authentication on handshake and signals readiness on acknowledgement' do
       receive_frame('0{}')
 
