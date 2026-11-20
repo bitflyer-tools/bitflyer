@@ -11,12 +11,17 @@ module Bitflyer
       @authentication_error: RuntimeError?
       @monitor: Thread?
       @session_mutex: Thread::Mutex
+      @next_subscription_id: Integer
+      @last_setup_subscription_id: Integer
+      @pending_subscriptions: Hash[Integer, Symbol]
+      @subscription_rejected: bool
+      @awaiting_authentication: bool
       @session_ready: bool
       @ready_state: :pending | :ready | :notified
       @last_ping_monotonic: Integer?
       @last_pong_monotonic: Integer?
 
-      attr_accessor websocket_client: WebSocket::Client::Simple::Client?
+      attr_reader websocket_client: Transport?
       attr_accessor channel_names: Array[Symbol]
       attr_accessor channel_callbacks: Hash[Symbol, message_callback]
       attr_accessor ping_interval: Integer?
@@ -25,6 +30,7 @@ module Bitflyer
       attr_accessor last_pong_at: Integer?
       attr_accessor ready: ready_callback?
       attr_accessor disconnected: disconnected_callback?
+      attr_accessor subscription_failed: subscription_failed_callback?
 
       def initialize: (host: String, key: String?, secret: String?, ?debug: bool) -> void
 
@@ -34,6 +40,8 @@ module Bitflyer
 
       def subscribe: (channel_name: Symbol) { (untyped message) -> void } -> void
 
+      def unsubscribe: (channel_name: Symbol) -> void
+
       def connect: () -> void
 
       def send_ping: () -> void
@@ -42,11 +50,11 @@ module Bitflyer
 
       def reconnect: () -> void
 
-      def handle_error: (error: untyped, ?transport: WebSocket::Client::Simple::Client?) -> void
+      def handle_error: (error: untyped) -> void
 
-      def handle_message: (payload: untyped) -> void
+      def handle_message: (payload: untyped, ?socket: Transport?) -> void
 
-      def handle_close: (error: untyped, ?socket: WebSocket::Client::Simple::Client?) -> void
+      def handle_close: (error: untyped, ?socket: Transport?) -> void
 
       def setup_by_response: (json: String) -> void
 
@@ -54,7 +62,11 @@ module Bitflyer
 
       def authenticated: (json: String) -> void
 
+      def authentication_succeeded?: (String json) -> bool
+
       def subscribe_channels: () -> void
+
+      def acknowledge_subscription: (id: Integer, json: String, ?socket: Transport?) -> void
 
       def receive_pong: () -> void
 
@@ -72,15 +84,17 @@ module Bitflyer
 
       def lifecycle_inactive?: () -> bool
 
-      def notify_ready: () -> void
+      def notify_ready: (Transport?) -> void
 
       def take_ready_callback: () -> ready_callback?
 
-      def reset_readiness: (?WebSocket::Client::Simple::Client?) -> bool
+      def reset_readiness: (?Transport?) -> bool
 
       def clear_readiness: () -> void
 
       def reject_authentication: (String json) -> void
+
+      def notify_disconnected: (untyped error) -> void
 
       def monotonic_milliseconds: () -> Integer
 

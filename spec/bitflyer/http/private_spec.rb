@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'spec_helper'
+require 'bigdecimal'
 
 describe Bitflyer::HTTP::Private::Client do
   describe '#send_child_order' do
@@ -103,9 +104,44 @@ describe Bitflyer::HTTP::Private::Client do
     end
   end
 
+  describe '#send_child_order' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+
+    it 'sends integer and floating-point order fields as JSON numbers' do
+      http = instance_double(Net::HTTP)
+      response = instance_double(Net::HTTPOK, code: '200', body: '{"child_order_acceptance_id":"123"}')
+      allow(Net::HTTP).to receive(:start).and_return(http)
+      expect(http).to receive(:request) do |request|
+        expect(request.path).to eq('/v1/me/sendchildorder')
+        expect(JSON.parse(request.body)).to include(
+          'price' => be_kind_of(Integer).and(eq(30_000)),
+          'size' => be_kind_of(Float).and(eq(0.01)),
+          'minute_to_expire' => be_kind_of(Integer).and(eq(60))
+        )
+        response
+      end
+
+      client.send_child_order(child_order_type: 'LIMIT', side: 'BUY', price: 30_000, size: 0.01, minute_to_expire: 60)
+    end
+
+    it 'rejects a fractional expiration before making an HTTP request' do
+      expect(Net::HTTP).not_to receive(:start)
+      expect { client.send_child_order(child_order_type: 'MARKET', side: 'BUY', size: 1, minute_to_expire: 1.5) }
+        .to raise_error(ArgumentError, 'minute_to_expire must be an Integer')
+    end
+
+    [BigDecimal('0.01'), Rational(1, 100), '0.01', Float::INFINITY, Float::NAN].each do |size|
+      it "rejects size #{size.inspect} before making an HTTP request" do
+        expect(Net::HTTP).not_to receive(:start)
+        expect { client.send_child_order(child_order_type: 'MARKET', side: 'BUY', size: size) }
+          .to raise_error(ArgumentError, 'size must be an Integer or a finite Float')
+      end
+    end
+  end
+
   describe '#send_parent_order' do
     let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
-    let(:condition) { { product_code: 'BTC_JPY', condition_type: 'MARKET', side: 'BUY', size: 0.1 } }
+    let(:condition) { { product_code: 'BTC_JPY', condition_type: 'MARKET', side: 'BUY', size: 1 } }
 
     it 'rejects a missing parameters keyword before making an HTTP request' do
       expect(Net::HTTP).not_to receive(:start)
@@ -115,6 +151,13 @@ describe Bitflyer::HTTP::Private::Client do
     it 'rejects a hash before making an HTTP request' do
       expect(Net::HTTP).not_to receive(:start)
       expect { client.send_parent_order(parameters: condition) }.to raise_error(ArgumentError, 'parameters must be an array')
+    end
+
+    it 'rejects a BigDecimal quantity in a string-keyed condition before making an HTTP request' do
+      expect(Net::HTTP).not_to receive(:start)
+      parameters = [condition.transform_keys(&:to_s).merge('size' => BigDecimal('0.01'))]
+      expect { client.send_parent_order(parameters: parameters) }
+        .to raise_error(ArgumentError, 'size must be an Integer or a finite Float')
     end
 
     it 'serializes the order conditions as a JSON array' do
@@ -142,6 +185,13 @@ describe Bitflyer::HTTP::Private::Client do
     before do
       allow(Net::HTTP).to receive(:start).and_return(http)
       allow(http).to receive(:request).and_return(response)
+    end
+
+    it 'filters withdrawals by message ID' do
+      client.withdrawals(message_id: 'example')
+      expect(http).to have_received(:request).with(
+        an_instance_of(Net::HTTP::Get).and(have_attributes(path: '/v1/me/getwithdrawals?message_id=example'))
+      )
     end
 
     {
