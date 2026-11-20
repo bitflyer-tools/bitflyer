@@ -9,6 +9,7 @@ module Bitflyer
       @monitor_wakeup: Thread::ConditionVariable
       @stopped: bool
       @authentication_error: RuntimeError?
+      @pending_authentication_error: RuntimeError?
       @monitor: Thread?
       @session_mutex: Thread::Mutex
       @next_subscription_id: Integer
@@ -94,7 +95,9 @@ module Bitflyer
 
       def reject_authentication: (String json) -> void
 
-      def notify_disconnected: (untyped error) -> void
+      def notify_authentication_failure: (RuntimeError error) -> void
+
+      def notify_disconnected: (untyped error, ?disconnected_callback? callback) -> void
 
       def monotonic_milliseconds: () -> Integer
 

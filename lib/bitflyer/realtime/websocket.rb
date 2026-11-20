@@ -10,9 +10,8 @@ module Bitflyer
       HANDSHAKE_TIMEOUT_MS = 10_000
       private_constant :HANDSHAKE_TIMEOUT_MS
 
-      attr_accessor :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
-                    :disconnected, :subscription_failed
-      attr_reader :websocket_client, :ready, :last_ping_at, :last_pong_at
+      attr_accessor :channel_names, :channel_callbacks, :ping_interval, :ping_timeout, :subscription_failed
+      attr_reader :websocket_client, :ready, :disconnected, :last_ping_at, :last_pong_at
 
       def initialize(host:, key:, secret:, debug: false)
         @host = host
@@ -26,6 +25,7 @@ module Bitflyer
         @monitor_wakeup = ConditionVariable.new
         @stopped = false
         @authentication_error = nil
+        @pending_authentication_error = nil
         @session_mutex = Thread::Mutex.new
         @subscription_frames = []
         @subscription_writer = Mutex.new
@@ -52,6 +52,19 @@ module Bitflyer
           take_ready_callback
         end
         notification&.call
+        callback
+      end
+
+      def disconnected=(callback)
+        error = @lifecycle_lock.synchronize do
+          @disconnected = callback
+          next unless callback
+
+          pending_error = @pending_authentication_error
+          @pending_authentication_error = nil
+          pending_error
+        end
+        notify_disconnected(error, callback) if error
         callback
       end
 
@@ -530,10 +543,11 @@ module Bitflyer
         error = @lifecycle_lock.synchronize do
           return if lifecycle_inactive?
 
-          @authentication_error = RuntimeError.new("Authentication failed: #{json}")
+          failure = RuntimeError.new("Authentication failed: #{json}")
+          @authentication_error = failure
           reset_readiness
           @monitor_wakeup.signal
-          @authentication_error
+          failure
         end
 
         begin
@@ -541,12 +555,20 @@ module Bitflyer
         rescue SystemCallError, IOError => e
           debug_log e
         ensure
-          notify_disconnected(error)
+          notify_authentication_failure(error)
         end
       end
 
-      def notify_disconnected(error)
-        @disconnected&.call(error)
+      def notify_authentication_failure(error)
+        callback = @lifecycle_lock.synchronize do
+          @pending_authentication_error = error unless @disconnected
+          @disconnected
+        end
+        notify_disconnected(error, callback)
+      end
+
+      def notify_disconnected(error, callback = @disconnected)
+        callback&.call(error)
       rescue StandardError => e
         warn e.full_message(highlight: false)
       end

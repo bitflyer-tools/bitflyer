@@ -107,6 +107,7 @@ If setup finishes before registration, assigning `ready` delivers the pending no
 A `StandardError` raised by `disconnected` is reported to standard error. Automatic reconnection continues when enabled.
 
 If the server rejects authentication, the client closes the connection and passes a `RuntimeError` with the server response to `disconnected`. Authentication rejection stops automatic reconnection.
+If the rejection occurs before callback registration, assigning `disconnected` delivers the pending error synchronously, once.
 
 Call `client.shutdown` when you finish using a realtime client. It stops automatic reconnection, closes the connection, and stops the monitoring thread. You can call it more than once, including from a `ready` or subscription callback.
 Concurrent calls wait for the connection to close.
