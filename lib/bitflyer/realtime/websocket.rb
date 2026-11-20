@@ -8,10 +8,13 @@ require_relative 'order_book'
 module Bitflyer
   module Realtime
     class WebSocketClient # rubocop:disable Metrics/ClassLength
+      CONNECTION_TIMEOUT = 10
+      private_constant :CONNECTION_TIMEOUT
       HANDSHAKE_TIMEOUT_MS = 10_000
+      SUBSCRIPTION_ACK_TIMEOUT_MS = 10_000
       RECONNECT_BASE_DELAY = 1.0
       RECONNECT_MAX_DELAY = 30.0
-      private_constant :HANDSHAKE_TIMEOUT_MS, :RECONNECT_BASE_DELAY, :RECONNECT_MAX_DELAY
+      private_constant :HANDSHAKE_TIMEOUT_MS, :SUBSCRIPTION_ACK_TIMEOUT_MS, :RECONNECT_BASE_DELAY, :RECONNECT_MAX_DELAY
 
       attr_accessor :channel_names, :channel_callbacks, :ping_interval, :ping_timeout, :subscription_failed
       attr_reader :websocket_client, :ready, :disconnected, :last_ping_at, :last_pong_at
@@ -113,8 +116,7 @@ module Bitflyer
         connection = start_connection
         return unless connection
 
-        wait_for_connection(connection)
-        connected = true
+        connected = connection_established?(connection)
       rescue SocketError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::ETIMEDOUT,
              Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
         puts e
@@ -272,6 +274,9 @@ module Bitflyer
           @session_ready = true
           (@board_feeds.keys | @channel_callbacks.keys).each { |channel| queue_subscription(channel) }
           @last_setup_subscription_id = @next_subscription_id
+          unless @pending_subscriptions.empty?
+            @subscription_ack_deadline = monotonic_milliseconds + SUBSCRIPTION_ACK_TIMEOUT_MS
+          end
           @websocket_client
         end
         send_subscription_frames
@@ -474,9 +479,17 @@ module Bitflyer
         end
       end
 
-      def wait_for_connection(connection)
-        error = connection.last.value
+      def connection_established?(connection)
+        connector = connection.last
+        unless connector.join(CONNECTION_TIMEOUT)
+          debug_log 'Timed out establishing the WebSocket transport'
+          return false
+        end
+
+        error = connector.value
         raise error if error
+
+        true
       end
 
       def register_transport_handlers(transport)
@@ -541,6 +554,20 @@ module Bitflyer
         end
       end
 
+      def close_expired_subscriptions
+        socket = @session_mutex.synchronize do
+          deadline = @subscription_ack_deadline
+          return unless deadline && monotonic_milliseconds >= deadline && setup_subscriptions_pending?
+
+          @subscription_ack_deadline = nil
+          @subscription_rejected = true
+          @pending_subscriptions.clear
+          @websocket_client
+        end
+        debug_log 'Timed out waiting for setup subscription acknowledgments'
+        socket&.close
+      end
+
       def wait_for_monitor_tick
         @lifecycle_lock.synchronize do
           return if lifecycle_inactive?
@@ -560,6 +587,7 @@ module Bitflyer
         if @websocket_client&.open?
           send_ping
           wait_pong
+          close_expired_subscriptions
         else
           close_expired_handshake
         end
@@ -598,7 +626,11 @@ module Bitflyer
       end
 
       def setup_subscriptions_acknowledged?
-        !@subscription_rejected && @pending_subscriptions.keys.none? { |id| id <= @last_setup_subscription_id }
+        !@subscription_rejected && !setup_subscriptions_pending?
+      end
+
+      def setup_subscriptions_pending?
+        @pending_subscriptions.each_key.any? { |id| id <= @last_setup_subscription_id }
       end
 
       def take_ready_callback
@@ -624,6 +656,7 @@ module Bitflyer
         @next_subscription_id = @last_setup_subscription_id = 0
         @pending_subscriptions = {}
         @acknowledged_subscriptions = {}
+        @subscription_ack_deadline = nil
         @subscription_rejected = false
         @awaiting_authentication = false
         @session_ready = false
