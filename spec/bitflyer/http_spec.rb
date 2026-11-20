@@ -67,6 +67,15 @@ describe Bitflyer::HTTP::Connection do
       allow(Net::HTTP).to receive(:start).and_return(transport)
     end
 
+    context 'when a GET endpoint returns a plain text response' do
+      let(:status) { '200' }
+      let(:body) { "OK\n" }
+
+      it 'returns the original string' do
+        expect(Bitflyer.http_public_client.health).to eq(body)
+      end
+    end
+
     context 'when cancellation returns an empty 200 response' do
       let(:status) { '200' }
       let(:body) { '' }
