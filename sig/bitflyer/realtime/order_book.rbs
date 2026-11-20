@@ -1,0 +1,45 @@
+module Bitflyer
+  module Realtime
+    class OrderBook
+      type number = Integer | Float
+
+      class Level
+        attr_reader price: number
+        attr_reader size: number
+
+        def initialize: (price: number, size: number) -> void
+      end
+
+      class View
+        attr_reader bids: Array[Level]
+        attr_reader asks: Array[Level]
+
+        def initialize: (bids: Array[Level], asks: Array[Level]) -> void
+        def best_bid: () -> Level?
+        def best_ask: () -> Level?
+        def spread: () -> number?
+      end
+
+      @lock: Mutex
+      @bids: Hash[Rational, Level]
+      @asks: Hash[Rational, Level]
+      @current: View?
+      @ready: bool
+
+      def initialize: () -> void
+      def current: () -> View?
+      def ready?: () -> bool
+
+      def replace: (untyped message) -> void
+      def update: (untyped message) -> void
+      def invalidate: () -> void
+
+      private
+
+      def reset: () -> void
+      def merge: (untyped message) -> void
+      def merge_side: (Hash[Rational, Level] side, untyped levels) -> void
+      def sorted_levels: (Hash[Rational, Level] side) -> Array[Level]
+    end
+  end
+end

@@ -28,6 +28,15 @@ module Bitflyer
           @connection.get('/v1/ticker', product_code: product_code).body
         end
 
+        def funding_rate(product_code:)
+          @connection.get('/v1/getfundingrate', product_code: product_code).body
+        end
+
+        def funding_rate_history(product_code:, from: nil, to: nil, count: nil)
+          query = { product_code: product_code, from: from, to: to, count: count }
+          @connection.get('/v1/getfundingratehistory', query).body
+        end
+
         def executions(product_code: 'BTC_JPY', count: nil, before: nil, after: nil)
           query = {
             product_code: product_code,

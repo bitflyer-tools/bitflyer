@@ -43,6 +43,10 @@ If the response has no body, the client returns `nil`.
 HTTP responses outside the 2xx range raise `Bitflyer::HTTP::ResponseError`. The error provides
 the numeric HTTP status in `status` and the raw response body in `body`.
 
+`cancel_child_order`, `cancel_parent_order`, and `parent_order` require exactly one
+order ID or order acceptance ID. They raise `ArgumentError` before sending a request
+if neither identifier or both identifiers are non-nil.
+
 `send_child_order` requires `child_order_type`, `side`, and `size`. A `LIMIT` order also requires
 `price`. Missing or nil required values raise `ArgumentError` before an HTTP request is made.
 
@@ -64,6 +68,32 @@ keeps it open. Call `client.close` to release it. The next request on that clien
 
 `withdraw` requires non-`nil` `bank_account_id` and `amount` keywords. Pass `code` to include a
 two-factor authentication code when required.
+
+#### Crypto CFD funding rates
+
+Use the public HTTP client to fetch the upcoming funding rate and its UTC settlement time,
+or to retrieve past rates in descending order by calculation time.
+
+```ruby
+require 'bitflyer'
+
+public_client = Bitflyer.http_public_client
+upcoming = public_client.funding_rate(product_code: 'FX_BTC_JPY')
+p upcoming.values_at('current_funding_rate', 'next_funding_rate_settledate')
+
+history = public_client.funding_rate_history(
+  product_code: 'FX_BTC_JPY',
+  from: '2024-04-14T00:00:00',
+  to: '2024-04-16T00:00:00',
+  count: 10
+)
+p history
+```
+
+Pass `from` and `to` as UTC timestamp strings. Both bounds are optional and apply to
+`calculation_date`. The API defaults to 100 records and accepts at most 500 per request.
+When you supply `from`, the API selects the oldest matching records up to `count` and
+returns them newest first.
 
 #### Stream execution history
 
@@ -100,6 +130,41 @@ Accessor format is like `{event_name}_{product_code}`.
 You can set lambda to get realtime events.
 
 `{event_name}` and `{product_code}` are defined in [channels.rb](./lib/bitflyer/realtime/channels.rb).
+
+#### Live order book
+
+Use `order_book` to track a product's snapshot and delta channels on the realtime client.
+Repeated calls for the same product return the same book. The subscriptions stay active
+for the lifetime of the client and can coexist with raw board callbacks.
+
+```ruby
+client = Bitflyer.realtime_client
+book = client.order_book(product_code: 'BTC_JPY')
+
+begin
+  loop do
+    if (depth = book.current)
+      p [depth.best_bid&.price, depth.best_ask&.price, depth.spread]
+    else
+      puts 'Waiting for an order book snapshot'
+    end
+    sleep 1
+  end
+ensure
+  client.shutdown
+end
+```
+
+`book.ready?` reports whether the book has received a snapshot after the server acknowledged
+the delta subscription on the current connection.
+`book.current` returns `nil` before the first snapshot, after a disconnect until a fresh
+snapshot arrives, and after shutdown. Each view contains frozen `bids` (highest price first)
+and `asks` (lowest price first), with `price` and `size` on each level. Views already read
+stay unchanged as new messages arrive. `best_bid` and `best_ask` return the first level on
+their side, and `spread` is the best ask price minus the best bid price when both exist.
+
+See the [snapshot](https://bf-lightning-api.readme.io/docs/realtime-board-snapshot) and
+[delta](https://bf-lightning-api.readme.io/docs/realtime-board) channel documentation.
 
 #### Private events
 
@@ -156,6 +221,8 @@ to `subscribe` and `unsubscribe`. A second callback for the same channel replace
 previous callback. Unsubscribing stops local delivery and removes the channel from
 the subscriptions restored on reconnect. Server rejections of runtime subscriptions
 also reach `subscription_failed`.
+Call `subscribe` again to retry a rejected channel on the same connection.
+An acknowledged or pending subscription is reused when its callback changes.
 
 ```ruby
 client = Bitflyer.realtime_client
