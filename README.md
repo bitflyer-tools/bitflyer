@@ -49,6 +49,9 @@ p private_client.positions # will print your positions
 Each HTTP client reuses its HTTPS connection across requests. Call `client.close` to release it.
 The next request on that client opens a new connection.
 
+`withdraw` requires non-`nil` `bank_account_id` and `amount` keywords. Pass `code` to include a
+two-factor authentication code when required.
+
 #### Stream execution history
 
 `each_execution` on either HTTP client fetches pages on demand and yields one execution at a time
