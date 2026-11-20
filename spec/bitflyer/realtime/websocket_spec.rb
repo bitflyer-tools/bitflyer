@@ -102,7 +102,7 @@ describe Bitflyer::Realtime::WebSocketClient do
     @attempts = [SocketError.new('DNS lookup failed'), nil]
     @client = Bitflyer.realtime_client
 
-    events = []
+    events = Queue.new
     @client.ticker_btc_jpy = ->(event) { events << event }
     @client.websocket_client.reconnect
     @client.executions_btc_jpy = ->(_event) {}
@@ -115,7 +115,7 @@ describe Bitflyer::Realtime::WebSocketClient do
     expect(socket).to have_received(:send).with('422["subscribe","lightning_executions_BTC_JPY"]').once
 
     receive_message('42["lightning_ticker_BTC_JPY",{"ltp":100}]')
-    expect(events).to eq([{ 'ltp' => 100 }])
+    expect(events.pop(timeout: 5)).to eq({ 'ltp' => 100 })
     receive_message('431[null]')
     expect(ready).not_to have_received(:call)
     receive_message('432[null]')
@@ -126,15 +126,46 @@ describe Bitflyer::Realtime::WebSocketClient do
     @attempts = [nil]
     @client = Bitflyer.realtime_client
     events = []
+    completed = Queue.new
     @client.ticker_btc_jpy = lambda do |event|
       events << event
       @client.shutdown
+      completed << Thread.current
     end
     receive_message('0{}')
 
     receive_message('42["lightning_ticker_BTC_JPY",{"ltp":100},{"ltp":101}]')
 
+    worker = completed.pop(timeout: 5)
+    expect(worker).to be_a(Thread)
+    expect(worker.join(5)).to eq(worker)
     expect(events).to eq([{ 'ltp' => 100 }])
+  end
+
+  it 'delivers retained events in receive order across channels and drops new events when full' do
+    stub_const("#{described_class}::CALLBACK_QUEUE_LIMIT", 2)
+    @attempts = [nil]
+    @client = Bitflyer.realtime_client
+    release = Queue.new
+    events = Queue.new
+    @client.ticker_btc_jpy = lambda do |event|
+      events << event
+      release.pop if event.zero?
+    end
+    @client.executions_btc_jpy = ->(event) { events << event }
+
+    receive_message('42["lightning_ticker_BTC_JPY",0]')
+    expect(events.pop(timeout: 5)).to eq(0)
+    receive_message('42["lightning_executions_BTC_JPY",1]')
+    receive_message('42["lightning_ticker_BTC_JPY",2]')
+    Timeout.timeout(5) { 10.times { receive_message('42["lightning_ticker_BTC_JPY",99]') } }
+    release << true
+    expect([events.pop(timeout: 5), events.pop(timeout: 5)]).to eq([1, 2])
+
+    receive_message('42["lightning_ticker_BTC_JPY",3]')
+    expect(events.pop(timeout: 5)).to eq(3)
+  ensure
+    release << true
   end
 
   it 'waits for the replacement session before sending new subscriptions' do
@@ -511,7 +542,10 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 end
 
 describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
-  let(:socket) { instance_double(Bitflyer::Realtime::Transport, on: nil, send: nil, close: nil, connect: nil, open?: true) }
+  let(:socket) do
+    instance_double(Bitflyer::Realtime::Transport, on: nil, send: nil, close: nil, connect: nil, open?: true,
+                    close_for_shutdown: nil)
+  end
   let(:host) { 'wss://example.test' }
   let(:key) { nil }
   let(:secret) { nil }
@@ -524,6 +558,8 @@ describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
     allow_any_instance_of(described_class).to receive(:start_monitoring)
     client.ready = ready
   end
+
+  after { client.shutdown }
 
   def receive_frame(data)
     @receive.call(double('frame', data: data))
@@ -552,18 +588,18 @@ describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
   end
 
   it 'delivers the complete decoded large board event to its callback' do
-    callback = double('board callback', call: nil)
+    events = Queue.new
     channel = :lightning_board_BTC_JPY
     board = {
       'mid_price' => 5_000_000,
       'bids' => Array.new(3_000) { |index| { 'price' => 5_000_000 - index, 'size' => 0.125 } },
       'asks' => [{ 'price' => 5_000_001, 'size' => 0.25 }]
     }
-    client.subscribe(channel_name: channel) { |message| callback.call(message) }
+    client.subscribe(channel_name: channel) { |message| events << message }
 
     receive_frame("42#{JSON.pretty_generate([channel, board])}")
 
-    expect(callback).to have_received(:call).with(board).once
+    expect(events.pop(timeout: 5)).to eq(board)
   end
 
   context 'with API credentials' do

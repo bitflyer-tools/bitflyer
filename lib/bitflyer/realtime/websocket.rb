@@ -8,7 +8,8 @@ module Bitflyer
   module Realtime
     class WebSocketClient # rubocop:disable Metrics/ClassLength
       HANDSHAKE_TIMEOUT_MS = 10_000
-      private_constant :HANDSHAKE_TIMEOUT_MS
+      CALLBACK_QUEUE_LIMIT = 1_024
+      private_constant :HANDSHAKE_TIMEOUT_MS, :CALLBACK_QUEUE_LIMIT
 
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
                     :disconnected, :subscription_failed
@@ -24,6 +25,8 @@ module Bitflyer
         @lifecycle_lock = Mutex.new
         @shutdown_lock = Mutex.new
         @monitor_wakeup = ConditionVariable.new
+        @callback_queue = SizedQueue.new(CALLBACK_QUEUE_LIMIT)
+        @callback_worker = nil
         @stopped = false
         @authentication_error = nil
         @session_mutex = Thread::Mutex.new
@@ -254,11 +257,8 @@ module Bitflyer
         channel_name, *messages = JSON.parse json
         return unless channel_name
 
-        messages.each do |message|
-          break if @lifecycle_lock.synchronize { lifecycle_inactive? }
-
-          @channel_callbacks[channel_name.to_sym]&.call(message)
-        end
+        channel = channel_name.to_sym
+        messages.each { |message| enqueue_callback(channel, message) }
       end
 
       def debug_log(message)
@@ -268,6 +268,38 @@ module Bitflyer
       end
 
       private
+
+      def enqueue_callback(channel, message)
+        @lifecycle_lock.synchronize do
+          return if lifecycle_inactive? || !@channel_callbacks[channel]
+
+          @callback_worker ||= Thread.new { deliver_callbacks }
+          @callback_queue.push([channel, message], true)
+        end
+      rescue ThreadError
+        # A full queue drops the incoming event without blocking the reader.
+      end
+
+      def deliver_callbacks
+        while (event = @callback_queue.pop)
+          deliver_callback(*event)
+        end
+      end
+
+      def deliver_callback(channel, message)
+        callback = @lifecycle_lock.synchronize do
+          @channel_callbacks[channel] unless lifecycle_inactive?
+        end
+        callback&.call(message)
+      rescue StandardError => e
+        puts e
+        puts e.backtrace&.join("\n")
+      end
+
+      def stop_callbacks
+        @callback_queue.close
+        @callback_queue.clear
+      end
 
       def close_expired_handshake
         socket = take_expired_handshake
@@ -316,6 +348,7 @@ module Bitflyer
           next [nil, nil] if @stopped
 
           @stopped = true
+          stop_callbacks
           reset_readiness
           @monitor_wakeup.signal
           @connection&.last&.kill
@@ -465,6 +498,7 @@ module Bitflyer
           return if lifecycle_inactive?
 
           @authentication_error = RuntimeError.new("Authentication failed: #{json}")
+          stop_callbacks
           reset_readiness
           @monitor_wakeup.signal
           @authentication_error

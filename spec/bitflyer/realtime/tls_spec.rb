@@ -50,6 +50,34 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     expect(@client.websocket_client).to be_closed
   end
 
+  it 'processes timely pongs across monitor ticks while a ticker callback is blocked' do
+    release = Queue.new
+    started = Queue.new
+    pongs = Queue.new
+    allow_any_instance_of(described_class).to receive(:start_monitoring).and_call_original
+    serve(trusted_certificate) { |socket| answer_heartbeats(socket) }
+    @client = described_class.new(host: host, key: nil, secret: nil)
+    allow(@client).to receive(:receive_pong).and_wrap_original do |receive_pong|
+      receive_pong.call
+      pongs << true
+    end
+    @client.subscribe(channel_name: :lightning_ticker_BTC_JPY) do |event|
+      started << Thread.current
+      release.pop if event['ltp'] == 100
+    end
+
+    worker = started.pop(timeout: 5)
+    expect(worker).to be_a(Thread)
+    2.times { expect(pongs.pop(timeout: 5)).to be(true) }
+    expect(@client.websocket_client).to be_open
+    Timeout.timeout(5) { @client.shutdown }
+    release << true
+    expect(worker.join(5)).to eq(worker)
+    expect(started).to be_empty
+  ensure
+    release << true
+  end
+
   {
     untrusted_certificate: /self-signed certificate/,
     wrong_hostname_certificate: /hostname mismatch/
@@ -119,6 +147,23 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     driver.on(:message) { |event| authentication = event.data }
     driver.parse(socket.readpartial(4096)) until authentication
     authentication
+  end
+
+  def answer_heartbeats(socket)
+    driver = WebSocket::Driver.server(socket)
+    driver.on(:connect) do
+      driver.start
+      driver.text('0{"pingInterval":100,"pingTimeout":1500}')
+    end
+    driver.on(:message) do |event|
+      case event.data
+      when /"subscribe"/ then driver.text('42["lightning_ticker_BTC_JPY",{"ltp":100},{"ltp":101}]')
+      when '2' then driver.text('3')
+      end
+    end
+    loop { driver.parse(socket.readpartial(4096)) }
+  rescue EOFError, Errno::ECONNRESET
+    nil
   end
 
   def certificate(hostname, serial, public_key, issuer: nil)

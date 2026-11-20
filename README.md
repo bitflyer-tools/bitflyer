@@ -92,7 +92,10 @@ If the server rejects authentication, the client closes the connection and passe
 
 Call `client.shutdown` when you finish using a realtime client. It stops automatic reconnection, closes the connection, and stops the monitoring thread. You can call it more than once, including from a `ready` or subscription callback.
 Concurrent calls wait for the connection to close.
-Calling `shutdown` from a subscription callback skips any remaining events in the current WebSocket frame.
+Subscription callbacks run serially in receive order on a separate thread, so a slow callback
+does not block heartbeat processing. Each client queues up to 1,024 pending events in addition
+to the event being delivered. When the queue is full, new events are dropped.
+Shutdown discards pending events and allows any callback already running to finish.
 
 #### Examples
 
