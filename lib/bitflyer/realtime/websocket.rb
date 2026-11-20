@@ -30,8 +30,7 @@ module Bitflyer
         @lifecycle_lock = Mutex.new
         @shutdown_lock = Mutex.new
         @monitor_wakeup = ConditionVariable.new
-        @callback_queue = SizedQueue.new(CALLBACK_QUEUE_LIMIT)
-        @callback_worker = nil
+        initialize_callbacks
         @stopped = false
         @reconnect_delay = nil
         @authentication_error = @pending_authentication_error = nil
@@ -81,6 +80,7 @@ module Bitflyer
         debug_log "Subscribe #{channel_name}"
         @session_mutex.synchronize do
           @channel_names = (@channel_names + [channel_name]).uniq
+          @subscription_tokens[channel_name] ||= Object.new
           @channel_callbacks[channel_name] = block
           queue_subscription(channel_name) if @session_ready
         end
@@ -92,6 +92,7 @@ module Bitflyer
           return unless @channel_callbacks.key?(channel_name)
 
           @channel_callbacks.delete(channel_name)
+          @subscription_tokens.delete(channel_name)
           @channel_names -= [channel_name]
           @pending_subscriptions.delete_if { |_id, channel| channel == channel_name }
           queue_subscription_frame("42#{['unsubscribe', channel_name].to_json}") if @session_ready
@@ -305,7 +306,12 @@ module Bitflyer
         return unless channel_name
 
         channel = channel_name.to_sym
-        messages.each { |message| enqueue_callback(channel, message) }
+        token = @session_mutex.synchronize do
+          return unless @channel_callbacks[channel]
+
+          @subscription_tokens[channel]
+        end
+        messages.each { |message| enqueue_callback(channel, token, message) }
       end
 
       def debug_log(message)
@@ -316,12 +322,18 @@ module Bitflyer
 
       private
 
-      def enqueue_callback(channel, message)
+      def initialize_callbacks
+        @subscription_tokens = {}
+        @callback_queue = SizedQueue.new(CALLBACK_QUEUE_LIMIT)
+        @callback_worker = nil
+      end
+
+      def enqueue_callback(channel, token, message)
         @lifecycle_lock.synchronize do
-          return if lifecycle_inactive? || !subscribed_callback(channel)
+          return if lifecycle_inactive?
 
           @callback_worker ||= Thread.new { deliver_callbacks }
-          @callback_queue.push([channel, message], true)
+          @callback_queue.push([channel, token, message], true)
         end
       rescue ThreadError
         # A full queue drops the incoming event without blocking the reader.
@@ -333,9 +345,9 @@ module Bitflyer
         end
       end
 
-      def deliver_callback(channel, message)
+      def deliver_callback(channel, token, message)
         callback = @lifecycle_lock.synchronize do
-          subscribed_callback(channel) unless lifecycle_inactive?
+          subscribed_callback(channel, token) unless lifecycle_inactive?
         end
         callback&.call(message)
       rescue StandardError => e
@@ -343,8 +355,10 @@ module Bitflyer
         puts e.backtrace&.join("\n")
       end
 
-      def subscribed_callback(channel)
-        @session_mutex.synchronize { @channel_callbacks[channel] }
+      def subscribed_callback(channel, token)
+        @session_mutex.synchronize do
+          @channel_callbacks[channel] if @subscription_tokens[channel].equal?(token)
+        end
       end
 
       def stop_callbacks

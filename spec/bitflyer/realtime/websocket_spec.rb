@@ -922,6 +922,34 @@ describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
     expect(socket).to have_received(:close).once
   end
 
+  it 'discards queued events after unsubscribing and resubscribing to the same channel' do
+    channel = :lightning_ticker_BTC_JPY
+    started = Queue.new
+    resume = Queue.new
+    events = Queue.new
+    callback = lambda do |message|
+      if message == 'running'
+        started << true
+        resume.pop
+      end
+      events << message
+    end
+    receive_frame('0{}')
+    client.subscribe(channel_name: channel, &callback)
+    receive_frame('42["lightning_ticker_BTC_JPY","running","stale"]')
+    expect(started.pop(timeout: 5)).to be(true)
+
+    client.unsubscribe(channel_name: channel)
+    client.subscribe(channel_name: channel, &callback)
+    receive_frame('42["lightning_ticker_BTC_JPY","fresh"]')
+    resume << true
+
+    expect(events.pop(timeout: 5)).to eq('running')
+    expect(events.pop(timeout: 5)).to eq('fresh')
+  ensure
+    resume.close
+  end
+
   it 'logs a fixed diagnostic for a malformed private event and delivers the next event' do
     events = Queue.new
     client.subscribe(channel_name: :child_order_events) { |message| events << message }

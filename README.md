@@ -154,8 +154,8 @@ client.executions_btc_jpy = ->(json){ p json }
 
 To update a watchlist on the same connection, pass the full Socket.IO channel name
 to `subscribe` and `unsubscribe`. A second callback for the same channel replaces the
-previous callback. Unsubscribing stops local delivery and removes the channel from
-the subscriptions restored on reconnect. Server rejections of runtime subscriptions
+previous callback. Unsubscribing discards pending events for that subscription and
+removes the channel from the subscriptions restored on reconnect. Server rejections of runtime subscriptions
 also reach `subscription_failed`.
 
 ```ruby
