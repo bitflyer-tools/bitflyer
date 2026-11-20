@@ -18,6 +18,13 @@ module Bitflyer
 
         def executions: (?product_code: String, ?count: Integer?, ?before: Integer?, ?after: Integer?) -> untyped
 
+        def each_execution: (
+          ?product_code: String, ?count: Integer?, ?before: Integer?, ?after: Integer?, ?max_pages: Integer
+        ) -> Enumerator[untyped, untyped]
+                          | (
+          ?product_code: String, ?count: Integer?, ?before: Integer?, ?after: Integer?, ?max_pages: Integer
+        ) { (untyped) -> void } -> nil
+
         def chats: (?from_date: Time | String) -> untyped
       end
     end

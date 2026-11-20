@@ -29,6 +29,13 @@ describe Bitflyer::Realtime::Client do
     expect(client.public_send(:child_order_events=, callback)).to equal(callback)
   end
 
+  it 'forwards subscription failure callbacks to the websocket client' do
+    failure_callback = ->(_channel, _error) {}
+    expect(websocket_client).to receive(:subscription_failed=).with(failure_callback)
+
+    client.subscription_failed = failure_callback
+  end
+
   describe 'channel mapping' do
     {
       board_snapshot_btc_jpy: :lightning_board_snapshot_BTC_JPY,
