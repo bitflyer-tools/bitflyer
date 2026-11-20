@@ -27,20 +27,20 @@ module Bitflyer
         def deposits: (?count: Integer?, ?before: Integer?, ?after: Integer?) -> untyped
 
         def withdraw: (
+          bank_account_id: Integer,
+          amount: Numeric,
           ?currency_code: String,
-          ?bank_account_id: Integer?,
-          ?amount: Numeric?,
           ?code: String?
         ) -> untyped
 
         def withdrawals: (?count: Integer?, ?before: Integer?, ?after: Integer?, ?message_id: String?) -> untyped
 
         def send_child_order: (
+          child_order_type: String,
+          side: String,
+          size: Integer | Float,
           ?product_code: String,
-          ?child_order_type: String?,
-          ?side: String?,
           ?price: (Integer | Float)?,
-          ?size: (Integer | Float)?,
           ?minute_to_expire: Integer?,
           ?time_in_force: String
         ) -> untyped

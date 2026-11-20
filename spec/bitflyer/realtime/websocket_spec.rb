@@ -573,6 +573,58 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     end
   end
 
+  shared_examples 'a stalled setup subscription' do
+    it 'reconnects despite fresh pongs and notifies readiness once after replay' do
+      now = 100_000
+      allow(Process).to receive(:clock_gettime).and_call_original
+      allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond) { now }
+      client = realtime_client
+      websocket = client.websocket_client
+      client.ticker_btc_jpy = ->(_message) {}
+      client.executions_btc_jpy = ->(_message) {}
+      receive_frame('0{"pingInterval":1000,"pingTimeout":2000}')
+      receive_frame('430[null]') if key
+      receive_frame('431[null]')
+
+      replacement = instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false)
+      replacement_handlers = {}
+      stub_transport(replacement, replacement_handlers)
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(replacement)
+      allow(transport).to receive(:open?) { !transport.closed? }
+      allow(transport).to receive(:send).with('2') { receive_frame('3') }
+      expect(transport).to receive(:close) do
+        expect(now).to eq(110_000)
+        receive_frame('432[null]')
+        allow(transport).to receive(:closed?).and_return(true)
+        handlers.fetch(:close).call(nil)
+        allow(transport).to receive(:reconnectable?).and_return(true)
+      end
+
+      ticks = [109_999, 110_000, 111_000]
+      allow(websocket.instance_variable_get(:@monitor_wakeup)).to receive(:wait) { now = ticks.shift }
+      allow(websocket).to receive(:wait_for_monitor_tick).and_wrap_original do |wait|
+        wait.call unless ticks.empty?
+      end
+      allow(websocket).to receive(:start_monitoring).and_call_original
+      expect(websocket.send(:start_monitoring).join(5)).to be_a(Thread)
+      expect(transport).to have_received(:send).with('2').once
+      expect(websocket.websocket_client).to equal(replacement)
+      expect(ready).not_to have_received(:call)
+
+      receive_frame('0{}', replacement_handlers)
+      receive_frame('430[null]', replacement_handlers) if key
+      expect(replacement).to have_received(:send).with('421["subscribe","lightning_ticker_BTC_JPY"]').once
+      expect(replacement).to have_received(:send).with('422["subscribe","lightning_executions_BTC_JPY"]').once
+      receive_frame('432[null]', replacement_handlers)
+      expect(ready).not_to have_received(:call)
+      receive_frame('431[null]', replacement_handlers)
+      receive_frame('431[null]', replacement_handlers)
+      expect(ready).to have_received(:call).once
+    end
+  end
+
+  include_examples 'a stalled setup subscription'
+
   it 'waits for every subscription acknowledgment and ignores duplicates and unknown IDs' do
     client = realtime_client
     client.ticker_btc_jpy = ->(_message) {}
@@ -652,6 +704,25 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     expect(ready).to have_received(:call).once
   end
 
+  it 'keeps the connection open when only a runtime subscription is pending at the setup deadline' do
+    now = 100_000
+    allow(Process).to receive(:clock_gettime).and_call_original
+    allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond) { now }
+    client = realtime_client
+    client.ticker_btc_jpy = ->(_message) {}
+    receive_frame('0{}')
+    client.subscribe('lightning_executions_BTC_JPY') { |_message| }
+    receive_frame('431[null]')
+
+    now = 110_000
+    expect(transport).not_to receive(:close)
+    client.websocket_client.send(:close_expired_subscriptions)
+    receive_frame('432["rejected"]')
+
+    expect(ready).to have_received(:call).once
+    expect(subscription_failed).to have_received(:call).with(:lightning_executions_BTC_JPY, 'rejected').once
+  end
+
   it 'sends subscription changes in order when a send is in progress' do
     client = realtime_client
     client.ticker_btc_jpy = ->(_message) {}
@@ -727,6 +798,8 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
   context 'with credentials' do
     let(:key) { 'key' }
     let(:secret) { 'secret' }
+
+    include_examples 'a stalled setup subscription'
 
     it 'waits for the private subscription after authentication' do
       client = realtime_client
