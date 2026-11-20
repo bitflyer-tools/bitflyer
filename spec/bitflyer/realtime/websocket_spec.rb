@@ -695,6 +695,19 @@ describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
     expect(socket).to have_received(:close).once
   end
 
+  it 'logs a fixed diagnostic for a malformed private event and delivers the next event' do
+    callback = spy('private order callback')
+    client.subscribe(channel_name: :child_order_events) { |message| callback.call(message) }
+
+    expect do
+      receive_frame('42["child_order_events",{"order_id":INVALID"demo-private-order"}]')
+    end.to output("Invalid JSON in realtime frame\n").to_stdout
+    expect(callback).not_to have_received(:call)
+
+    receive_frame('42["child_order_events",{"order_id":"valid-order"}]')
+    expect(callback).to have_received(:call).with({ 'order_id' => 'valid-order' }).once
+  end
+
   it 'delivers the complete decoded large board event to its callback' do
     callback = double('board callback', call: nil)
     channel = :lightning_board_BTC_JPY

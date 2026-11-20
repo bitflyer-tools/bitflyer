@@ -166,6 +166,8 @@ module Bitflyer
         when /\A43[1-9]\d*\z/
           acknowledge_subscription(id: prefix[0][2..].to_i, json: prefix.post_match, socket: socket)
         end
+      rescue JSON::ParserError
+        puts 'Invalid JSON in realtime frame'
       rescue StandardError => e
         puts e
         puts e.backtrace&.join("\n")
