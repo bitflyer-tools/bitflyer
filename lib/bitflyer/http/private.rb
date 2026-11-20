@@ -82,11 +82,10 @@ module Bitflyer
         end
 
         def cancel_child_order(product_code: 'BTC_JPY', child_order_id: nil, child_order_acceptance_id: nil)
-          body = {
-            product_code: product_code,
-            child_order_id: child_order_id,
-            child_order_acceptance_id: child_order_acceptance_id
-          }.delete_if { |_, v| v.nil? }
+          identifier = order_identifier(
+            child_order_id: child_order_id, child_order_acceptance_id: child_order_acceptance_id
+          )
+          body = { product_code: product_code }.compact.merge(identifier)
           @connection.post('/v1/me/cancelchildorder', body).body
         end
 
@@ -103,11 +102,10 @@ module Bitflyer
         end
 
         def cancel_parent_order(product_code: 'BTC_JPY', parent_order_id: nil, parent_order_acceptance_id: nil)
-          body = {
-            product_code: product_code,
-            parent_order_id: parent_order_id,
-            parent_order_acceptance_id: parent_order_acceptance_id
-          }.delete_if { |_, v| v.nil? }
+          identifier = order_identifier(
+            parent_order_id: parent_order_id, parent_order_acceptance_id: parent_order_acceptance_id
+          )
+          body = { product_code: product_code }.compact.merge(identifier)
           @connection.post('/v1/me/cancelparentorder', body).body
         end
 
@@ -150,10 +148,9 @@ module Bitflyer
         end
 
         def parent_order(parent_order_id: nil, parent_order_acceptance_id: nil)
-          query = {
-            parent_order_id: parent_order_id,
-            parent_order_acceptance_id: parent_order_acceptance_id
-          }.delete_if { |_, v| v.nil? }
+          query = order_identifier(
+            parent_order_id: parent_order_id, parent_order_acceptance_id: parent_order_acceptance_id
+          )
           @connection.get('/v1/me/getparentorder', query).body
         end
 
@@ -214,6 +211,15 @@ module Bitflyer
 
         def trading_commission(product_code: 'BTC_JPY')
           @connection.get('/v1/me/gettradingcommission', product_code: product_code).body
+        end
+
+        private
+
+        def order_identifier(**identifiers)
+          supplied = identifiers.compact
+          return supplied if supplied.size == 1
+
+          raise ArgumentError, "Provide exactly one of #{identifiers.keys.join(' or ')}"
         end
       end
     end
