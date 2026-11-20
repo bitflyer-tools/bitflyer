@@ -150,7 +150,13 @@ describe Bitflyer do
             peer = server.accept
             send_greeting(peer, payload)
 
-            expect(completed.pop).to equal(transport.thread)
+            callback_thread = completed.pop
+            if callback == :ready
+              expect(callback_thread).to equal(transport.thread)
+            else
+              expect(callback_thread).not_to equal(transport.thread)
+              expect(callback_thread.join(1)).to equal(callback_thread)
+            end
             expect(transport.thread.join(1)).to equal(transport.thread)
             expect(transport).to be_closed
             expect(monitor).not_to be_alive

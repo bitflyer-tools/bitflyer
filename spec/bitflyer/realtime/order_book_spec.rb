@@ -14,7 +14,6 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     stub_transport(transport, events)
     allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(transport)
     allow_any_instance_of(Bitflyer::Realtime::WebSocketClient).to receive(:start_monitoring)
-    client
   end
 
   after { client.shutdown }
@@ -25,6 +24,7 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
   end
 
   def frame(data, handlers = events)
+    client
     handlers.fetch(:message).call(double(data: data))
   end
 
@@ -82,7 +82,7 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     replacement = instance_double(Bitflyer::Realtime::Transport, send: nil, close_for_shutdown: nil)
     replacement_events = {}
     stub_transport(replacement, replacement_events)
-    allow(transport).to receive(:closed?).and_return(true)
+    allow(transport).to receive(:reconnectable?).and_return(true)
     allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(replacement)
     client.websocket_client.reconnect
     frame('0{}', replacement_events)
@@ -104,15 +104,15 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
 
   it 'waits for the delta acknowledgement while an existing snapshot callback keeps receiving updates' do
     frame('0{}')
-    raw = spy('raw board callback')
-    client.board_snapshot_btc_jpy = ->(message) { raw.call(message) }
+    raw = Queue.new
+    client.board_snapshot_btc_jpy = ->(message) { raw << message }
     book
     eth = client.order_book(product_code: 'ETH_JPY')
     expect(transport).to have_received(:send).with('421["subscribe","lightning_board_snapshot_BTC_JPY"]').once
     frame('431[null]')
 
     board(snapshot, bids: [[8, 1]])
-    expect(raw).to have_received(:call).once
+    expect(raw.pop(timeout: 5).fetch('bids')).to eq([{ 'price' => 8, 'size' => 1 }])
     expect(book.current).to be_nil
     frame('432[null]')
     expect(book.current).to be_nil
@@ -120,17 +120,45 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     board(snapshot, bids: [[9, 1]])
     board(delta, bids: [[9, 4]])
     expect(book.current.best_bid.size).to eq(4)
-    expect(raw).to have_received(:call).twice
+    expect(raw.pop(timeout: 5).fetch('bids')).to eq([{ 'price' => 9, 'size' => 1 }])
     board('lightning_board_snapshot_ETH_JPY', bids: [[6, 1]])
     expect(eth).not_to be_ready
 
+    drained = Queue.new
+    client.ticker_btc_jpy = ->(_message) { drained << true }
     client.unsubscribe(snapshot)
     board(snapshot, bids: [[10, 1]])
     frame('433[null]')
     board('lightning_board_snapshot_ETH_JPY', bids: [[6, 1]])
-    expect(raw).to have_received(:call).twice
+    frame('42["lightning_ticker_BTC_JPY",{}]')
+    expect(drained.pop(timeout: 5)).to be(true)
+    expect(raw).to be_empty
     expect(book.current.best_bid.price).to eq(10)
     expect(eth.current.best_bid.price).to eq(6)
+  end
+
+  it 'keeps applying board updates while the callback queue is full' do
+    stub_const('Bitflyer::Realtime::WebSocketClient::CALLBACK_QUEUE_LIMIT', 1)
+    started = Queue.new
+    release = Queue.new
+    client.ticker_btc_jpy = lambda do |_message|
+      started << true
+      release.pop
+    end
+    client.subscribe(delta) { |_message| }
+    book
+    frame('0{}')
+    frame('431[null]')
+    board(snapshot, bids: [[8, 1]])
+    frame('42["lightning_ticker_BTC_JPY",{}]')
+    expect(started.pop(timeout: 5)).to be(true)
+
+    board(delta, bids: [[8, 2]])
+    board(delta, bids: [[8, 3]])
+
+    expect(book.current.best_bid.size).to eq(3)
+  ensure
+    release.close
   end
 
   it 'keeps the book uninitialized when the delta subscription is rejected' do
@@ -157,8 +185,8 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     frame('433[null]')
     frame('434[null]')
 
-    raw = spy('raw board callback')
-    client.subscribe(delta) { |message| raw.call(message) }
+    raw = Queue.new
+    client.subscribe(delta) { |message| raw << message }
     client.subscribe(snapshot) { |_message| }
     [delta, snapshot].each do |channel|
       expect(transport).to have_received(:send).with(/\A42\d+\["subscribe","#{channel}"\]\z/).twice
@@ -166,6 +194,6 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     board(snapshot, bids: [[8, 1]])
     board(delta, bids: [[8, 2]])
     expect(book.current.best_bid.size).to eq(2)
-    expect(raw).to have_received(:call).once
+    expect(raw.pop(timeout: 5).fetch('bids')).to eq([{ 'price' => 8, 'size' => 2 }])
   end
 end
