@@ -63,21 +63,21 @@ module Bitflyer
 
       def handle_close: (error: untyped, ?socket: Transport?) -> void
 
-      def setup_by_response: (json: String) -> void
+      def setup_by_response: (json: String, ?socket: Transport?) -> void
 
-      def authenticate: () -> void
+      def authenticate: (?socket: Transport?) -> void
 
-      def authenticated: (json: String) -> void
+      def authenticated: (json: String, ?socket: Transport?) -> void
 
       def authentication_succeeded?: (String json) -> bool
 
-      def subscribe_channels: () -> void
+      def subscribe_channels: (?socket: Transport?) -> void
 
       def acknowledge_subscription: (id: Integer, json: String, ?socket: Transport?) -> void
 
       def receive_pong: () -> void
 
-      def disconnect: () -> void
+      def disconnect: (?socket: Transport?) -> void
 
       def emit_message: (json: String, ?socket: Transport?) -> void
 
@@ -113,7 +113,7 @@ module Bitflyer
 
       def clear_readiness: () -> void
 
-      def reject_authentication: (String json) -> void
+      def reject_authentication: (String json, ?socket: Transport?) -> void
 
       def notify_authentication_failure: (RuntimeError error) -> void
 
