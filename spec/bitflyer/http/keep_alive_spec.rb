@@ -25,7 +25,7 @@ describe 'HTTPS connection reuse' do
     @server_thread&.join
   end
 
-  it 'serves sequential and concurrent ticker requests over one connection and closes it on demand' do
+  it 'reuses one connection across a polling gap and concurrent requests, then closes it on demand' do
     serve do
       with_socket do |socket|
         4.times { respond(socket) }
@@ -33,7 +33,9 @@ describe 'HTTPS connection reuse' do
       end
     end
 
-    2.times { expect(client.ticker).to eq('status' => 'ok') }
+    expect(client.ticker).to eq('status' => 'ok')
+    sleep 3
+    expect(client.ticker).to eq('status' => 'ok')
     requests = Array.new(2) { Thread.new { client.ticker } }
     expect(requests.map(&:value)).to eq([{ 'status' => 'ok' }] * 2)
     2.times { client.close }
