@@ -11,6 +11,8 @@ module Bitflyer
       @authentication_error: RuntimeError?
       @monitor: Thread?
       @session_mutex: Thread::Mutex
+      @order_books: Hash[String, OrderBook]
+      @board_feeds: Hash[Symbol, Method]
       @next_subscription_id: Integer
       @last_setup_subscription_id: Integer
       @pending_subscriptions: Hash[Integer, Symbol]
@@ -39,6 +41,8 @@ module Bitflyer
       def inspect: () -> String
 
       def subscribe: (channel_name: Symbol) { (untyped message) -> void } -> void
+
+      def order_book: (product_code: String) -> OrderBook
 
       def unsubscribe: (channel_name: Symbol) -> void
 
@@ -72,11 +76,17 @@ module Bitflyer
 
       def disconnect: () -> void
 
-      def emit_message: (json: String) -> void
+      def emit_message: (json: String, ?socket: Transport?) -> void
 
       def debug_log: (untyped message) -> void
 
       private
+
+      def register_order_book: (String product_code) -> OrderBook
+
+      def register_board_feed: (Symbol channel, Method handler) -> void
+
+      def route_message: (Symbol channel, untyped message, Transport? socket) -> message_callback?
 
       def start_monitoring: () -> Thread
 

@@ -3,6 +3,7 @@
 require 'json'
 require 'openssl'
 require 'bitflyer/realtime/transport'
+require_relative 'order_book'
 
 module Bitflyer
   module Realtime
@@ -21,6 +22,8 @@ module Bitflyer
         @debug = debug
         @channel_names = []
         @channel_callbacks = {}
+        @order_books = {}
+        @board_feeds = {}
         @lifecycle_lock = Mutex.new
         @shutdown_lock = Mutex.new
         @monitor_wakeup = ConditionVariable.new
@@ -60,9 +63,17 @@ module Bitflyer
         @session_mutex.synchronize do
           @channel_names = (@channel_names + [channel_name]).uniq
           @channel_callbacks[channel_name] = block
-          queue_subscription(channel_name) if @session_ready
+          queue_subscription(channel_name) if @session_ready && !@board_feeds.key?(channel_name)
         end
         send_subscription_frames
+      end
+
+      def order_book(product_code:)
+        book = @session_mutex.synchronize do
+          @order_books[product_code] ||= register_order_book(product_code)
+        end
+        send_subscription_frames
+        book
       end
 
       def unsubscribe(channel_name:)
@@ -70,6 +81,8 @@ module Bitflyer
           return unless @channel_callbacks.key?(channel_name)
 
           @channel_callbacks.delete(channel_name)
+          return if @board_feeds.key?(channel_name)
+
           @channel_names -= [channel_name]
           @pending_subscriptions.delete_if { |_id, channel| channel == channel_name }
           queue_subscription_frame("42#{['unsubscribe', channel_name].to_json}") if @session_ready
@@ -161,7 +174,7 @@ module Bitflyer
         when '0' then setup_by_response(json: prefix.post_match)
         when '3' then receive_pong
         when '41' then disconnect
-        when '42' then emit_message(json: prefix.post_match)
+        when '42' then emit_message(json: prefix.post_match, socket: socket)
         when '430' then authenticated(json: prefix.post_match)
         when /\A43[1-9]\d*\z/
           acknowledge_subscription(id: prefix[0][2..].to_i, json: prefix.post_match, socket: socket)
@@ -240,7 +253,7 @@ module Bitflyer
           return if @session_ready
 
           @session_ready = true
-          @channel_callbacks.each_key { |channel| queue_subscription(channel) }
+          (@board_feeds.keys | @channel_callbacks.keys).each { |channel| queue_subscription(channel) }
           @last_setup_subscription_id = @next_subscription_id
           @websocket_client
         end
@@ -275,14 +288,14 @@ module Bitflyer
         @websocket_client&.close
       end
 
-      def emit_message(json:)
+      def emit_message(json:, socket: @websocket_client)
         channel_name, *messages = JSON.parse json
         return unless channel_name
 
         messages.each do |message|
           break if @lifecycle_lock.synchronize { lifecycle_inactive? }
 
-          callback = @session_mutex.synchronize { @channel_callbacks[channel_name.to_sym] }
+          callback = route_message(channel_name.to_sym, message, socket)
           callback&.call(message)
         end
       end
@@ -294,6 +307,29 @@ module Bitflyer
       end
 
       private
+
+      def register_order_book(product_code)
+        book = OrderBook.new
+        # Start receiving deltas before requesting the snapshot.
+        register_board_feed(:"lightning_board_#{product_code}", book.method(:update))
+        register_board_feed(:"lightning_board_snapshot_#{product_code}", book.method(:replace))
+        book
+      end
+
+      def register_board_feed(channel, handler)
+        @board_feeds[channel] = handler
+        @channel_names = (@channel_names + [channel]).uniq
+        queue_subscription(channel) if @session_ready && !@channel_callbacks.key?(channel)
+      end
+
+      def route_message(channel, message, socket)
+        @session_mutex.synchronize do
+          return unless @websocket_client.equal?(socket)
+
+          @board_feeds[channel]&.call(message) if @session_ready
+          @channel_callbacks[channel]
+        end
+      end
 
       def queue_subscription(channel)
         @next_subscription_id += 1
@@ -517,6 +553,7 @@ module Bitflyer
       end
 
       def clear_readiness
+        @order_books.each_value(&:invalidate)
         @subscription_frames.clear
         @next_subscription_id = @last_setup_subscription_id = 0
         @pending_subscriptions = {}
