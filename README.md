@@ -62,9 +62,15 @@ in API response order. It uses the lowest execution ID on each page as the next 
 cursor. Pass a saved execution ID as `before` to resume from older records, and use `after` to set
 an exclusive lower bound.
 
+The [public `/v1/executions` endpoint](https://lightning.bitflyer.com/docs?lang=en#execution-history)
+limits history retrieved with `before` to the most recent 31 days. To resume a public backfill,
+use the saved ID of an execution within that window. A saved ID cannot retrieve older history.
+
 ```ruby
 public_client = Bitflyer.http_public_client
-history = public_client.each_execution(product_code: 'BTC_JPY', before: 123_456, count: 50, max_pages: 5)
+# Set BITFLYER_SAVED_EXECUTION_ID to a saved BTC_JPY execution ID from the past 31 days.
+saved_execution_id = Integer(ENV.fetch('BITFLYER_SAVED_EXECUTION_ID'), 10)
+history = public_client.each_execution(product_code: 'BTC_JPY', before: saved_execution_id, count: 50, max_pages: 5)
 history.lazy.take(75).each { |execution| p execution }
 
 private_client.each_execution(child_order_acceptance_id: 'YOUR_ORDER_ACCEPTANCE_ID') do |fill|
