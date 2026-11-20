@@ -42,7 +42,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
   before do
     [original, replacement].each do |transport|
       allow(transport).to receive(:connect)
-      allow(transport).to receive_messages(open?: false, closed?: false)
+      allow(transport).to receive_messages(open?: false, closed?: false, reconnectable?: false)
       allow(transport).to receive(:on) { |event, &handler| handlers[transport][event] = handler }
       allow(transport).to receive(:close_for_shutdown) { handlers[transport].fetch(:close).call(nil) }
     end
@@ -60,11 +60,14 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
     expect(client).not_to respond_to(:websocket_client=)
   end
 
-  it 'keeps a pending handshake on the same socket past the first monitor tick' do
+  it 'keeps a pending handshake on the same socket across monitor ticks beyond the former client timeout' do
     client.ready = -> { @ready = true }
 
-    @now += 1_000
-    client.reconnect
+    11.times do
+      @now += 1_000
+      client.__send__(:poll_transport)
+      client.reconnect
+    end
     allow(original).to receive(:open?).and_return(true)
     handlers[original].fetch(:open).call
     handlers[original].fetch(:message).call(setup_message)
@@ -75,13 +78,11 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
     expect(@ready).to be(true)
   end
 
-  it 'closes a timed-out socket before replacing it and ignores its late events' do
-    expect(original).to receive(:close_for_shutdown).ordered.and_call_original
-    expect(replacement).to receive(:connect).ordered
+  it 'retries a closed socket and ignores its late events' do
     disconnected = []
     client.disconnected = ->(error) { disconnected << error }
-
-    @now += 10_000
+    allow(original).to receive(:reconnectable?).and_return(true)
+    handlers[original].fetch(:close).call(nil)
     client.reconnect
     handlers[original].fetch(:open).call
     handlers[original].fetch(:message).call(setup_message)
@@ -89,24 +90,13 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
 
     expect(client.websocket_client).to equal(replacement)
     expect(client.last_pong_at).to be_nil
-    expect(disconnected).to be_empty
-  end
-
-  it 'retries a closed socket before its handshake deadline' do
-    disconnected = []
-    client.disconnected = ->(error) { disconnected << error }
-    allow(original).to receive(:closed?).and_return(true)
-    handlers[original].fetch(:close).call(nil)
-    client.reconnect
-
-    expect(client.websocket_client).to equal(replacement)
     expect(disconnected).to eq([nil])
   end
 end
 
 describe Bitflyer::Realtime::WebSocketClient do
   let(:socket) do
-    instance_double(Bitflyer::Realtime::Transport, open?: true, closed?: false, send: nil, close: nil,
+    instance_double(Bitflyer::Realtime::Transport, open?: true, closed?: false, reconnectable?: false, send: nil, close: nil,
                     close_for_shutdown: nil)
   end
   let(:handlers) { {} }
@@ -114,17 +104,19 @@ describe Bitflyer::Realtime::WebSocketClient do
   before do
     allow(socket).to receive(:on) { |event, &handler| handlers[event] = handler }
     allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket)
-    allow(socket).to receive(:connect) do
-      attempt = @attempts.shift
-      raise attempt if attempt
-
-      handlers.fetch(:open).call
-      @reconnected&.push(true)
-    end
+    allow(socket).to receive(:connect) { connect_socket }
     allow($stdout).to receive(:puts)
   end
 
   after { @client&.shutdown }
+
+  def connect_socket
+    attempt = @attempts.shift
+    raise attempt if attempt
+
+    handlers.fetch(:open).call
+    @reconnected&.push(true)
+  end
 
   it 'exposes the realtime client connection as read-only' do
     @attempts = []
@@ -143,7 +135,7 @@ describe Bitflyer::Realtime::WebSocketClient do
     @attempts = [SocketError.new('DNS lookup failed'), nil]
     @client = Bitflyer.realtime_client
 
-    events = []
+    events = Queue.new
     @client.ticker_btc_jpy = ->(event) { events << event }
     @client.websocket_client.reconnect
     @client.executions_btc_jpy = ->(_event) {}
@@ -156,7 +148,7 @@ describe Bitflyer::Realtime::WebSocketClient do
     expect(socket).to have_received(:send).with('422["subscribe","lightning_executions_BTC_JPY"]').once
 
     receive_message('42["lightning_ticker_BTC_JPY",{"ltp":100}]')
-    expect(events).to eq([{ 'ltp' => 100 }])
+    expect(events.pop(timeout: 5)).to eq({ 'ltp' => 100 })
     receive_message('431[null]')
     expect(ready).not_to have_received(:call)
     receive_message('432[null]')
@@ -167,15 +159,46 @@ describe Bitflyer::Realtime::WebSocketClient do
     @attempts = [nil]
     @client = Bitflyer.realtime_client
     events = []
+    completed = Queue.new
     @client.ticker_btc_jpy = lambda do |event|
       events << event
       @client.shutdown
+      completed << Thread.current
     end
     receive_message('0{}')
 
     receive_message('42["lightning_ticker_BTC_JPY",{"ltp":100},{"ltp":101}]')
 
+    worker = completed.pop(timeout: 5)
+    expect(worker).to be_a(Thread)
+    expect(worker.join(5)).to eq(worker)
     expect(events).to eq([{ 'ltp' => 100 }])
+  end
+
+  it 'delivers retained events in receive order across channels and drops new events when full' do
+    stub_const("#{described_class}::CALLBACK_QUEUE_LIMIT", 2)
+    @attempts = [nil]
+    @client = Bitflyer.realtime_client
+    release = Queue.new
+    events = Queue.new
+    @client.ticker_btc_jpy = lambda do |event|
+      events << event
+      release.pop if event.zero?
+    end
+    @client.executions_btc_jpy = ->(event) { events << event }
+
+    receive_message('42["lightning_ticker_BTC_JPY",0]')
+    expect(events.pop(timeout: 5)).to eq(0)
+    receive_message('42["lightning_executions_BTC_JPY",1]')
+    receive_message('42["lightning_ticker_BTC_JPY",2]')
+    Timeout.timeout(5) { 10.times { receive_message('42["lightning_ticker_BTC_JPY",99]') } }
+    release << true
+    expect([events.pop(timeout: 5), events.pop(timeout: 5)]).to eq([1, 2])
+
+    receive_message('42["lightning_ticker_BTC_JPY",3]')
+    expect(events.pop(timeout: 5)).to eq(3)
+  ensure
+    release << true
   end
 
   it 'waits for the replacement session before sending new subscriptions' do
@@ -184,13 +207,68 @@ describe Bitflyer::Realtime::WebSocketClient do
     @client = Bitflyer.realtime_client
     receive_message('0{}')
 
-    allow(socket).to receive(:closed?).and_return(true)
+    allow(socket).to receive(:reconnectable?).and_return(true)
     @client.websocket_client.reconnect
     @client.ticker_btc_jpy = ->(_event) {}
     expect(socket).not_to have_received(:send)
 
     receive_message('0{}')
     expect(socket).to have_received(:send).with('421["subscribe","lightning_ticker_BTC_JPY"]').once
+  end
+
+  def measure_retries(random:, ticks:)
+    wakeup = ConditionVariable.new
+    waiting = Queue.new
+    delays = []
+    now = 0
+    allow(Process).to receive(:clock_gettime).and_call_original
+    allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond) { now }
+    allow(ConditionVariable).to receive(:new).and_return(wakeup)
+    allow_any_instance_of(described_class).to receive(:rand).and_return(random)
+    allow(wakeup).to receive(:wait).and_wrap_original do |wait, lock, delay|
+      delays << delay
+      if delays.size == ticks
+        waiting << true
+        wait.call(lock, delay)
+      else
+        now += (delay * 1000).to_i
+      end
+    end
+
+    @client = Bitflyer.realtime_client
+    allow(ConditionVariable).to receive(:new).and_call_original
+    Timeout.timeout(5) { waiting.pop }
+    Timeout.timeout(5) { @client.shutdown }
+    delays
+  end
+
+  it 'increases retry delays to a cap and interrupts the capped wait on shutdown' do
+    @attempts = Array.new(8) { Errno::ECONNREFUSED.new }
+
+    expect(measure_retries(random: 0.5, ticks: 8)).to eq([0.75, 1.5, 3, 6, 12, 22.5, 22.5, 22.5])
+    expect(socket).to have_received(:connect).exactly(8).times
+  end
+
+  it 'uses different retry delays across clients with different jitter samples' do
+    delays = [0.25, 0.75].map do |random|
+      @attempts = [Errno::ECONNREFUSED.new, Errno::ECONNREFUSED.new]
+      measure_retries(random: random, ticks: 2)
+    end
+
+    expect(delays).to eq([[0.625, 1.25], [0.875, 1.75]])
+  end
+
+  it 'resets the delay when a session becomes ready before disconnecting' do
+    @attempts = [Errno::ECONNREFUSED.new, Errno::ECONNREFUSED.new, nil, Errno::ECONNREFUSED.new]
+    allow(socket).to receive(:connect) do
+      connect_socket
+      receive_message('0{}')
+      allow(socket).to receive_messages(open?: false, closed?: true, reconnectable?: true)
+      handlers.fetch(:close).call(nil)
+    end
+
+    expect(measure_retries(random: 0.5, ticks: 4)).to eq([0.75, 1.5, 0.75, 1.5])
+    expect(socket).to have_received(:connect).exactly(4).times
   end
 
   it 'keeps the monitor alive after a refused retry' do
@@ -235,15 +313,17 @@ describe Bitflyer::Realtime::WebSocketClient do
     Timeout.timeout(5) { @reconnected.pop }
     errors = []
     notifications = []
-    @client.disconnected = ->(error) { errors << error }
+    callback = ->(error) { errors << error }
+    @client.disconnected = callback
     allow(socket).to receive(:close) do
-      allow(socket).to receive_messages(open?: false, closed?: true)
+      allow(socket).to receive_messages(open?: false, reconnectable?: true)
       handlers.fetch(:close).call(nil)
     end
 
     receive_message('0{}')
     receive_message('430[{"message":"Invalid API key"}]')
     @client.ready = -> { notifications << :ready }
+    @client.disconnected = callback
 
     expect(@monitor.join(5)).to eq(@monitor)
     expect(socket).to have_received(:close).once
@@ -252,10 +332,72 @@ describe Bitflyer::Realtime::WebSocketClient do
     expect(notifications).to be_empty
     expect(errors.map(&:message)).to eq(['Authentication failed: [{"message":"Invalid API key"}]'])
   end
+
+  it 'delivers the original authentication error when a callback is registered after construction' do
+    allow(socket).to receive(:connect) do
+      handlers.fetch(:open).call
+      receive_message('0{}')
+      receive_message('430[{"message":"Invalid API key"}]')
+    end
+    @client = Bitflyer.realtime_client('key', 'secret')
+    errors = []
+    callback = ->(error) { errors << error }
+
+    @client.ready = -> { raise 'Authentication rejection must not signal readiness' }
+    @client.disconnected = nil
+    @client.disconnected = callback
+    @client.disconnected = callback
+
+    expect(errors).to contain_exactly(an_instance_of(RuntimeError).and(
+      have_attributes(message: 'Authentication failed: [{"message":"Invalid API key"}]')
+    ))
+  end
+
+  it 'reports an exception from a late disconnected callback and consumes the pending error' do
+    @attempts = [nil]
+    @client = Bitflyer.realtime_client('key', 'secret')
+    receive_message('0{}')
+    receive_message('430[{"message":"Invalid API key"}]')
+
+    expect do
+      @client.disconnected = ->(_error) { raise 'late callback failed' }
+    end.to output(/late callback failed/).to_stderr
+    callback = spy('replacement disconnected callback')
+    @client.disconnected = callback
+    expect(callback).not_to have_received(:call)
+  end
+
+  it 'delivers an authentication error once when registration overlaps rejection' do
+    @attempts = [nil]
+    @client = Bitflyer.realtime_client('key', 'secret')
+    receive_message('0{}')
+    closing = Queue.new
+    finish_close = Queue.new
+    allow(socket).to receive(:close) do
+      closing << true
+      finish_close.pop
+      handlers.fetch(:close).call(nil)
+    end
+    errors = []
+    callback = ->(error) { errors << error }
+    rejection = Thread.new { receive_message('430[{"message":"Invalid API key"}]') }
+
+    begin
+      Timeout.timeout(5) { closing.pop }
+      @client.disconnected = callback
+    ensure
+      finish_close << true
+      rejection.join
+      allow(socket).to receive(:close).and_return(nil)
+    end
+    @client.disconnected = callback
+
+    expect(errors.map(&:message)).to eq(['Authentication failed: [{"message":"Invalid API key"}]'])
+  end
 end
 
 describe Bitflyer::Realtime::WebSocketClient, 'when replacing a socket' do
-  let(:original_socket) { instance_double(Bitflyer::Realtime::Transport, closed?: false) }
+  let(:original_socket) { instance_double(Bitflyer::Realtime::Transport, reconnectable?: false) }
   let(:replacement_socket) { instance_double(Bitflyer::Realtime::Transport) }
   let(:message_handlers) { {} }
 
@@ -282,7 +424,7 @@ describe Bitflyer::Realtime::WebSocketClient, 'when replacing a socket' do
     expect(original_socket).to receive(:close)
     client.wait_pong
 
-    allow(original_socket).to receive(:closed?).and_return(true)
+    allow(original_socket).to receive(:reconnectable?).and_return(true)
     client.reconnect
     expect(replacement_socket).not_to receive(:send)
     expect(replacement_socket).not_to receive(:close)
@@ -299,7 +441,7 @@ describe Bitflyer::Realtime::WebSocketClient, 'when replacing a socket' do
 
   it 'closes the replacement socket when its own heartbeat times out after setup' do
     client = described_class.new(host: 'wss://example.test', key: nil, secret: nil)
-    allow(original_socket).to receive(:closed?).and_return(true)
+    allow(original_socket).to receive(:reconnectable?).and_return(true)
     client.reconnect
     setup = Struct.new(:data).new('0{"pingInterval":1000,"pingTimeout":1000}')
     message_handlers.fetch(replacement_socket).call(setup)
@@ -433,7 +575,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 end
 
 RSpec.describe Bitflyer::Realtime::WebSocketClient do
-  let(:transport) { instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false) }
+  let(:transport) { instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false, reconnectable?: false) }
   let(:handlers) { {} }
   let(:ready) { spy('ready callback') }
   let(:subscription_failed) { spy('subscription failure callback') }
@@ -462,6 +604,58 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     end
   end
 
+  shared_examples 'a stalled setup subscription' do
+    it 'reconnects despite fresh pongs and notifies readiness once after replay' do
+      now = 100_000
+      allow(Process).to receive(:clock_gettime).and_call_original
+      allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond) { now }
+      client = realtime_client
+      websocket = client.websocket_client
+      client.ticker_btc_jpy = ->(_message) {}
+      client.executions_btc_jpy = ->(_message) {}
+      receive_frame('0{"pingInterval":1000,"pingTimeout":2000}')
+      receive_frame('430[null]') if key
+      receive_frame('431[null]')
+
+      replacement = instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false)
+      replacement_handlers = {}
+      stub_transport(replacement, replacement_handlers)
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(replacement)
+      allow(transport).to receive(:open?) { !transport.closed? }
+      allow(transport).to receive(:send).with('2') { receive_frame('3') }
+      expect(transport).to receive(:close) do
+        expect(now).to eq(110_000)
+        receive_frame('432[null]')
+        allow(transport).to receive(:closed?).and_return(true)
+        handlers.fetch(:close).call(nil)
+        allow(transport).to receive(:reconnectable?).and_return(true)
+      end
+
+      ticks = [109_999, 110_000, 111_000]
+      allow(websocket.instance_variable_get(:@monitor_wakeup)).to receive(:wait) { now = ticks.shift }
+      allow(websocket).to receive(:wait_for_monitor_tick).and_wrap_original do |wait|
+        wait.call unless ticks.empty?
+      end
+      allow(websocket).to receive(:start_monitoring).and_call_original
+      expect(websocket.send(:start_monitoring).join(5)).to be_a(Thread)
+      expect(transport).to have_received(:send).with('2').once
+      expect(websocket.websocket_client).to equal(replacement)
+      expect(ready).not_to have_received(:call)
+
+      receive_frame('0{}', replacement_handlers)
+      receive_frame('430[null]', replacement_handlers) if key
+      expect(replacement).to have_received(:send).with('421["subscribe","lightning_ticker_BTC_JPY"]').once
+      expect(replacement).to have_received(:send).with('422["subscribe","lightning_executions_BTC_JPY"]').once
+      receive_frame('432[null]', replacement_handlers)
+      expect(ready).not_to have_received(:call)
+      receive_frame('431[null]', replacement_handlers)
+      receive_frame('431[null]', replacement_handlers)
+      expect(ready).to have_received(:call).once
+    end
+  end
+
+  include_examples 'a stalled setup subscription'
+
   it 'waits for every subscription acknowledgment and ignores duplicates and unknown IDs' do
     client = realtime_client
     client.ticker_btc_jpy = ->(_message) {}
@@ -485,31 +679,29 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
   it 'unsubscribes one runtime channel while retaining the others across reconnect' do
     client = Bitflyer.realtime_client('key', 'secret')
     client.ready = ready
-    ticker = spy('ticker callback')
-    orders = spy('orders callback')
-    client.child_order_events = ->(message) { orders.call(message) }
+    events = Queue.new
+    client.child_order_events = ->(message) { events << [:order, message] }
     receive_frame('0{}')
     receive_frame('430[null]')
     receive_frame('431[null]')
 
-    client.subscribe('lightning_ticker_SOL_JPY') { |message| ticker.call(message) }
+    client.subscribe('lightning_ticker_SOL_JPY') { |message| events << [:ticker, message] }
     expect(transport).to have_received(:send).with('422["subscribe","lightning_ticker_SOL_JPY"]').once
     receive_frame('432[null]')
     receive_frame('42["lightning_ticker_SOL_JPY",1]')
+    expect(events.pop(timeout: 5)).to eq([:ticker, 1])
 
     client.unsubscribe(:lightning_ticker_SOL_JPY)
     client.unsubscribe('lightning_ticker_SOL_JPY')
     expect(transport).to have_received(:send).with('42["unsubscribe","lightning_ticker_SOL_JPY"]').once
     receive_frame('42["lightning_ticker_SOL_JPY",2]')
     receive_frame('42["child_order_events",3]')
-    expect(ticker).to have_received(:call).with(1).once
-    expect(ticker).to have_received(:call).once
-    expect(orders).to have_received(:call).with(3)
+    expect(events.pop(timeout: 5)).to eq([:order, 3])
 
-    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil)
+    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false)
     next_handlers = {}
     stub_transport(next_transport, next_handlers)
-    allow(transport).to receive(:closed?).and_return(true)
+    allow(transport).to receive(:reconnectable?).and_return(true)
     allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(next_transport)
     client.websocket_client.reconnect
     receive_frame('0{}', next_handlers)
@@ -519,7 +711,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 
     expect(next_transport).to have_received(:send).with('421["subscribe","child_order_events"]')
     expect(next_transport).to have_received(:send).exactly(2).times
-    expect(orders).to have_received(:call).with(4)
+    expect(events.pop(timeout: 5)).to eq([:order, 4])
     expect(ready).to have_received(:call).twice
   end
 
@@ -539,6 +731,25 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     expect(subscription_failed).to have_received(:call).with(:lightning_ticker_BTC_JPY, 'rejected').once
     expect(subscription_failed).to have_received(:call).once
     expect(ready).to have_received(:call).once
+  end
+
+  it 'keeps the connection open when only a runtime subscription is pending at the setup deadline' do
+    now = 100_000
+    allow(Process).to receive(:clock_gettime).and_call_original
+    allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond) { now }
+    client = realtime_client
+    client.ticker_btc_jpy = ->(_message) {}
+    receive_frame('0{}')
+    client.subscribe('lightning_executions_BTC_JPY') { |_message| }
+    receive_frame('431[null]')
+
+    now = 110_000
+    expect(transport).not_to receive(:close)
+    client.websocket_client.send(:close_expired_subscriptions)
+    receive_frame('432["rejected"]')
+
+    expect(ready).to have_received(:call).once
+    expect(subscription_failed).to have_received(:call).with(:lightning_executions_BTC_JPY, 'rejected').once
   end
 
   it 'sends subscription changes in order when a send is in progress' do
@@ -565,12 +776,12 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     receive_frame('431[null]')
     expect(ready).to have_received(:call).once
 
-    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil)
+    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false)
     next_handlers = {}
     stub_transport(next_transport, next_handlers)
     allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(next_transport)
 
-    allow(transport).to receive(:closed?).and_return(true)
+    allow(transport).to receive(:reconnectable?).and_return(true)
     handlers.fetch(:close).call(nil)
     client.websocket_client.reconnect
     receive_frame('0{}', next_handlers)
@@ -586,14 +797,14 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     client.ticker_btc_jpy = ->(_message) {}
     receive_frame('0{}')
 
-    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil)
+    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false)
     next_handlers = {}
     stub_transport(next_transport, next_handlers)
     allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(next_transport)
 
     payload = double('old acknowledgment')
     allow(payload).to receive(:data) do
-      allow(transport).to receive(:closed?).and_return(true)
+      allow(transport).to receive(:reconnectable?).and_return(true)
       client.websocket_client.reconnect
       receive_frame('0{}', next_handlers)
       '431[null]'
@@ -616,6 +827,8 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
   context 'with credentials' do
     let(:key) { 'key' }
     let(:secret) { 'secret' }
+
+    include_examples 'a stalled setup subscription'
 
     it 'waits for the private subscription after authentication' do
       client = realtime_client
@@ -655,7 +868,10 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 end
 
 describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
-  let(:socket) { instance_double(Bitflyer::Realtime::Transport, on: nil, send: nil, close: nil, connect: nil, open?: true) }
+  let(:socket) do
+    instance_double(Bitflyer::Realtime::Transport, on: nil, send: nil, close: nil, connect: nil, open?: true, closed?: false,
+                    close_for_shutdown: nil)
+  end
   let(:host) { 'wss://example.test' }
   let(:key) { nil }
   let(:secret) { nil }
@@ -668,6 +884,8 @@ describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
     allow_any_instance_of(described_class).to receive(:start_monitoring)
     client.ready = ready
   end
+
+  after { client.shutdown }
 
   def receive_frame(data)
     @receive.call(double('frame', data: data))
@@ -695,32 +913,58 @@ describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
     expect(socket).to have_received(:close).once
   end
 
+  it 'discards queued events after unsubscribing and resubscribing to the same channel' do
+    channel = :lightning_ticker_BTC_JPY
+    started = Queue.new
+    resume = Queue.new
+    events = Queue.new
+    callback = lambda do |message|
+      if message == 'running'
+        started << true
+        resume.pop
+      end
+      events << message
+    end
+    receive_frame('0{}')
+    client.subscribe(channel_name: channel, &callback)
+    receive_frame('42["lightning_ticker_BTC_JPY","running","stale"]')
+    expect(started.pop(timeout: 5)).to be(true)
+
+    client.unsubscribe(channel_name: channel)
+    client.subscribe(channel_name: channel, &callback)
+    receive_frame('42["lightning_ticker_BTC_JPY","fresh"]')
+    resume << true
+
+    expect(events.pop(timeout: 5)).to eq('running')
+    expect(events.pop(timeout: 5)).to eq('fresh')
+  ensure
+    resume.close
+  end
+
   it 'logs a fixed diagnostic for a malformed private event and delivers the next event' do
-    callback = spy('private order callback')
-    client.subscribe(channel_name: :child_order_events) { |message| callback.call(message) }
+    events = Queue.new
+    client.subscribe(channel_name: :child_order_events) { |message| events << message }
 
     expect do
       receive_frame('42["child_order_events",{"order_id":INVALID"demo-private-order"}]')
     end.to output("Invalid JSON in realtime frame\n").to_stdout
-    expect(callback).not_to have_received(:call)
-
     receive_frame('42["child_order_events",{"order_id":"valid-order"}]')
-    expect(callback).to have_received(:call).with({ 'order_id' => 'valid-order' }).once
+    expect(events.pop(timeout: 5)).to eq({ 'order_id' => 'valid-order' })
   end
 
   it 'delivers the complete decoded large board event to its callback' do
-    callback = double('board callback', call: nil)
+    events = Queue.new
     channel = :lightning_board_BTC_JPY
     board = {
       'mid_price' => 5_000_000,
       'bids' => Array.new(3_000) { |index| { 'price' => 5_000_000 - index, 'size' => 0.125 } },
       'asks' => [{ 'price' => 5_000_001, 'size' => 0.25 }]
     }
-    client.subscribe(channel_name: channel) { |message| callback.call(message) }
+    client.subscribe(channel_name: channel) { |message| events << message }
 
     receive_frame("42#{JSON.pretty_generate([channel, board])}")
 
-    expect(callback).to have_received(:call).with(board).once
+    expect(events.pop(timeout: 5)).to eq(board)
   end
 
   context 'with API credentials' do
@@ -744,7 +988,7 @@ describe Bitflyer::Realtime::WebSocketClient, 'debug logging' do
   subject(:client) { described_class.new(host: 'wss://example.test', key: 'key', secret: 'secret', debug: true) }
 
   let(:socket) do
-    instance_double(Bitflyer::Realtime::Transport, on: nil, connect: nil)
+    instance_double(Bitflyer::Realtime::Transport, on: nil, connect: nil, close_for_shutdown: nil)
   end
 
   before do
@@ -752,11 +996,13 @@ describe Bitflyer::Realtime::WebSocketClient, 'debug logging' do
     allow_any_instance_of(described_class).to receive(:start_monitoring)
   end
 
+  after { client.shutdown }
+
   %w[child_order_events parent_order_events].each do |channel_name|
     it "logs only packet metadata and delivers the original #{channel_name} event" do
       event = [{ "#{channel_name.delete_suffix('_events')}_id" => 'dummy-private-order', 'size' => 0.1 }]
       payload = double('frame', data: "42#{[channel_name, event].to_json}")
-      received = []
+      received = Queue.new
       expected_log = [
         "Subscribe #{channel_name}",
         'Received packet 42',
@@ -767,7 +1013,7 @@ describe Bitflyer::Realtime::WebSocketClient, 'debug logging' do
         client.subscribe(channel_name: channel_name.to_sym) { |message| received << message }
         client.handle_message(payload: payload)
       end.to output(expected_log).to_stdout
-      expect(received).to eq([event])
+      expect(received.pop(timeout: 5)).to eq(event)
     end
   end
 end

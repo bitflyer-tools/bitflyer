@@ -4,6 +4,55 @@ require 'spec_helper'
 require 'bigdecimal'
 
 describe Bitflyer::HTTP::Private::Client do
+  describe '#send_child_order' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:order) { { child_order_type: 'MARKET', side: 'BUY', size: 0.1 } }
+
+    %i[child_order_type side size].each do |field|
+      it "rejects an omitted #{field} before making an HTTP request" do
+        expect(Net::HTTP).not_to receive(:start)
+        expect { client.send_child_order(**order.reject { |key, _| key == field }) }
+          .to raise_error(ArgumentError, "missing keyword: :#{field}")
+      end
+
+      it "rejects a nil #{field} before making an HTTP request" do
+        expect(Net::HTTP).not_to receive(:start)
+        expect { client.send_child_order(**order.merge(field => nil)) }
+          .to raise_error(ArgumentError, "#{field} is required")
+      end
+    end
+
+    [{}, { price: nil }].each do |price_option|
+      it "rejects a limit order with #{price_option.empty? ? 'an omitted' : 'a nil'} price before making an HTTP request" do
+        expect(Net::HTTP).not_to receive(:start)
+        expect { client.send_child_order(**order.merge(child_order_type: 'LIMIT', **price_option)) }
+          .to raise_error(ArgumentError, 'price is required for LIMIT orders')
+      end
+    end
+
+    {
+      'MARKET' => {},
+      'LIMIT' => { price: 30_000 }
+    }.each do |order_type, price_option|
+      it "posts a complete #{order_type} order" do
+        http = instance_double(Net::HTTP)
+        response = instance_double(Net::HTTPOK, code: '200', body: '{"child_order_acceptance_id":"123"}')
+        allow(Net::HTTP).to receive(:start).and_return(http)
+        params = order.merge(child_order_type: order_type, **price_option)
+        expect(http).to receive(:request) do |request|
+          expect(request).to be_an_instance_of(Net::HTTP::Post)
+          expect(request.path).to eq('/v1/me/sendchildorder')
+          expect(JSON.parse(request.body)).to eq(
+            params.merge(product_code: 'BTC_JPY', time_in_force: 'GTC').transform_keys(&:to_s)
+          )
+          response
+        end
+
+        expect(client.send_child_order(**params)).to eq('child_order_acceptance_id' => '123')
+      end
+    end
+  end
+
   describe '#each_execution' do
     it 'yields fills to a block and forwards order filters on every page' do
       connection = instance_double(Bitflyer::HTTP::Connection)
@@ -52,6 +101,85 @@ describe Bitflyer::HTTP::Private::Client do
     it 'preserves the default query without ID filters' do
       client.child_orders
       expect(connection).to have_received(:get).with('/v1/me/getchildorders', { product_code: 'BTC_JPY' })
+    end
+  end
+
+  describe 'single-order requests' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:connection) { instance_double(Bitflyer::HTTP::Connection) }
+
+    before do
+      allow(Bitflyer::HTTP::Connection).to receive(:new).with('test_key', 'test_secret').and_return(connection)
+    end
+
+    {
+      cancel_child_order: [:post, '/v1/me/cancelchildorder', :child_order_id, :child_order_acceptance_id],
+      cancel_parent_order: [:post, '/v1/me/cancelparentorder', :parent_order_id, :parent_order_acceptance_id],
+      parent_order: [:get, '/v1/me/getparentorder', :parent_order_id, :parent_order_acceptance_id]
+    }.each do |method, (verb, path, order_id, acceptance_id)|
+      describe "##{method}" do
+        it 'rejects missing identifiers before dispatch' do
+          expect(connection).not_to receive(verb)
+          expect { client.public_send(method) }.to raise_error(ArgumentError, /exactly one/)
+          expect { client.public_send(method, order_id => nil, acceptance_id => nil) }
+            .to raise_error(ArgumentError, /exactly one/)
+        end
+
+        it 'rejects two identifiers before dispatch' do
+          expect(connection).not_to receive(verb)
+          expect { client.public_send(method, order_id => 'order-id', acceptance_id => 'acceptance-id') }
+            .to raise_error(ArgumentError, /exactly one/)
+        end
+
+        [[order_id, acceptance_id], [acceptance_id, order_id]].each do |identifier, other_identifier|
+          it "forwards only #{identifier} when supplied" do
+            parameters = { identifier => 'identifier' }
+            parameters[:product_code] = 'BTC_JPY' if verb == :post
+            expect(connection).to receive(verb).with(path, parameters).twice
+                                               .and_return(Bitflyer::HTTP::Response.new({}))
+
+            expect(client.public_send(method, identifier => 'identifier')).to eq({})
+            expect(client.public_send(method, identifier => 'identifier', other_identifier => nil)).to eq({})
+          end
+        end
+      end
+    end
+  end
+
+  describe '#withdraw' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:connection) { instance_double(Bitflyer::HTTP::Connection) }
+    let(:fields) { { bank_account_id: 1234, amount: 12_000 } }
+
+    before do
+      allow(Bitflyer::HTTP::Connection).to receive(:new).with('test_key', 'test_secret').and_return(connection)
+    end
+
+    %i[bank_account_id amount].each do |field|
+      it "rejects a missing #{field} before posting" do
+        expect(connection).not_to receive(:post)
+        expect { client.withdraw(**fields.except(field)) }.to raise_error(ArgumentError, /missing keyword: :#{field}/)
+      end
+
+      it "rejects a nil #{field} before posting" do
+        expect(connection).not_to receive(:post)
+        expect { client.withdraw(**fields.merge(field => nil)) }.to raise_error(ArgumentError, "#{field} is required")
+      end
+    end
+
+    it 'posts the required fields with the default currency' do
+      response = { 'message_id' => 'withdrawal-id' }
+      expect(connection).to receive(:post).with('/v1/me/withdraw', fields.merge(currency_code: 'JPY'))
+                                         .and_return(Bitflyer::HTTP::Response.new(response))
+
+      expect(client.withdraw(**fields)).to eq(response)
+    end
+
+    it 'includes the supplied two-factor authentication code' do
+      expect(connection).to receive(:post).with('/v1/me/withdraw', fields.merge(currency_code: 'JPY', code: '012345'))
+                                         .and_return(Bitflyer::HTTP::Response.new({}))
+
+      client.withdraw(**fields, code: '012345')
     end
   end
 

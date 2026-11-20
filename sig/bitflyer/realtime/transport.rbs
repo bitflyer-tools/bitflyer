@@ -16,7 +16,7 @@ module Bitflyer
 
       def open?: () -> bool
 
-      def send: (String data) -> bool?
+      def send: (String data) -> bool
 
       def close: () -> void
 

@@ -3,16 +3,22 @@
 require 'json'
 require 'openssl'
 require 'bitflyer/realtime/transport'
+require_relative 'order_book'
 
 module Bitflyer
   module Realtime
     class WebSocketClient # rubocop:disable Metrics/ClassLength
-      HANDSHAKE_TIMEOUT_MS = 10_000
-      private_constant :HANDSHAKE_TIMEOUT_MS
+      CONNECTION_TIMEOUT = 10
+      private_constant :CONNECTION_TIMEOUT
+      CALLBACK_QUEUE_LIMIT = 1_024
+      SUBSCRIPTION_ACK_TIMEOUT_MS = 10_000
+      RECONNECT_BASE_DELAY = 1.0
+      RECONNECT_MAX_DELAY = 30.0
+      private_constant :CALLBACK_QUEUE_LIMIT, :SUBSCRIPTION_ACK_TIMEOUT_MS,
+                       :RECONNECT_BASE_DELAY, :RECONNECT_MAX_DELAY
 
-      attr_accessor :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
-                    :disconnected, :subscription_failed
-      attr_reader :websocket_client, :ready, :last_ping_at, :last_pong_at
+      attr_accessor :channel_names, :channel_callbacks, :ping_interval, :ping_timeout, :subscription_failed
+      attr_reader :websocket_client, :ready, :disconnected, :last_ping_at, :last_pong_at
 
       def initialize(host:, key:, secret:, debug: false)
         @host = host
@@ -21,13 +27,16 @@ module Bitflyer
         @debug = debug
         @channel_names = []
         @channel_callbacks = {}
+        @order_books = {}
+        @board_feeds = {}
         @lifecycle_lock = Mutex.new
         @shutdown_lock = Mutex.new
         @monitor_wakeup = ConditionVariable.new
+        initialize_callbacks
         @stopped = false
-        @authentication_error = nil
+        @reconnect_delay = nil
+        @authentication_error = @pending_authentication_error = nil
         @session_mutex = Thread::Mutex.new
-        @subscription_frames = []
         @subscription_writer = Mutex.new
         clear_readiness
         connect
@@ -55,14 +64,36 @@ module Bitflyer
         callback
       end
 
+      def disconnected=(callback)
+        error = @lifecycle_lock.synchronize do
+          @disconnected = callback
+          next unless callback
+
+          pending_error = @pending_authentication_error
+          @pending_authentication_error = nil
+          pending_error
+        end
+        notify_disconnected(error, callback) if error
+        callback
+      end
+
       def subscribe(channel_name:, &block)
         debug_log "Subscribe #{channel_name}"
         @session_mutex.synchronize do
           @channel_names = (@channel_names + [channel_name]).uniq
+          @subscription_tokens[channel_name] ||= Object.new
           @channel_callbacks[channel_name] = block
-          queue_subscription(channel_name) if @session_ready
+          queue_subscription(channel_name)
         end
         send_subscription_frames
+      end
+
+      def order_book(product_code:)
+        book = @session_mutex.synchronize do
+          @order_books[product_code] ||= register_order_book(product_code)
+        end
+        send_subscription_frames
+        book
       end
 
       def unsubscribe(channel_name:)
@@ -70,8 +101,12 @@ module Bitflyer
           return unless @channel_callbacks.key?(channel_name)
 
           @channel_callbacks.delete(channel_name)
+          @subscription_tokens.delete(channel_name)
+          return if @board_feeds.key?(channel_name)
+
           @channel_names -= [channel_name]
           @pending_subscriptions.delete_if { |_id, channel| channel == channel_name }
+          @acknowledged_subscriptions.delete(channel_name)
           queue_subscription_frame("42#{['unsubscribe', channel_name].to_json}") if @session_ready
           @websocket_client
         end
@@ -80,12 +115,10 @@ module Bitflyer
       end
 
       def connect
-        close_expired_handshake
         connection = start_connection
         return unless connection
 
-        wait_for_connection(connection)
-        connected = true
+        connected = connection_established?(connection)
       rescue SocketError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::ETIMEDOUT,
              Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
         puts e
@@ -104,7 +137,8 @@ module Bitflyer
         return unless now - last_ping_monotonic >= ping_interval
 
         debug_log 'Sent ping'
-        return if socket&.send('2') == false
+        return unless socket
+        return if socket.send('2') == false
 
         @lifecycle_lock.synchronize do
           if @websocket_client.equal?(socket)
@@ -162,7 +196,7 @@ module Bitflyer
         when '0' then setup_by_response(json: prefix.post_match)
         when '3' then receive_pong
         when '41' then disconnect
-        when '42' then emit_message(json: prefix.post_match)
+        when '42' then emit_message(json: prefix.post_match, socket: socket)
         when '430' then authenticated(json: prefix.post_match)
         when /\A43[1-9]\d*\z/
           acknowledge_subscription(id: code[2..].to_i, json: prefix.post_match, socket: socket)
@@ -241,8 +275,11 @@ module Bitflyer
           return if @session_ready
 
           @session_ready = true
-          @channel_callbacks.each_key { |channel| queue_subscription(channel) }
+          (@board_feeds.keys | @channel_callbacks.keys).each { |channel| queue_subscription(channel) }
           @last_setup_subscription_id = @next_subscription_id
+          unless @pending_subscriptions.empty?
+            @subscription_ack_deadline = monotonic_milliseconds + SUBSCRIPTION_ACK_TIMEOUT_MS
+          end
           @websocket_client
         end
         send_subscription_frames
@@ -258,7 +295,7 @@ module Bitflyer
 
           error = JSON.parse(json).first
           @pending_subscriptions.delete(id)
-          @subscription_rejected = true if error && id <= @last_setup_subscription_id
+          record_subscription_result(id, channel, error)
           [channel, error]
         end
         @subscription_failed&.call(channel, error) if error
@@ -276,16 +313,14 @@ module Bitflyer
         @websocket_client&.close
       end
 
-      def emit_message(json:)
+      def emit_message(json:, socket: @websocket_client)
         channel_name, *messages = JSON.parse json
         return unless channel_name
 
         debug_log "Received event on #{channel_name}"
-        messages.each do |message|
-          break if @lifecycle_lock.synchronize { lifecycle_inactive? }
-
-          callback = @session_mutex.synchronize { @channel_callbacks[channel_name.to_sym] }
-          callback&.call(message)
+        channel = channel_name.to_sym
+        route_messages(channel, messages, socket) do |token|
+          messages.each { |message| enqueue_callback(channel, token, message) }
         end
       end
 
@@ -297,7 +332,99 @@ module Bitflyer
 
       private
 
+      def initialize_callbacks
+        @subscription_tokens = {}
+        @callback_queue = SizedQueue.new(CALLBACK_QUEUE_LIMIT)
+        @callback_worker = nil
+      end
+
+      def enqueue_callback(channel, token, message)
+        @lifecycle_lock.synchronize do
+          return if lifecycle_inactive?
+
+          @callback_worker ||= Thread.new { deliver_callbacks }
+          @callback_queue.push([channel, token, message], true)
+        end
+      rescue ThreadError
+        # A full queue drops the incoming event without blocking the reader.
+      end
+
+      def deliver_callbacks
+        while (event = @callback_queue.pop)
+          deliver_callback(*event)
+        end
+      end
+
+      def deliver_callback(channel, token, message)
+        callback = @lifecycle_lock.synchronize do
+          subscribed_callback(channel, token) unless lifecycle_inactive?
+        end
+        callback&.call(message)
+      rescue StandardError => e
+        puts e
+        puts e.backtrace&.join("\n")
+      end
+
+      def subscribed_callback(channel, token)
+        @session_mutex.synchronize do
+          @channel_callbacks[channel] if @subscription_tokens[channel].equal?(token)
+        end
+      end
+
+      def stop_callbacks
+        @callback_queue.close
+        @callback_queue.clear
+      end
+
+      def record_subscription_result(id, channel, error)
+        if error
+          @subscription_rejected = true if id <= @last_setup_subscription_id
+        else
+          @acknowledged_subscriptions[channel] = true
+        end
+      end
+
+      def register_order_book(product_code)
+        book = OrderBook.new
+        delta_channel = :"lightning_board_#{product_code}"
+        # Start receiving deltas before requesting the snapshot.
+        register_board_feed(delta_channel, book.method(:update), delta_channel)
+        register_board_feed(:"lightning_board_snapshot_#{product_code}", book.method(:replace), delta_channel)
+        book
+      end
+
+      def register_board_feed(channel, handler, delta_channel)
+        @board_feeds[channel] = [handler, delta_channel]
+        @channel_names = (@channel_names + [channel]).uniq
+        queue_subscription(channel)
+      end
+
+      def route_messages(channel, messages, socket)
+        token = @session_mutex.synchronize do
+          return unless @websocket_client.equal?(socket)
+
+          route_board_messages(channel, messages)
+          return unless @channel_callbacks[channel]
+
+          @subscription_tokens[channel]
+        end
+        yield token
+      end
+
+      def route_board_messages(channel, messages)
+        feed = @board_feeds[channel]
+        return unless feed
+
+        handler, delta_channel = feed
+        return unless @acknowledged_subscriptions.key?(delta_channel)
+
+        messages.each { |message| handler.call(message) }
+      end
+
       def queue_subscription(channel)
+        return unless @session_ready
+        return if @acknowledged_subscriptions.key?(channel) || @pending_subscriptions.value?(channel)
+
         @next_subscription_id += 1
         @pending_subscriptions[@next_subscription_id] = channel
         queue_subscription_frame("42#{@next_subscription_id}#{['subscribe', channel].to_json}")
@@ -329,38 +456,6 @@ module Bitflyer
         end
       end
 
-      def close_expired_handshake
-        socket = take_expired_handshake
-        return unless socket
-
-        begin
-          socket.close_for_shutdown
-        ensure
-          @lifecycle_lock.synchronize { @expiring_handshake = false }
-        end
-      end
-
-      def take_expired_handshake
-        @lifecycle_lock.synchronize do
-          socket = @websocket_client
-          deadline = @handshake_deadline
-          return unless socket.is_a?(Transport) && deadline && monotonic_milliseconds >= deadline
-          return unless pending_handshake?(socket)
-
-          @expiring_handshake = true
-          @handshake_deadline = nil
-          @session_mutex.synchronize do
-            @websocket_client = nil
-            clear_readiness
-          end
-          socket
-        end
-      end
-
-      def pending_handshake?(socket)
-        !lifecycle_inactive? && !@connection && !socket.open? && !socket.closed?
-      end
-
       def close_connections
         socket, connection = stop_lifecycle
         if connection
@@ -376,6 +471,7 @@ module Bitflyer
           next [nil, nil] if @stopped
 
           @stopped = true
+          stop_callbacks
           reset_readiness
           @monitor_wakeup.signal
           @connection&.last&.kill
@@ -386,12 +482,12 @@ module Bitflyer
       def start_connection
         @lifecycle_lock.synchronize do
           socket = @websocket_client
-          return if lifecycle_inactive? || @connection || @expiring_handshake || (socket && !socket.closed?)
+          return if lifecycle_inactive? || @connection || (socket && !socket.reconnectable?)
 
           reset_readiness(socket)
+          advance_reconnect_delay
           transport = Transport.new
           register_transport_handlers(transport)
-          @handshake_deadline = monotonic_milliseconds + HANDSHAKE_TIMEOUT_MS
           connector = Thread.new do
             transport.connect "#{@host}/socket.io/?transport=websocket"
             nil
@@ -402,9 +498,17 @@ module Bitflyer
         end
       end
 
-      def wait_for_connection(connection)
-        error = connection.last.value
+      def connection_established?(connection)
+        connector = connection.last
+        unless connector.join(CONNECTION_TIMEOUT)
+          debug_log 'Timed out establishing the WebSocket transport'
+          return false
+        end
+
+        error = connector.value
         raise error if error
+
+        true
       end
 
       def register_transport_handlers(transport)
@@ -423,7 +527,6 @@ module Bitflyer
           return unless @connection&.first.equal?(transport) || @websocket_client.equal?(transport)
 
           replace_transport(transport)
-          @handshake_deadline = nil
         end
       end
 
@@ -444,11 +547,7 @@ module Bitflyer
           @connection = nil
           return if @stopped
 
-          if connected
-            replace_transport(transport) unless @authentication_error
-          else
-            @handshake_deadline = nil
-          end
+          replace_transport(transport) if connected && !@authentication_error
           !connected
         end
         return unless close_transport
@@ -460,22 +559,59 @@ module Bitflyer
 
       def start_monitoring
         Thread.new do
-          while wait_for_monitor_tick
-            if @websocket_client&.open?
-              send_ping
-              wait_pong
-            else
-              reconnect
+          while (tick = wait_for_monitor_tick)
+            case tick
+            when :retry then reconnect
+            when :poll then poll_transport
             end
           end
         end
       end
 
+      def close_expired_subscriptions
+        socket = @session_mutex.synchronize do
+          deadline = @subscription_ack_deadline
+          return unless deadline && monotonic_milliseconds >= deadline && setup_subscriptions_pending?
+
+          @subscription_ack_deadline = nil
+          @subscription_rejected = true
+          @pending_subscriptions.clear
+          @websocket_client
+        end
+        debug_log 'Timed out waiting for setup subscription acknowledgments'
+        socket&.close
+      end
+
       def wait_for_monitor_tick
         @lifecycle_lock.synchronize do
-          @monitor_wakeup.wait(@lifecycle_lock, 1) unless lifecycle_inactive?
-          !lifecycle_inactive?
+          return if lifecycle_inactive?
+
+          retrying = retry_pending?
+          @monitor_wakeup.wait(@lifecycle_lock, retrying ? jittered_reconnect_delay : 1)
+          (retrying ? :retry : :poll) unless lifecycle_inactive?
         end
+      end
+
+      def retry_pending?
+        socket = @websocket_client
+        !@connection && (!socket || socket.reconnectable?)
+      end
+
+      def poll_transport
+        return unless @websocket_client&.open?
+
+        send_ping
+        wait_pong
+        close_expired_subscriptions
+      end
+
+      def advance_reconnect_delay
+        delay = @reconnect_delay
+        @reconnect_delay = delay ? [delay * 2, RECONNECT_MAX_DELAY].min : RECONNECT_BASE_DELAY
+      end
+
+      def jittered_reconnect_delay
+        (@reconnect_delay || RECONNECT_BASE_DELAY) * (0.5 + (rand * 0.5))
       end
 
       def lifecycle_inactive?
@@ -491,7 +627,10 @@ module Bitflyer
 
             return unless setup_subscriptions_acknowledged?
 
-            @ready_state = :ready if @ready_state == :pending
+            if @ready_state == :pending
+              @reconnect_delay = RECONNECT_BASE_DELAY
+              @ready_state = :ready
+            end
             take_ready_callback
           end
         end
@@ -499,11 +638,16 @@ module Bitflyer
       end
 
       def setup_subscriptions_acknowledged?
-        !@subscription_rejected && @pending_subscriptions.keys.none? { |id| id <= @last_setup_subscription_id }
+        !@subscription_rejected && !setup_subscriptions_pending?
+      end
+
+      def setup_subscriptions_pending?
+        @pending_subscriptions.each_key.any? { |id| id <= @last_setup_subscription_id }
       end
 
       def take_ready_callback
         return unless @ready_state == :ready && @ready
+        return if @websocket_client&.closed?
 
         @ready_state = :notified
         @ready
@@ -519,9 +663,12 @@ module Bitflyer
       end
 
       def clear_readiness
-        @subscription_frames.clear
+        @order_books.each_value(&:invalidate)
+        @subscription_frames = []
         @next_subscription_id = @last_setup_subscription_id = 0
         @pending_subscriptions = {}
+        @acknowledged_subscriptions = {}
+        @subscription_ack_deadline = nil
         @subscription_rejected = false
         @awaiting_authentication = false
         @session_ready = false
@@ -532,10 +679,12 @@ module Bitflyer
         error = @lifecycle_lock.synchronize do
           return if lifecycle_inactive?
 
-          @authentication_error = RuntimeError.new("Authentication failed: #{json}")
+          failure = RuntimeError.new("Authentication failed: #{json}")
+          @authentication_error = failure
+          stop_callbacks
           reset_readiness
           @monitor_wakeup.signal
-          @authentication_error
+          failure
         end
 
         begin
@@ -543,12 +692,20 @@ module Bitflyer
         rescue SystemCallError, IOError => e
           debug_log e
         ensure
-          notify_disconnected(error)
+          notify_authentication_failure(error)
         end
       end
 
-      def notify_disconnected(error)
-        @disconnected&.call(error)
+      def notify_authentication_failure(error)
+        callback = @lifecycle_lock.synchronize do
+          @pending_authentication_error = error unless @disconnected
+          @disconnected
+        end
+        notify_disconnected(error, callback)
+      end
+
+      def notify_disconnected(error, callback = @disconnected)
+        callback&.call(error)
       rescue StandardError => e
         warn e.full_message(highlight: false)
       end

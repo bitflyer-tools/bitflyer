@@ -8,12 +8,17 @@ module Bitflyer
       @lifecycle_lock: Mutex
       @monitor_wakeup: Thread::ConditionVariable
       @stopped: bool
+      @reconnect_delay: Float?
       @authentication_error: RuntimeError?
+      @pending_authentication_error: RuntimeError?
       @monitor: Thread?
       @session_mutex: Thread::Mutex
+      @order_books: Hash[String, OrderBook]
+      @board_feeds: Hash[Symbol, [Method, Symbol]]
       @next_subscription_id: Integer
       @last_setup_subscription_id: Integer
       @pending_subscriptions: Hash[Integer, Symbol]
+      @acknowledged_subscriptions: Hash[Symbol, bool]
       @subscription_rejected: bool
       @awaiting_authentication: bool
       @session_ready: bool
@@ -39,6 +44,8 @@ module Bitflyer
       def inspect: () -> String
 
       def subscribe: (channel_name: Symbol) { (untyped message) -> void } -> void
+
+      def order_book: (product_code: String) -> OrderBook
 
       def unsubscribe: (channel_name: Symbol) -> void
 
@@ -72,15 +79,29 @@ module Bitflyer
 
       def disconnect: () -> void
 
-      def emit_message: (json: String) -> void
+      def emit_message: (json: String, ?socket: Transport?) -> void
 
       def debug_log: (untyped message) -> void
 
       private
 
+      def register_order_book: (String product_code) -> OrderBook
+
+      def register_board_feed: (Symbol channel, Method handler, Symbol delta_channel) -> void
+      def record_subscription_result: (Integer id, Symbol channel, untyped error) -> void
+      def route_board_messages: (Symbol channel, Array[untyped] messages) -> void
+
+      def route_messages: (Symbol channel, Array[untyped] messages, Transport? socket) { (Object? token) -> void } -> void
+
       def start_monitoring: () -> Thread
 
-      def wait_for_monitor_tick: () -> bool
+      def wait_for_monitor_tick: () -> (:retry | :poll)?
+
+      def poll_transport: () -> void
+
+      def advance_reconnect_delay: () -> void
+
+      def jittered_reconnect_delay: () -> Float
 
       def lifecycle_inactive?: () -> bool
 
@@ -94,7 +115,9 @@ module Bitflyer
 
       def reject_authentication: (String json) -> void
 
-      def notify_disconnected: (untyped error) -> void
+      def notify_authentication_failure: (RuntimeError error) -> void
+
+      def notify_disconnected: (untyped error, ?disconnected_callback? callback) -> void
 
       def monotonic_milliseconds: () -> Integer
 

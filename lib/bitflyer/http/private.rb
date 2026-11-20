@@ -46,7 +46,10 @@ module Bitflyer
           @connection.get('/v1/me/getdeposits', count: count, before: before, after: after).body
         end
 
-        def withdraw(currency_code: 'JPY', bank_account_id: nil, amount: nil, code: nil)
+        def withdraw(bank_account_id:, amount:, currency_code: 'JPY', code: nil)
+          raise ArgumentError, 'bank_account_id is required' if bank_account_id.nil?
+          raise ArgumentError, 'amount is required' if amount.nil?
+
           body = {
             currency_code: currency_code,
             bank_account_id: bank_account_id,
@@ -63,14 +66,19 @@ module Bitflyer
         end
 
         def send_child_order(
+          child_order_type:,
+          side:,
+          size:,
           product_code: 'BTC_JPY',
-          child_order_type: nil,
-          side: nil,
           price: nil,
-          size: nil,
           minute_to_expire: nil,
           time_in_force: 'GTC'
         )
+          raise ArgumentError, 'child_order_type is required' if child_order_type.nil?
+          raise ArgumentError, 'side is required' if side.nil?
+          raise ArgumentError, 'size is required' if size.nil?
+          raise ArgumentError, 'price is required for LIMIT orders' if child_order_type == 'LIMIT' && price.nil?
+
           body = {
             product_code: product_code,
             child_order_type: child_order_type,
@@ -85,11 +93,10 @@ module Bitflyer
         end
 
         def cancel_child_order(product_code: 'BTC_JPY', child_order_id: nil, child_order_acceptance_id: nil)
-          body = {
-            product_code: product_code,
-            child_order_id: child_order_id,
-            child_order_acceptance_id: child_order_acceptance_id
-          }.delete_if { |_, v| v.nil? }
+          identifier = order_identifier(
+            child_order_id: child_order_id, child_order_acceptance_id: child_order_acceptance_id
+          )
+          body = { product_code: product_code }.compact.merge(identifier)
           @connection.post('/v1/me/cancelchildorder', body).body
         end
 
@@ -108,11 +115,10 @@ module Bitflyer
         end
 
         def cancel_parent_order(product_code: 'BTC_JPY', parent_order_id: nil, parent_order_acceptance_id: nil)
-          body = {
-            product_code: product_code,
-            parent_order_id: parent_order_id,
-            parent_order_acceptance_id: parent_order_acceptance_id
-          }.delete_if { |_, v| v.nil? }
+          identifier = order_identifier(
+            parent_order_id: parent_order_id, parent_order_acceptance_id: parent_order_acceptance_id
+          )
+          body = { product_code: product_code }.compact.merge(identifier)
           @connection.post('/v1/me/cancelparentorder', body).body
         end
 
@@ -155,10 +161,9 @@ module Bitflyer
         end
 
         def parent_order(parent_order_id: nil, parent_order_acceptance_id: nil)
-          query = {
-            parent_order_id: parent_order_id,
-            parent_order_acceptance_id: parent_order_acceptance_id
-          }.delete_if { |_, v| v.nil? }
+          query = order_identifier(
+            parent_order_id: parent_order_id, parent_order_acceptance_id: parent_order_acceptance_id
+          )
           @connection.get('/v1/me/getparentorder', query).body
         end
 
@@ -222,6 +227,13 @@ module Bitflyer
         end
 
         private
+
+        def order_identifier(**identifiers)
+          supplied = identifiers.compact
+          return supplied if supplied.size == 1
+
+          raise ArgumentError, "Provide exactly one of #{identifiers.keys.join(' or ')}"
+        end
 
         def validate_order_numbers(fields)
           fields.each do |field, value|

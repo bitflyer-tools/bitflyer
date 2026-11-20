@@ -67,6 +67,15 @@ describe Bitflyer::HTTP::Connection do
       allow(Net::HTTP).to receive(:start).and_return(transport)
     end
 
+    context 'when a GET endpoint returns a plain text response' do
+      let(:status) { '200' }
+      let(:body) { "OK\n" }
+
+      it 'returns the original string' do
+        expect(Bitflyer.http_public_client.health).to eq(body)
+      end
+    end
+
     context 'when cancellation returns an empty 200 response' do
       let(:status) { '200' }
       let(:body) { '' }
@@ -109,6 +118,53 @@ describe Bitflyer::HTTP::Connection do
           expect(error).to have_attributes(status: 429, body: body)
         }
       end
+    end
+  end
+
+  describe 'public Crypto CFD funding requests' do
+    let(:client) { Bitflyer.http_public_client }
+    let(:transport) { instance_double(Net::HTTP) }
+
+    before do
+      allow(Net::HTTP).to receive(:start).and_return(transport)
+    end
+
+    def stub_funding_request(path, query, body)
+      response = instance_double(Net::HTTPOK, code: '200', body: JSON.generate(body))
+      expect(transport).to receive(:request) do |request|
+        uri = URI.parse(request.path)
+        expect(request.method).to eq('GET')
+        expect(uri.path).to eq(path)
+        expect(URI.decode_www_form(uri.query)).to match_array(query.to_a)
+        expect(request.to_hash.keys.grep(/\Aaccess-/)).to be_empty
+        response
+      end
+    end
+
+    it 'returns the upcoming rate and settlement time' do
+      body = { 'current_funding_rate' => -0.00375, 'next_funding_rate_settledate' => '2024-04-15T13:00:00' }
+      stub_funding_request('/v1/getfundingrate', { 'product_code' => 'FX_BTC_JPY' }, body)
+
+      expect(client.funding_rate(product_code: 'FX_BTC_JPY')).to eq(body)
+    end
+
+    it 'passes all history filters and preserves the response order and fields' do
+      from = '2024-04-14T00:00:00'
+      to = '2024-04-16T00:00:00'
+      body = [
+        { 'calculation_date' => '2024-04-15T05:00:00', 'settlement_date' => '2024-04-15T13:00:00', 'rate' => -0.00375 },
+        { 'calculation_date' => '2024-04-14T21:00:00', 'settlement_date' => '2024-04-15T05:00:00', 'rate' => 0.00125 }
+      ]
+      query = { 'product_code' => 'FX_BTC_JPY', 'from' => from, 'to' => to, 'count' => '10' }
+      stub_funding_request('/v1/getfundingratehistory', query, body)
+
+      expect(client.funding_rate_history(product_code: 'FX_BTC_JPY', from: from, to: to, count: 10)).to eq(body)
+    end
+
+    it 'omits unset history filters and returns an empty history as an array' do
+      stub_funding_request('/v1/getfundingratehistory', { 'product_code' => 'FX_BTC_JPY' }, [])
+
+      expect(client.funding_rate_history(product_code: 'FX_BTC_JPY', from: nil, count: nil)).to eq([])
     end
   end
 

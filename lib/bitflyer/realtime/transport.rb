@@ -17,7 +17,7 @@ module Bitflyer
         @driver_lock = Mutex.new
         @close_lock = Mutex.new
         @handlers = {}
-        @closed = false
+        @close_state = nil
       end
 
       def on(event, &handler)
@@ -41,11 +41,16 @@ module Bitflyer
       end
 
       def closed?
-        @socket.nil? || @closed
+        @socket.nil? || !@close_state.nil?
+      end
+
+      def reconnectable?
+        @close_state == :closed
       end
 
       def send(data)
-        @driver_lock.synchronize { @driver&.text(data) if open? }
+        sent = @driver_lock.synchronize { @driver&.text(data) if open? }
+        sent == true && !closed?
       rescue IOError, SystemCallError, OpenSSL::SSL::SSLError => e
         terminate(e)
         false
@@ -140,14 +145,18 @@ module Bitflyer
       end
 
       def terminate(error = nil, notify: true)
+        closing = false
         socket = @close_lock.synchronize do
-          return if @closed
+          return if @close_state
 
-          @closed = true
+          closing = true
+          @close_state = :closing
           @socket&.close
           @socket
         end
         @handlers[:close]&.call(error) if socket && notify
+      ensure
+        @close_state = :closed if closing
       end
     end
   end
