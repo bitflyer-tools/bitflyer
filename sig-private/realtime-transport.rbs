@@ -25,8 +25,10 @@ module Bitflyer
     end
 
     class WebSocketClient
+      CONNECTION_TIMEOUT: Integer
       HANDSHAKE_TIMEOUT_MS: Integer
       CALLBACK_QUEUE_LIMIT: Integer
+      SUBSCRIPTION_ACK_TIMEOUT_MS: Integer
       RECONNECT_BASE_DELAY: Float
       RECONNECT_MAX_DELAY: Float
 
@@ -35,6 +37,7 @@ module Bitflyer
       @connection: [Transport, Thread]?
       @handshake_deadline: Integer?
       @expiring_handshake: bool?
+      @subscription_ack_deadline: Integer?
       @shutdown_lock: Mutex
       @subscription_frames: Array[[Transport?, String]]
       @subscription_writer: Mutex
@@ -62,8 +65,11 @@ module Bitflyer
       def take_subscription_frame: () -> [Transport?, String]?
 
       def setup_subscriptions_acknowledged?: () -> bool
+      def setup_subscriptions_pending?: () -> bool
 
       def close_expired_handshake: () -> void
+
+      def close_expired_subscriptions: () -> void
 
       def take_expired_handshake: () -> Transport?
 
@@ -76,7 +82,7 @@ module Bitflyer
 
       def start_connection: () -> [Transport, Thread]?
 
-      def wait_for_connection: ([Transport, Thread]) -> void
+      def connection_established?: ([Transport, Thread]) -> bool
 
       def register_transport_handlers: (Transport) -> void
 
