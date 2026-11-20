@@ -27,6 +27,8 @@ module Bitflyer
     class WebSocketClient
       HANDSHAKE_TIMEOUT_MS: Integer
       CALLBACK_QUEUE_LIMIT: Integer
+      RECONNECT_BASE_DELAY: Float
+      RECONNECT_MAX_DELAY: Float
 
       @callback_queue: Thread::SizedQueue[[Symbol, untyped]]
       @callback_worker: Thread?
@@ -48,6 +50,8 @@ module Bitflyer
       def subscribed_callback: (Symbol channel) -> (^(untyped) -> void)?
 
       def stop_callbacks: () -> void
+
+      def retry_pending?: () -> bool
 
       def queue_subscription: (Symbol) -> void
 
