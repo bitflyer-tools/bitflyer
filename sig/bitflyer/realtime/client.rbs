@@ -20,7 +20,7 @@ module Bitflyer
     class Client
       extend Forwardable
 
-      attr_accessor websocket_client: WebSocketClient
+      attr_reader websocket_client: WebSocketClient
       attr_accessor ping_interval: Integer?
       attr_accessor ping_timeout: Integer?
       attr_accessor last_ping_at: Integer?

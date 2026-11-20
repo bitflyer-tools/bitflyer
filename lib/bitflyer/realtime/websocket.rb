@@ -10,9 +10,9 @@ module Bitflyer
       HANDSHAKE_TIMEOUT_MS = 10_000
       private_constant :HANDSHAKE_TIMEOUT_MS
 
-      attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
+      attr_accessor :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
                     :disconnected, :subscription_failed
-      attr_reader :ready, :last_ping_at, :last_pong_at
+      attr_reader :websocket_client, :ready, :last_ping_at, :last_pong_at
 
       def initialize(host:, key:, secret:, debug: false)
         @host = host

@@ -14,7 +14,7 @@ module Bitflyer
       def_delegators :@websocket_client, :ready=, :disconnected=, :subscription_failed=, :shutdown
       def_delegators :@websocket_client, :ping_interval, :ping_interval=, :ping_timeout, :ping_timeout=,
                      :last_ping_at, :last_ping_at=, :last_pong_at, :last_pong_at=
-      attr_accessor :websocket_client
+      attr_reader :websocket_client
 
       Realtime::CHANNEL_NAMES.each do |channel_name|
         define_method Realtime.channel_setter_name(channel_name) do |callback|
