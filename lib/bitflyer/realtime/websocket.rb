@@ -203,10 +203,17 @@ module Bitflyer
 
           @awaiting_authentication = false
         end
-        return reject_authentication(json) if json != '[null]'
+        return reject_authentication(json) unless authentication_succeeded?(json)
 
         debug_log 'Authenticated'
         subscribe_channels
+      end
+
+      def authentication_succeeded?(json)
+        arguments = JSON.parse(json)
+        arguments.is_a?(Array) && arguments.first.nil?
+      rescue JSON::ParserError
+        false
       end
 
       def subscribe_channels

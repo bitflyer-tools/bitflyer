@@ -205,6 +205,7 @@ describe Bitflyer::Realtime::WebSocketClient do
     @client.ready = -> { notifications << :ready }
 
     expect(@monitor.join(5)).to eq(@monitor)
+    expect(socket).to have_received(:close).once
     expect(socket).not_to have_received(:send).with('421["subscribe","child_order_events"]')
     expect(socket).to have_received(:connect).twice
     expect(notifications).to be_empty
@@ -481,7 +482,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
       expect(transport).to have_received(:send).with(start_with('420["auth",'))
       expect(transport).not_to have_received(:send).with('421["subscribe","child_order_events"]')
 
-      receive_frame('430[null]')
+      receive_frame('430[ null ]')
       expect(transport).to have_received(:send).with('421["subscribe","child_order_events"]')
       expect(ready).not_to have_received(:call)
 

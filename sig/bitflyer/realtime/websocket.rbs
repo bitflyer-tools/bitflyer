@@ -58,6 +58,8 @@ module Bitflyer
 
       def authenticated: (json: String) -> void
 
+      def authentication_succeeded?: (String json) -> bool
+
       def subscribe_channels: () -> void
 
       def acknowledge_subscription: (id: Integer, json: String) -> void
