@@ -46,7 +46,10 @@ module Bitflyer
           @connection.get('/v1/me/getdeposits', count: count, before: before, after: after).body
         end
 
-        def withdraw(currency_code: 'JPY', bank_account_id: nil, amount: nil, code: nil)
+        def withdraw(bank_account_id:, amount:, currency_code: 'JPY', code: nil)
+          raise ArgumentError, 'bank_account_id is required' if bank_account_id.nil?
+          raise ArgumentError, 'amount is required' if amount.nil?
+
           body = {
             currency_code: currency_code,
             bank_account_id: bank_account_id,

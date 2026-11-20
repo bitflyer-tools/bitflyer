@@ -104,6 +104,43 @@ describe Bitflyer::HTTP::Private::Client do
     end
   end
 
+  describe '#withdraw' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:connection) { instance_double(Bitflyer::HTTP::Connection) }
+    let(:fields) { { bank_account_id: 1234, amount: 12_000 } }
+
+    before do
+      allow(Bitflyer::HTTP::Connection).to receive(:new).with('test_key', 'test_secret').and_return(connection)
+    end
+
+    %i[bank_account_id amount].each do |field|
+      it "rejects a missing #{field} before posting" do
+        expect(connection).not_to receive(:post)
+        expect { client.withdraw(**fields.except(field)) }.to raise_error(ArgumentError, /missing keyword: :#{field}/)
+      end
+
+      it "rejects a nil #{field} before posting" do
+        expect(connection).not_to receive(:post)
+        expect { client.withdraw(**fields.merge(field => nil)) }.to raise_error(ArgumentError, "#{field} is required")
+      end
+    end
+
+    it 'posts the required fields with the default currency' do
+      response = { 'message_id' => 'withdrawal-id' }
+      expect(connection).to receive(:post).with('/v1/me/withdraw', fields.merge(currency_code: 'JPY'))
+                                         .and_return(Bitflyer::HTTP::Response.new(response))
+
+      expect(client.withdraw(**fields)).to eq(response)
+    end
+
+    it 'includes the supplied two-factor authentication code' do
+      expect(connection).to receive(:post).with('/v1/me/withdraw', fields.merge(currency_code: 'JPY', code: '012345'))
+                                         .and_return(Bitflyer::HTTP::Response.new({}))
+
+      client.withdraw(**fields, code: '012345')
+    end
+  end
+
   describe '#send_child_order' do
     let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
 
