@@ -9,11 +9,10 @@ module Bitflyer
     class WebSocketClient # rubocop:disable Metrics/ClassLength
       CONNECTION_TIMEOUT = 10
       private_constant :CONNECTION_TIMEOUT
-      HANDSHAKE_TIMEOUT_MS = 10_000
       SUBSCRIPTION_ACK_TIMEOUT_MS = 10_000
       RECONNECT_BASE_DELAY = 1.0
       RECONNECT_MAX_DELAY = 30.0
-      private_constant :HANDSHAKE_TIMEOUT_MS, :SUBSCRIPTION_ACK_TIMEOUT_MS, :RECONNECT_BASE_DELAY, :RECONNECT_MAX_DELAY
+      private_constant :SUBSCRIPTION_ACK_TIMEOUT_MS, :RECONNECT_BASE_DELAY, :RECONNECT_MAX_DELAY
 
       attr_accessor :channel_names, :channel_callbacks, :ping_interval, :ping_timeout, :subscription_failed
       attr_reader :websocket_client, :ready, :disconnected, :last_ping_at, :last_pong_at
@@ -99,7 +98,6 @@ module Bitflyer
       end
 
       def connect
-        close_expired_handshake
         connection = start_connection
         return unless connection
 
@@ -349,38 +347,6 @@ module Bitflyer
         end
       end
 
-      def close_expired_handshake
-        socket = take_expired_handshake
-        return unless socket
-
-        begin
-          socket.close_for_shutdown
-        ensure
-          @lifecycle_lock.synchronize { @expiring_handshake = false }
-        end
-      end
-
-      def take_expired_handshake
-        @lifecycle_lock.synchronize do
-          socket = @websocket_client
-          deadline = @handshake_deadline
-          return unless socket.is_a?(Transport) && deadline && monotonic_milliseconds >= deadline
-          return unless pending_handshake?(socket)
-
-          @expiring_handshake = true
-          @handshake_deadline = nil
-          @session_mutex.synchronize do
-            @websocket_client = nil
-            clear_readiness
-          end
-          socket
-        end
-      end
-
-      def pending_handshake?(socket)
-        !lifecycle_inactive? && !@connection && !socket.open? && !socket.closed?
-      end
-
       def close_connections
         socket, connection = stop_lifecycle
         if connection
@@ -406,13 +372,12 @@ module Bitflyer
       def start_connection
         @lifecycle_lock.synchronize do
           socket = @websocket_client
-          return if lifecycle_inactive? || @connection || @expiring_handshake || (socket && !socket.closed?)
+          return if lifecycle_inactive? || @connection || (socket && !socket.reconnectable?)
 
           reset_readiness(socket)
           advance_reconnect_delay
           transport = Transport.new
           register_transport_handlers(transport)
-          @handshake_deadline = monotonic_milliseconds + HANDSHAKE_TIMEOUT_MS
           connector = Thread.new do
             transport.connect "#{@host}/socket.io/?transport=websocket"
             nil
@@ -452,7 +417,6 @@ module Bitflyer
           return unless @connection&.first.equal?(transport) || @websocket_client.equal?(transport)
 
           replace_transport(transport)
-          @handshake_deadline = nil
         end
       end
 
@@ -473,11 +437,7 @@ module Bitflyer
           @connection = nil
           return if @stopped
 
-          if connected
-            replace_transport(transport) unless @authentication_error
-          else
-            @handshake_deadline = nil
-          end
+          replace_transport(transport) if connected && !@authentication_error
           !connected
         end
         return unless close_transport
@@ -524,17 +484,15 @@ module Bitflyer
 
       def retry_pending?
         socket = @websocket_client
-        !@connection && (!socket || (!socket.open? && socket.closed?))
+        !@connection && (!socket || socket.reconnectable?)
       end
 
       def poll_transport
-        if @websocket_client&.open?
-          send_ping
-          wait_pong
-          close_expired_subscriptions
-        else
-          close_expired_handshake
-        end
+        return unless @websocket_client&.open?
+
+        send_ping
+        wait_pong
+        close_expired_subscriptions
       end
 
       def advance_reconnect_delay

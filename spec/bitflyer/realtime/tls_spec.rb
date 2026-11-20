@@ -40,14 +40,44 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     connect_to_trusted_server
   end
 
-  it 'closes the connection when the TLS peer stalls the WebSocket upgrade' do
+  it 'reports a stalled WebSocket upgrade once before retrying the TLS connection' do
     stub_const('Bitflyer::Realtime::Transport::HANDSHAKE_TIMEOUT', 0.2)
+    start_handshake = Queue.new
+    allow_any_instance_of(Bitflyer::Realtime::Transport).to receive(:read_handshake).and_wrap_original do |read, socket|
+      start_handshake.pop
+      read.call(socket)
+    end
+    events = Queue.new
     serve(trusted_certificate) { |socket| socket.read }
     @client = connect_client
+    transport = @client.websocket_client
+    @client.disconnected = lambda do |error|
+      events << error
+      @client.reconnect
+      events << @client.websocket_client
+    end
+    start_handshake << true
 
     expect(server_result).to start_with('GET /socket.io/?transport=websocket HTTP/1.1')
-    expect(@client.websocket_client.thread.join(5)).to be_a(Thread)
-    expect(@client.websocket_client).to be_closed
+    expect(transport.thread.join(5)).to be_a(Thread)
+    expect(transport).to be_closed
+    expect(events.size).to eq(2)
+    expect(events.pop).to be_a(Timeout::Error)
+    expect(events.pop).to equal(transport)
+
+    authentication = Queue.new
+    serve(trusted_certificate) do |socket|
+      authentication << receive_authentication(socket)
+      socket.read
+    end
+    start_handshake << true
+    allow(@client).to receive(:start_monitoring).and_call_original
+    @client.instance_variable_set(:@monitor, @client.__send__(:start_monitoring))
+    expect(Timeout.timeout(5) { authentication.pop }).to start_with('420["auth",{"api_key":"test-api-key"')
+    expect(@client.websocket_client).not_to equal(transport)
+    expect(events).to be_empty
+  ensure
+    start_handshake << true
   end
 
   {
