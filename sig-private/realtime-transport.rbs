@@ -27,6 +27,8 @@ module Bitflyer
     class WebSocketClient
       HANDSHAKE_TIMEOUT_MS: Integer
       SUBSCRIPTION_ACK_TIMEOUT_MS: Integer
+      RECONNECT_BASE_DELAY: Float
+      RECONNECT_MAX_DELAY: Float
 
       @connection: [Transport, Thread]?
       @handshake_deadline: Integer?
@@ -37,6 +39,8 @@ module Bitflyer
       @subscription_writer: Mutex
 
       private
+
+      def retry_pending?: () -> bool
 
       def queue_subscription: (Symbol) -> void
 
