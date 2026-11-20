@@ -34,7 +34,7 @@ describe Bitflyer do
 
   describe '.realtime_client' do
     let(:socket) do
-      double('websocket transport', open?: true, reconnectable?: false, connect: nil, on: nil, close: nil,
+      double('websocket transport', open?: true, closed?: false, reconnectable?: false, connect: nil, on: nil, close: nil,
              close_for_shutdown: nil, send: nil)
     end
 
@@ -63,13 +63,21 @@ describe Bitflyer do
       end
     end
 
-    def send_greeting(peer, payload)
+    def send_greeting(peer, payload = nil)
       driver = WebSocket::Driver.server(peer)
       driver.on(:connect) do
         driver.start
-        driver.text(payload)
+        driver.text(payload) if payload
       end
       driver.parse(peer.gets("\r\n\r\n"))
+      driver
+    end
+
+    def read_realtime_frame(peer, driver)
+      frame = nil
+      driver.on(:message) { |event| frame ||= event.data }
+      driver.parse(peer.readpartial(4096)) until frame
+      frame
     end
 
     it 'returns a Realtime::Client instance' do
@@ -155,7 +163,7 @@ describe Bitflyer do
     end
 
     it 'automatically reconnects after the transport closes while active' do
-      replacement = double('replacement transport', open?: true, reconnectable?: false, connect: nil, on: nil, close: nil,
+      replacement = double('replacement transport', open?: true, closed?: false, reconnectable?: false, connect: nil, on: nil, close: nil,
                            close_for_shutdown: nil)
       reconnected = Queue.new
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket, replacement)
@@ -281,7 +289,7 @@ describe Bitflyer do
     end
 
     it 'authenticates, resubscribes, and signals readiness when the greeting arrives during connect' do
-      replacement = double('replacement transport', close_for_shutdown: nil, close: nil)
+      replacement = double('replacement transport', closed?: false, reconnectable?: false, close_for_shutdown: nil, close: nil)
       callbacks = {}
       ready = Queue.new
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(socket, replacement)
@@ -315,8 +323,8 @@ describe Bitflyer do
         transport = websocket.websocket_client
         receiver = transport.thread
         tick = Queue.new
-        allow(websocket).to receive(:reconnect).and_wrap_original do |reconnect|
-          reconnect.call
+        allow(websocket).to receive(:poll_transport).and_wrap_original do |poll|
+          poll.call
           tick << true
         end
 
@@ -423,38 +431,71 @@ describe Bitflyer do
       end
     end
 
-    it 'reconnects when the ping write detects a reset before the reader' do
-      allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
-      TCPServer.open('127.0.0.1', 0) do |server|
-        use_tcp_peer(server)
-        transport = session.websocket_client
-        ready = Queue.new
-        disconnected = Queue.new
-        client.ready = -> { ready << true }
-        client.disconnected = ->(error) { disconnected << error }
-        reset = Errno::ECONNRESET.new
+    %i[heartbeat authentication live_subscription subscription_replay].each do |write|
+      it "reconnects when a #{write} write detects a reset before the reader" do
+        allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
+        TCPServer.open('127.0.0.1', 0) do |server|
+          use_tcp_peer(server)
+          credentials = write == :authentication ? %w[key secret] : []
+          @client = Bitflyer.realtime_client(*credentials)
+          transport = @client.websocket_client.websocket_client
+          ready = Queue.new
+          disconnected = Queue.new
+          messages = Queue.new
+          callback = ->(message) { messages << message }
+          @client.ready = -> { ready << true }
+          @client.disconnected = ->(error) { disconnected << error }
+          reset = Errno::ECONNRESET.new
 
-        peer = replacement_peer = nil
-        Timeout.timeout(5) do
-          peer = server.accept
-          send_greeting(peer, '0{}')
-          ready.pop
+          peer = replacement_peer = nil
+          Timeout.timeout(5) do
+            peer = server.accept
+            driver = send_greeting(peer)
+            if %i[heartbeat live_subscription].include?(write)
+              driver.text('0{}')
+              ready.pop
+            end
 
-          raw_socket = transport.instance_variable_get(:@socket)
-          allow(raw_socket).to receive(:write).and_raise(reset)
-          client.ping_interval = 0
+            raw_socket = transport.instance_variable_get(:@socket)
+            allow(raw_socket).to receive(:write).and_raise(reset)
+            case write
+            when :heartbeat
+              @client.ping_interval = 0
+            when :live_subscription
+              @client.ticker_btc_jpy = callback
+            else
+              @client.ticker_btc_jpy = callback if write == :subscription_replay
+              driver.text('0{}')
+            end
 
-          expect(disconnected.pop).to equal(reset)
-          replacement_peer = server.accept
-          expect(replacement_peer.gets("\r\n\r\n")).to start_with('GET /socket.io/')
-          expect(transport).to be_closed
-          expect(transport.thread.join(1)).to eq(transport.thread)
-          expect(disconnected).to be_empty
+            expect(disconnected.pop).to equal(reset)
+            expect(ready).to be_empty
+            expect(transport).to be_closed
+            expect(transport.thread.join(1)).to eq(transport.thread)
+
+            replacement_peer = server.accept
+            driver = send_greeting(replacement_peer, '0{}')
+            if write == :authentication
+              expect(read_realtime_frame(replacement_peer, driver)).to start_with('420["auth",')
+              driver.text('430[null]')
+            end
+            if %i[live_subscription subscription_replay].include?(write)
+              expect(read_realtime_frame(replacement_peer, driver)).to eq('421["subscribe","lightning_ticker_BTC_JPY"]')
+              expect(ready).to be_empty
+              driver.text('431[null]')
+            end
+            ready.pop
+            expect(disconnected).to be_empty
+            if %i[live_subscription subscription_replay].include?(write)
+              driver.text('42["lightning_ticker_BTC_JPY",{"price":1}]')
+              expect(messages.pop).to eq('price' => 1)
+            end
+          end
+        ensure
+          @client&.shutdown
+          peer&.close
+          replacement_peer&.close
         end
-      ensure
-        @client&.shutdown
-        peer&.close
-        replacement_peer&.close
       end
     end
 

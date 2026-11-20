@@ -3,7 +3,7 @@
 require 'spec_helper'
 
 describe 'Realtime ready notifications' do
-  let(:transport) { instance_double(Bitflyer::Realtime::Transport, reconnectable?: false, close_for_shutdown: nil) }
+  let(:transport) { instance_double(Bitflyer::Realtime::Transport, reconnectable?: false, closed?: false, close_for_shutdown: nil) }
   let(:handlers) { {} }
   let(:notifications) { Queue.new }
   let(:callback) { -> { notifications << :ready } }
@@ -63,6 +63,9 @@ describe 'Realtime ready notifications' do
     client.ready = callback
     expect(notifications.size).to eq(1)
 
+    replacement = instance_double(Bitflyer::Realtime::Transport, closed?: false, close_for_shutdown: nil)
+    stub_connection(replacement)
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(replacement)
     allow(transport).to receive(:reconnectable?).and_return(true)
     client.websocket_client.reconnect
     receive_message('0{}')
@@ -94,7 +97,7 @@ describe 'Realtime ready notifications' do
 
   [nil, Errno::ECONNRESET.new].each do |error|
     it "preserves the replacement socket's pending notification after a stale close with #{error&.class || "EOF"}" do
-      replacement = instance_double(Bitflyer::Realtime::Transport, close_for_shutdown: nil)
+      replacement = instance_double(Bitflyer::Realtime::Transport, closed?: false, close_for_shutdown: nil)
       stub_connection(replacement)
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(transport, replacement)
       allow(transport).to receive(:reconnectable?).and_return(true)

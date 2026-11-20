@@ -27,12 +27,17 @@ module Bitflyer
     end
 
     class WebSocketClient
+      RECONNECT_BASE_DELAY: Float
+      RECONNECT_MAX_DELAY: Float
+
       @connection: [Transport, Thread]?
       @shutdown_lock: Mutex
       @subscription_frames: Array[[Transport?, String]]
       @subscription_writer: Mutex
 
       private
+
+      def retry_pending?: () -> bool
 
       def queue_subscription: (Symbol) -> void
 
@@ -45,7 +50,6 @@ module Bitflyer
       def setup_subscriptions_acknowledged?: () -> bool
 
       def close_connections: () -> void
-
 
       def stop_lifecycle: () -> [Transport?, [Transport, Thread]?]
 
