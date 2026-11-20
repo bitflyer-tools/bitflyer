@@ -27,14 +27,30 @@ module Bitflyer
     class WebSocketClient
       HANDSHAKE_TIMEOUT_MS: Integer
       SESSION_RESPONSE_TIMEOUT_MS: Integer
+      RECONNECT_BASE_DELAY: Float
+      RECONNECT_MAX_DELAY: Float
 
       @connection: [Transport, Thread]?
       @handshake_deadline: Integer?
       @expiring_handshake: bool?
       @shutdown_lock: Mutex
       @session_deadline: [Integer, :setup | :authentication] | :expired | :established | nil
+      @subscription_frames: Array[[Transport?, String]]
+      @subscription_writer: Mutex
 
       private
+
+      def retry_pending?: () -> bool
+
+      def queue_subscription: (Symbol) -> void
+
+      def queue_subscription_frame: (String) -> void
+
+      def send_subscription_frames: () -> void
+
+      def take_subscription_frame: () -> [Transport?, String]?
+
+      def setup_subscriptions_acknowledged?: () -> bool
 
       def close_expired_handshake: () -> void
 

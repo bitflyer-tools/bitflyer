@@ -315,8 +315,8 @@ describe Bitflyer do
         transport = websocket.websocket_client
         receiver = transport.thread
         tick = Queue.new
-        allow(websocket).to receive(:reconnect).and_wrap_original do |reconnect|
-          reconnect.call
+        allow(websocket).to receive(:poll_transport).and_wrap_original do |poll|
+          poll.call
           tick << true
         end
 

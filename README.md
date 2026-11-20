@@ -26,6 +26,8 @@ After installing the gem, run this command to print the public BTC/JPY order boo
 ruby -r bitflyer -e 'p Bitflyer.http_public_client.board(product_code: "BTC_JPY")'
 ```
 
+See the [getting started guide](docs/getting-started.md) for a script that lists markets and fetches an order book.
+
 ## Usage
 
 See https://lightning.bitflyer.jp/docs for details.
@@ -34,8 +36,16 @@ See https://lightning.bitflyer.jp/docs for details.
 
 See [public.rb](./lib/bitflyer/http/public.rb) / [private.rb](./lib/bitflyer/http/private.rb) for method definition.
 
+For a successful (2xx) HTTP response, the client returns the parsed Ruby value if the body is valid JSON.
+If the body is non-JSON text or an empty string, the client returns the original string.
+If the response has no body, the client returns `nil`.
+
 HTTP responses outside the 2xx range raise `Bitflyer::HTTP::ResponseError`. The error provides
 the numeric HTTP status in `status` and the raw response body in `body`.
+
+Order quantities and prices accept integers and finite floats. This also applies to the trigger price
+in parent order conditions. Pass expiration minutes and trailing offsets as integers. The client
+raises `ArgumentError` before sending an order with an unsupported value such as a `BigDecimal`.
 
 #### Example
 
@@ -46,8 +56,8 @@ private_client = Bitflyer.http_private_client('YOUR_API_KEY', 'YOUR_API_SECRET')
 p private_client.positions # will print your positions
 ```
 
-Each HTTP client reuses its HTTPS connection across requests. Call `client.close` to release it.
-The next request on that client opens a new connection.
+Each HTTP client can reuse its HTTPS connection after up to 10 seconds of idle time if the server
+keeps it open. Call `client.close` to release it. The next request on that client opens a new connection.
 
 #### Stream execution history
 
@@ -56,9 +66,15 @@ in API response order. It uses the lowest execution ID on each page as the next 
 cursor. Pass a saved execution ID as `before` to resume from older records, and use `after` to set
 an exclusive lower bound.
 
+The [public `/v1/executions` endpoint](https://lightning.bitflyer.com/docs?lang=en#execution-history)
+limits history retrieved with `before` to the most recent 31 days. To resume a public backfill,
+use the saved ID of an execution within that window. A saved ID cannot retrieve older history.
+
 ```ruby
 public_client = Bitflyer.http_public_client
-history = public_client.each_execution(product_code: 'BTC_JPY', before: 123_456, count: 50, max_pages: 5)
+# Set BITFLYER_SAVED_EXECUTION_ID to a saved BTC_JPY execution ID from the past 31 days.
+saved_execution_id = Integer(ENV.fetch('BITFLYER_SAVED_EXECUTION_ID'), 10)
+history = public_client.each_execution(product_code: 'BTC_JPY', before: saved_execution_id, count: 50, max_pages: 5)
 history.lazy.take(75).each { |execution| p execution }
 
 private_client.each_execution(child_order_acceptance_id: 'YOUR_ORDER_ACCEPTANCE_ID') do |fill|
@@ -86,15 +102,22 @@ To subscribe to the private `child_order_events` and `parent_order_events`, pass
 #### Connection status monitoring
 
 The `ready` callback is called when the `realtime_client` is ready to receive events (after the socket connection is established, the optional authentication has succeeded, and the channels have been subscribed). If connection is lost, the `disconnected` callback is called, and reconnection is attempted automatically. When the connection is restored and the server acknowledges all subscriptions for that setup, `ready` is called again. If the server rejects a setup subscription, `subscription_failed` receives the channel name as a symbol and the server error. That setup skips `ready`.
+During an outage, retry delays increase exponentially, with jitter and a 30-second cap. When the session becomes ready, the retry delay resets.
 If setup finishes before registration, assigning `ready` delivers the pending notification synchronously, once per connection.
 
 The client closes and retries a connection if the Socket.IO setup packet or the authentication response takes 10 seconds to arrive. Each step has its own deadline, independent of heartbeat activity.
 
+A `StandardError` raised by `disconnected` is reported to standard error. Automatic reconnection continues when enabled.
+
 If the server rejects authentication, the client closes the connection and passes a `RuntimeError` with the server response to `disconnected`. Authentication rejection stops automatic reconnection.
+If the rejection occurs before callback registration, assigning `disconnected` delivers the pending error synchronously, once.
 
 Call `client.shutdown` when you finish using a realtime client. It stops automatic reconnection, closes the connection, and stops the monitoring thread. You can call it more than once, including from a `ready` or subscription callback.
 Concurrent calls wait for the connection to close.
 Calling `shutdown` from a subscription callback skips any remaining events in the current WebSocket frame.
+
+The realtime client's `websocket_client` reference and the WebSocket client's transport reference
+(`websocket_client`) are read-only. The realtime lifecycle manages connection replacement.
 
 #### Examples
 
@@ -118,6 +141,31 @@ client.executions_btc_jpy = ->(json){ p json }
 # ...
 ```
 
+To update a watchlist on the same connection, pass the full Socket.IO channel name
+to `subscribe` and `unsubscribe`. A second callback for the same channel replaces the
+previous callback. Unsubscribing stops local delivery and removes the channel from
+the subscriptions restored on reconnect. Server rejections of runtime subscriptions
+also reach `subscription_failed`.
+
+```ruby
+client = Bitflyer.realtime_client
+watchlist = []
+
+update_watchlist = lambda do |product_codes|
+  (watchlist - product_codes).each do |code|
+    client.unsubscribe("lightning_ticker_#{code}")
+  end
+  (product_codes - watchlist).each do |code|
+    client.subscribe("lightning_ticker_#{code}") { |ticker| p [code, ticker] }
+  end
+  watchlist = product_codes
+end
+
+update_watchlist.call(%w[BTC_JPY ETH_JPY])
+# Call again when the user changes the watchlist.
+update_watchlist.call(%w[ETH_JPY XRP_JPY])
+```
+
 Connection monitoring:
 ```ruby
 client = Bitflyer.realtime_client
@@ -129,7 +177,7 @@ client.subscription_failed = ->(channel, error) { p [channel, error] }
 ### Type signatures
 
 The gem ships [RBS](https://github.com/ruby/rbs) signatures in `sig/`, so [Steep](https://github.com/soutaro/steep) and other RBS-based tools
-can check code that uses it. API responses are parsed JSON and are typed as `untyped`.
+can check code that uses it. API responses are typed as `untyped`.
 
 To type check the gem itself:
 
