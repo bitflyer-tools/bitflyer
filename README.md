@@ -180,6 +180,8 @@ to `subscribe` and `unsubscribe`. A second callback for the same channel replace
 previous callback. Unsubscribing stops local delivery and removes the channel from
 the subscriptions restored on reconnect. Server rejections of runtime subscriptions
 also reach `subscription_failed`.
+Call `subscribe` again to retry a rejected channel on the same connection.
+An acknowledged or pending subscription is reused when its callback changes.
 
 ```ruby
 client = Bitflyer.realtime_client

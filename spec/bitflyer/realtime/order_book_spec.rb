@@ -141,4 +141,31 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     board(snapshot, bids: [[8, 1]])
     expect(book.current).to be_nil
   end
+
+  it 'retries rejected board subscriptions on the same connection without duplicating requests' do
+    book
+    frame('0{}')
+    client.subscribe(delta) { |_message| }
+    client.subscribe(snapshot) { |_message| }
+    frame('431["subscription rejected"]')
+    frame('432["subscription rejected"]')
+
+    client.subscribe(delta) { |_message| }
+    client.subscribe(snapshot) { |_message| }
+    client.subscribe(delta) { |_message| }
+    client.subscribe(snapshot) { |_message| }
+    frame('433[null]')
+    frame('434[null]')
+
+    raw = spy('raw board callback')
+    client.subscribe(delta) { |message| raw.call(message) }
+    client.subscribe(snapshot) { |_message| }
+    [delta, snapshot].each do |channel|
+      expect(transport).to have_received(:send).with(/\A42\d+\["subscribe","#{channel}"\]\z/).twice
+    end
+    board(snapshot, bids: [[8, 1]])
+    board(delta, bids: [[8, 2]])
+    expect(book.current.best_bid.size).to eq(2)
+    expect(raw).to have_received(:call).once
+  end
 end

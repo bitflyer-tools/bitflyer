@@ -33,7 +33,6 @@ module Bitflyer
         @authentication_error = nil
         @pending_authentication_error = nil
         @session_mutex = Thread::Mutex.new
-        @subscription_frames = []
         @subscription_writer = Mutex.new
         clear_readiness
         connect
@@ -79,7 +78,7 @@ module Bitflyer
         @session_mutex.synchronize do
           @channel_names = (@channel_names + [channel_name]).uniq
           @channel_callbacks[channel_name] = block
-          queue_subscription(channel_name) if @session_ready && !@board_feeds.key?(channel_name)
+          queue_subscription(channel_name)
         end
         send_subscription_frames
       end
@@ -346,7 +345,7 @@ module Bitflyer
       def register_board_feed(channel, handler, delta_channel)
         @board_feeds[channel] = [handler, delta_channel]
         @channel_names = (@channel_names + [channel]).uniq
-        queue_subscription(channel) if @session_ready && !@channel_callbacks.key?(channel)
+        queue_subscription(channel)
       end
 
       def route_message(channel, message, socket)
@@ -367,6 +366,9 @@ module Bitflyer
       end
 
       def queue_subscription(channel)
+        return unless @session_ready
+        return if @acknowledged_subscriptions.key?(channel) || @pending_subscriptions.value?(channel)
+
         @next_subscription_id += 1
         @pending_subscriptions[@next_subscription_id] = channel
         queue_subscription_frame("42#{@next_subscription_id}#{['subscribe', channel].to_json}")
@@ -618,7 +620,7 @@ module Bitflyer
 
       def clear_readiness
         @order_books.each_value(&:invalidate)
-        @subscription_frames.clear
+        @subscription_frames = []
         @next_subscription_id = @last_setup_subscription_id = 0
         @pending_subscriptions = {}
         @acknowledged_subscriptions = {}
