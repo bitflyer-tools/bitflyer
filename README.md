@@ -94,6 +94,9 @@ Call `client.shutdown` when you finish using a realtime client. It stops automat
 Concurrent calls wait for the connection to close.
 Calling `shutdown` from a subscription callback skips any remaining events in the current WebSocket frame.
 
+The realtime client's `websocket_client` reference and the WebSocket client's transport reference
+(`websocket_client`) are read-only. The realtime lifecycle manages connection replacement.
+
 #### Examples
 
 For public events only:

@@ -27,6 +27,11 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
 
   after { client.shutdown }
 
+  it 'exposes the active transport as read-only' do
+    expect(client.websocket_client).to equal(original)
+    expect(client).not_to respond_to(:websocket_client=)
+  end
+
   it 'keeps a pending handshake on the same socket past the first monitor tick' do
     client.ready = -> { @ready = true }
 
@@ -92,6 +97,14 @@ describe Bitflyer::Realtime::WebSocketClient do
   end
 
   after { @client&.shutdown }
+
+  it 'exposes the realtime client connection as read-only' do
+    @attempts = []
+    @client = Bitflyer.realtime_client
+
+    expect(@client.websocket_client).to be_a(described_class)
+    expect(@client).not_to respond_to(:websocket_client=)
+  end
 
   def receive_message(data)
     handlers.fetch(:message).call(double('WebSocket payload', data: data))
