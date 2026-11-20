@@ -46,7 +46,10 @@ module Bitflyer
           @connection.get('/v1/me/getdeposits', count: count, before: before, after: after).body
         end
 
-        def withdraw(currency_code: 'JPY', bank_account_id: nil, amount: nil, code: nil)
+        def withdraw(bank_account_id:, amount:, currency_code: 'JPY', code: nil)
+          raise ArgumentError, 'bank_account_id is required' if bank_account_id.nil?
+          raise ArgumentError, 'amount is required' if amount.nil?
+
           body = {
             currency_code: currency_code,
             bank_account_id: bank_account_id,
@@ -63,14 +66,19 @@ module Bitflyer
         end
 
         def send_child_order(
+          child_order_type:,
+          side:,
+          size:,
           product_code: 'BTC_JPY',
-          child_order_type: nil,
-          side: nil,
           price: nil,
-          size: nil,
           minute_to_expire: nil,
           time_in_force: 'GTC'
         )
+          raise ArgumentError, 'child_order_type is required' if child_order_type.nil?
+          raise ArgumentError, 'side is required' if side.nil?
+          raise ArgumentError, 'size is required' if size.nil?
+          raise ArgumentError, 'price is required for LIMIT orders' if child_order_type == 'LIMIT' && price.nil?
+
           body = {
             product_code: product_code,
             child_order_type: child_order_type,
