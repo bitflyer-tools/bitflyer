@@ -9,11 +9,12 @@ module Bitflyer
   module Realtime
     class WebSocketClient # rubocop:disable Metrics/ClassLength
       HANDSHAKE_TIMEOUT_MS = 10_000
-      private_constant :HANDSHAKE_TIMEOUT_MS
+      RECONNECT_BASE_DELAY = 1.0
+      RECONNECT_MAX_DELAY = 30.0
+      private_constant :HANDSHAKE_TIMEOUT_MS, :RECONNECT_BASE_DELAY, :RECONNECT_MAX_DELAY
 
-      attr_accessor :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
-                    :disconnected, :subscription_failed
-      attr_reader :websocket_client, :ready, :last_ping_at, :last_pong_at
+      attr_accessor :channel_names, :channel_callbacks, :ping_interval, :ping_timeout, :subscription_failed
+      attr_reader :websocket_client, :ready, :disconnected, :last_ping_at, :last_pong_at
 
       def initialize(host:, key:, secret:, debug: false)
         @host = host
@@ -28,7 +29,9 @@ module Bitflyer
         @shutdown_lock = Mutex.new
         @monitor_wakeup = ConditionVariable.new
         @stopped = false
+        @reconnect_delay = nil
         @authentication_error = nil
+        @pending_authentication_error = nil
         @session_mutex = Thread::Mutex.new
         @subscription_frames = []
         @subscription_writer = Mutex.new
@@ -55,6 +58,19 @@ module Bitflyer
           take_ready_callback
         end
         notification&.call
+        callback
+      end
+
+      def disconnected=(callback)
+        error = @lifecycle_lock.synchronize do
+          @disconnected = callback
+          next unless callback
+
+          pending_error = @pending_authentication_error
+          @pending_authentication_error = nil
+          pending_error
+        end
+        notify_disconnected(error, callback) if error
         callback
       end
 
@@ -118,7 +134,8 @@ module Bitflyer
         return unless now - last_ping_monotonic >= ping_interval
 
         debug_log 'Sent ping'
-        return if socket&.send('2') == false
+        return unless socket
+        return if socket.send('2') == false
 
         @lifecycle_lock.synchronize do
           if @websocket_client.equal?(socket)
@@ -441,6 +458,7 @@ module Bitflyer
           return if lifecycle_inactive? || @connection || @expiring_handshake || (socket && !socket.closed?)
 
           reset_readiness(socket)
+          advance_reconnect_delay
           transport = Transport.new
           register_transport_handlers(transport)
           @handshake_deadline = monotonic_milliseconds + HANDSHAKE_TIMEOUT_MS
@@ -512,12 +530,10 @@ module Bitflyer
 
       def start_monitoring
         Thread.new do
-          while wait_for_monitor_tick
-            if @websocket_client&.open?
-              send_ping
-              wait_pong
-            else
-              reconnect
+          while (tick = wait_for_monitor_tick)
+            case tick
+            when :retry then reconnect
+            when :poll then poll_transport
             end
           end
         end
@@ -525,9 +541,35 @@ module Bitflyer
 
       def wait_for_monitor_tick
         @lifecycle_lock.synchronize do
-          @monitor_wakeup.wait(@lifecycle_lock, 1) unless lifecycle_inactive?
-          !lifecycle_inactive?
+          return if lifecycle_inactive?
+
+          retrying = retry_pending?
+          @monitor_wakeup.wait(@lifecycle_lock, retrying ? jittered_reconnect_delay : 1)
+          (retrying ? :retry : :poll) unless lifecycle_inactive?
         end
+      end
+
+      def retry_pending?
+        socket = @websocket_client
+        !@connection && (!socket || (!socket.open? && socket.closed?))
+      end
+
+      def poll_transport
+        if @websocket_client&.open?
+          send_ping
+          wait_pong
+        else
+          close_expired_handshake
+        end
+      end
+
+      def advance_reconnect_delay
+        delay = @reconnect_delay
+        @reconnect_delay = delay ? [delay * 2, RECONNECT_MAX_DELAY].min : RECONNECT_BASE_DELAY
+      end
+
+      def jittered_reconnect_delay
+        (@reconnect_delay || RECONNECT_BASE_DELAY) * (0.5 + (rand * 0.5))
       end
 
       def lifecycle_inactive?
@@ -543,7 +585,10 @@ module Bitflyer
 
             return unless setup_subscriptions_acknowledged?
 
-            @ready_state = :ready if @ready_state == :pending
+            if @ready_state == :pending
+              @reconnect_delay = RECONNECT_BASE_DELAY
+              @ready_state = :ready
+            end
             take_ready_callback
           end
         end
@@ -556,6 +601,7 @@ module Bitflyer
 
       def take_ready_callback
         return unless @ready_state == :ready && @ready
+        return if @websocket_client&.closed?
 
         @ready_state = :notified
         @ready
@@ -586,10 +632,11 @@ module Bitflyer
         error = @lifecycle_lock.synchronize do
           return if lifecycle_inactive?
 
-          @authentication_error = RuntimeError.new("Authentication failed: #{json}")
+          failure = RuntimeError.new("Authentication failed: #{json}")
+          @authentication_error = failure
           reset_readiness
           @monitor_wakeup.signal
-          @authentication_error
+          failure
         end
 
         begin
@@ -597,12 +644,20 @@ module Bitflyer
         rescue SystemCallError, IOError => e
           debug_log e
         ensure
-          notify_disconnected(error)
+          notify_authentication_failure(error)
         end
       end
 
-      def notify_disconnected(error)
-        @disconnected&.call(error)
+      def notify_authentication_failure(error)
+        callback = @lifecycle_lock.synchronize do
+          @pending_authentication_error = error unless @disconnected
+          @disconnected
+        end
+        notify_disconnected(error, callback)
+      end
+
+      def notify_disconnected(error, callback = @disconnected)
+        callback&.call(error)
       rescue StandardError => e
         warn e.full_message(highlight: false)
       end
