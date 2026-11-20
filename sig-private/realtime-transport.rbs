@@ -25,6 +25,7 @@ module Bitflyer
     end
 
     class WebSocketClient
+      CONNECTION_TIMEOUT: Integer
       HANDSHAKE_TIMEOUT_MS: Integer
       RECONNECT_BASE_DELAY: Float
       RECONNECT_MAX_DELAY: Float
@@ -63,7 +64,7 @@ module Bitflyer
 
       def start_connection: () -> [Transport, Thread]?
 
-      def wait_for_connection: ([Transport, Thread]) -> void
+      def connection_established?: ([Transport, Thread]) -> bool
 
       def register_transport_handlers: (Transport) -> void
 

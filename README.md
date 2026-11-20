@@ -106,6 +106,8 @@ During an outage, retry delays increase exponentially, with jitter and a 30-seco
 If setup finishes before registration, assigning `ready` delivers the pending notification synchronously, once per connection.
 If a WebSocket write detects a connection reset, the client reports the reset to `disconnected` and replays registered subscriptions after reconnecting.
 
+Each realtime connection attempt has a 10-second deadline for TCP and TLS establishment. If that deadline expires, the client closes the connection and retries automatically.
+
 A `StandardError` raised by `disconnected` is reported to standard error. Automatic reconnection continues when enabled.
 
 If the server rejects authentication, the client closes the connection and passes a `RuntimeError` with the server response to `disconnected`. Authentication rejection stops automatic reconnection.
