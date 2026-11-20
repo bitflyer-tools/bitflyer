@@ -93,6 +93,55 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
     expect(disconnected).to eq([nil])
   end
 
+  it 'keeps the replacement setup deadline when an old setup frame is already being dispatched' do
+    allow(replacement).to receive(:close)
+    client.ready = -> { @ready = true }
+    payload = double(data: nil)
+    allow(payload).to receive(:data) do
+      allow(original).to receive(:reconnectable?).and_return(true)
+      client.reconnect
+      handlers[replacement].fetch(:open).call
+      '0{}'
+    end
+
+    handlers[original].fetch(:message).call(payload)
+
+    expect(@ready).to be_nil
+    @now += 10_000
+    expect(client.__send__(:session_expired?, replacement)).to be(true)
+    expect(replacement).to have_received(:close).once
+  end
+
+  context 'with credentials' do
+    let(:client) { described_class.new(host: 'wss://example.com', key: 'key', secret: 'secret') }
+
+    ['430[null]', '430["denied"]'].each do |frame|
+      it "keeps the replacement authentication deadline when dispatching an old #{frame} frame" do
+        allow(original).to receive(:send)
+        allow(replacement).to receive_messages(send: nil, close: nil)
+        client.ready = -> { @ready = true }
+        handlers[original].fetch(:open).call
+        handlers[original].fetch(:message).call(setup_message)
+        payload = double(data: nil)
+        allow(payload).to receive(:data) do
+          allow(original).to receive(:reconnectable?).and_return(true)
+          client.reconnect
+          handlers[replacement].fetch(:open).call
+          handlers[replacement].fetch(:message).call(setup_message)
+          frame
+        end
+
+        handlers[original].fetch(:message).call(payload)
+
+        expect(@ready).to be_nil
+        expect(replacement).not_to have_received(:close)
+        @now += 10_000
+        expect(client.__send__(:session_expired?, replacement)).to be(true)
+        expect(replacement).to have_received(:close).once
+      end
+    end
+  end
+
   it 'starts the setup deadline when a pending WebSocket opens' do
     expect(client.websocket_client).to equal(original)
     allow(original).to receive(:open?).and_return(true)

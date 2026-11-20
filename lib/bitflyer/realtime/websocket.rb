@@ -192,11 +192,11 @@ module Bitflyer
         return unless prefix
 
         case prefix[0]
-        when '0' then setup_by_response(json: prefix.post_match)
+        when '0' then setup_by_response(json: prefix.post_match, socket: socket)
         when '3' then receive_pong
         when '41' then disconnect
         when '42' then emit_message(json: prefix.post_match, socket: socket)
-        when '430' then authenticated(json: prefix.post_match)
+        when '430' then authenticated(json: prefix.post_match, socket: socket)
         when /\A43[1-9]\d*\z/
           acknowledge_subscription(id: prefix[0][2..].to_i, json: prefix.post_match, socket: socket)
         end
@@ -217,17 +217,17 @@ module Bitflyer
         notify_disconnected(error)
       end
 
-      def setup_by_response(json:)
-        return unless apply_setup(JSON.parse(json))
+      def setup_by_response(json:, socket: @websocket_client)
+        return unless apply_setup(JSON.parse(json), socket)
 
         if @key && @secret
-          authenticate
+          authenticate(socket: socket)
         else
-          subscribe_channels
+          subscribe_channels(socket: socket)
         end
       end
 
-      def authenticate
+      def authenticate(socket: @websocket_client)
         debug_log 'Authenticate'
         timestamp = Time.now.to_i
         nonce = Random.new.bytes(16).unpack1('H*').to_s
@@ -238,21 +238,20 @@ module Bitflyer
           nonce: nonce,
           signature: signature
         }
-        socket = @session_mutex.synchronize do
-          return if @awaiting_authentication || @session_ready
+        @session_mutex.synchronize do
+          return if !@websocket_client.equal?(socket) || @awaiting_authentication || @session_ready
 
           @awaiting_authentication = true
-          @websocket_client
         end
         socket&.send "420#{['auth', auth_params].to_json}"
       end
 
-      def authenticated(json:)
-        return unless accept_authentication_response
-        return reject_authentication(json) unless authentication_succeeded?(json)
+      def authenticated(json:, socket: @websocket_client)
+        return unless accept_authentication_response(socket)
+        return reject_authentication(json, socket: socket) unless authentication_succeeded?(json)
 
         debug_log 'Authenticated'
-        subscribe_channels
+        subscribe_channels(socket: socket)
       end
 
       def authentication_succeeded?(json)
@@ -262,9 +261,9 @@ module Bitflyer
         false
       end
 
-      def subscribe_channels
-        socket = @session_mutex.synchronize do
-          return if @session_ready
+      def subscribe_channels(socket: @websocket_client)
+        @session_mutex.synchronize do
+          return if !@websocket_client.equal?(socket) || @session_ready
 
           @session_ready = true
           (@board_feeds.keys | @channel_callbacks.keys).each { |channel| queue_subscription(channel) }
@@ -272,7 +271,6 @@ module Bitflyer
           unless @pending_subscriptions.empty?
             @subscription_ack_deadline = monotonic_milliseconds + SUBSCRIPTION_ACK_TIMEOUT_MS
           end
-          @websocket_client
         end
         send_subscription_frames
         notify_ready(socket)
@@ -300,9 +298,9 @@ module Bitflyer
         @last_pong_at = Time.now.to_i
       end
 
-      def disconnect
+      def disconnect(socket: @websocket_client)
         debug_log 'Disconnecting from server...'
-        @websocket_client&.close
+        socket&.close
       end
 
       def emit_message(json:, socket: @websocket_client)
@@ -561,8 +559,10 @@ module Bitflyer
         end
       end
 
-      def accept_authentication_response
+      def accept_authentication_response(socket)
         @lifecycle_lock.synchronize do
+          return false unless @websocket_client.equal?(socket)
+
           deadline = @session_deadline
           return false if lifecycle_inactive? || !deadline.is_a?(Array) || deadline[1] != :authentication
           return false if session_deadline_elapsed?(deadline)
@@ -577,22 +577,22 @@ module Bitflyer
         end
       end
 
-      def apply_setup(body)
+      def apply_setup(body, socket)
         @lifecycle_lock.synchronize do
-          deadline = @session_deadline
-          return false if lifecycle_inactive?
+          return false if lifecycle_inactive? || !@websocket_client.equal?(socket)
 
-          case deadline
-          when Array
-            return false if deadline[1] != :setup || session_deadline_elapsed?(deadline)
-          when :expired, :established
-            return false
-          end
+          return false unless awaiting_setup?(@session_deadline)
 
           initialize_heartbeat(body)
           @session_deadline = authentication_deadline || :established
           true
         end
+      end
+
+      def awaiting_setup?(deadline)
+        return true if deadline.nil?
+
+        deadline.is_a?(Array) && deadline[1] == :setup && !session_deadline_elapsed?(deadline)
       end
 
       def authentication_deadline
@@ -733,9 +733,9 @@ module Bitflyer
         @ready_state = :pending
       end
 
-      def reject_authentication(json)
+      def reject_authentication(json, socket: @websocket_client)
         error = @lifecycle_lock.synchronize do
-          return if lifecycle_inactive?
+          return if lifecycle_inactive? || !@websocket_client.equal?(socket)
 
           failure = RuntimeError.new("Authentication failed: #{json}")
           @authentication_error = failure
@@ -746,7 +746,7 @@ module Bitflyer
         end
 
         begin
-          disconnect
+          disconnect(socket: socket)
         rescue SystemCallError, IOError => e
           debug_log e
         ensure

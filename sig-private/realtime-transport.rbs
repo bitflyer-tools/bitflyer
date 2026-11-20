@@ -75,9 +75,11 @@ module Bitflyer
 
       def close_connections: () -> void
 
-      def accept_authentication_response: () -> bool
+      def accept_authentication_response: (Transport? socket) -> bool
 
-      def apply_setup: (untyped body) -> bool
+      def apply_setup: (untyped body, Transport? socket) -> bool
+
+      def awaiting_setup?: ([Integer, :setup | :authentication] | :expired | :established | nil) -> bool
 
       def authentication_deadline: () -> [Integer, :authentication]?
 
