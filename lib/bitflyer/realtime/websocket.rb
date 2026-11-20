@@ -149,6 +149,8 @@ module Bitflyer
         when '430' then authenticated(json: prefix.post_match)
         when /\A43[1-9]\d*\z/ then acknowledge_subscription(id: prefix[0][2..].to_i, json: prefix.post_match)
         end
+      rescue JSON::ParserError
+        puts 'Invalid JSON in realtime frame'
       rescue StandardError => e
         puts e
         puts e.backtrace&.join("\n")
