@@ -80,6 +80,7 @@ module Bitflyer
             minute_to_expire: minute_to_expire,
             time_in_force: time_in_force
           }.delete_if { |_, v| v.nil? }
+          validate_order_numbers(body)
           @connection.post('/v1/me/sendchildorder', body).body
         end
 
@@ -101,6 +102,8 @@ module Bitflyer
             time_in_force: time_in_force,
             parameters: parameters
           }.delete_if { |_, v| v.nil? }
+          validate_order_numbers(body)
+          parameters.each { |condition| validate_order_numbers(condition) if condition.is_a?(Hash) }
           @connection.post('/v1/me/sendparentorder', body).body
         end
 
@@ -216,6 +219,25 @@ module Bitflyer
 
         def trading_commission(product_code: 'BTC_JPY')
           @connection.get('/v1/me/gettradingcommission', product_code: product_code).body
+        end
+
+        private
+
+        def validate_order_numbers(fields)
+          fields.each do |field, value|
+            case field
+            when :price, 'price', :size, 'size', :trigger_price, 'trigger_price'
+              next if json_number?(value)
+
+              raise ArgumentError, "#{field} must be an Integer or a finite Float"
+            when :minute_to_expire, 'minute_to_expire', :offset, 'offset'
+              raise ArgumentError, "#{field} must be an Integer" unless value.is_a?(Integer)
+            end
+          end
+        end
+
+        def json_number?(value)
+          value.is_a?(Integer) || (value.is_a?(Float) && value.finite?)
         end
       end
     end
