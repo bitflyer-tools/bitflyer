@@ -36,6 +36,10 @@ See https://lightning.bitflyer.jp/docs for details.
 
 See [public.rb](./lib/bitflyer/http/public.rb) / [private.rb](./lib/bitflyer/http/private.rb) for method definition.
 
+For a successful (2xx) HTTP response, the client returns the parsed Ruby value if the body is valid JSON.
+If the body is non-JSON text or an empty string, the client returns the original string.
+If the response has no body, the client returns `nil`.
+
 HTTP responses outside the 2xx range raise `Bitflyer::HTTP::ResponseError`. The error provides
 the numeric HTTP status in `status` and the raw response body in `body`.
 
@@ -62,9 +66,15 @@ in API response order. It uses the lowest execution ID on each page as the next 
 cursor. Pass a saved execution ID as `before` to resume from older records, and use `after` to set
 an exclusive lower bound.
 
+The [public `/v1/executions` endpoint](https://lightning.bitflyer.com/docs?lang=en#execution-history)
+limits history retrieved with `before` to the most recent 31 days. To resume a public backfill,
+use the saved ID of an execution within that window. A saved ID cannot retrieve older history.
+
 ```ruby
 public_client = Bitflyer.http_public_client
-history = public_client.each_execution(product_code: 'BTC_JPY', before: 123_456, count: 50, max_pages: 5)
+# Set BITFLYER_SAVED_EXECUTION_ID to a saved BTC_JPY execution ID from the past 31 days.
+saved_execution_id = Integer(ENV.fetch('BITFLYER_SAVED_EXECUTION_ID'), 10)
+history = public_client.each_execution(product_code: 'BTC_JPY', before: saved_execution_id, count: 50, max_pages: 5)
 history.lazy.take(75).each { |execution| p execution }
 
 private_client.each_execution(child_order_acceptance_id: 'YOUR_ORDER_ACCEPTANCE_ID') do |fill|
@@ -197,7 +207,7 @@ client.subscription_failed = ->(channel, error) { p [channel, error] }
 ### Type signatures
 
 The gem ships [RBS](https://github.com/ruby/rbs) signatures in `sig/`, so [Steep](https://github.com/soutaro/steep) and other RBS-based tools
-can check code that uses it. API responses are parsed JSON and are typed as `untyped`.
+can check code that uses it. API responses are typed as `untyped`.
 
 To type check the gem itself:
 
