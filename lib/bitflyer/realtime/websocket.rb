@@ -161,7 +161,7 @@ module Bitflyer
           !lifecycle_inactive? && (reset_readiness(socket) || (socket && connecting_socket.equal?(socket)))
         end
 
-        @disconnected&.call(error)
+        notify_disconnected(error)
       end
 
       def setup_by_response(json:)
@@ -475,8 +475,14 @@ module Bitflyer
         rescue SystemCallError, IOError => e
           debug_log e
         ensure
-          @disconnected&.call(error)
+          notify_disconnected(error)
         end
+      end
+
+      def notify_disconnected(error)
+        @disconnected&.call(error)
+      rescue StandardError => e
+        warn e.full_message(highlight: false)
       end
 
       def monotonic_milliseconds

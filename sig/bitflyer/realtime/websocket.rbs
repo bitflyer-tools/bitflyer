@@ -88,6 +88,8 @@ module Bitflyer
 
       def reject_authentication: (String json) -> void
 
+      def notify_disconnected: (untyped error) -> void
+
       def monotonic_milliseconds: () -> Integer
 
       def monotonic_from_unix_seconds: (Integer?) -> Integer?
