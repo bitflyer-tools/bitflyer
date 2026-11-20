@@ -11,20 +11,29 @@ module Bitflyer
     class Client
       extend Forwardable
 
-      def_delegators :@websocket_client, :ready=, :disconnected=, :shutdown
+      def_delegators :@websocket_client, :ready=, :disconnected=, :subscription_failed=, :shutdown
       def_delegators :@websocket_client, :ping_interval, :ping_interval=, :ping_timeout, :ping_timeout=,
                      :last_ping_at, :last_ping_at=, :last_pong_at, :last_pong_at=
-      attr_accessor :websocket_client
+      attr_reader :websocket_client
 
       Realtime::CHANNEL_NAMES.each do |channel_name|
         define_method Realtime.channel_setter_name(channel_name) do |callback|
-          @websocket_client.subscribe(channel_name: channel_name.to_sym, &callback)
+          # @type self: Client
+          subscribe(channel_name, &callback)
           callback
         end
       end
 
       def initialize(key = nil, secret = nil)
         @websocket_client = Bitflyer::Realtime::WebSocketClient.new(host: SOCKET_HOST, key: key, secret: secret)
+      end
+
+      def subscribe(channel_name, &)
+        @websocket_client.subscribe(channel_name: channel_name.to_sym, &)
+      end
+
+      def unsubscribe(channel_name)
+        @websocket_client.unsubscribe(channel_name: channel_name.to_sym)
       end
 
       def inspect = "#<#{self.class}>"
