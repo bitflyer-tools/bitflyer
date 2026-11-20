@@ -122,6 +122,31 @@ client.executions_btc_jpy = ->(json){ p json }
 # ...
 ```
 
+To update a watchlist on the same connection, pass the full Socket.IO channel name
+to `subscribe` and `unsubscribe`. A second callback for the same channel replaces the
+previous callback. Unsubscribing stops local delivery and removes the channel from
+the subscriptions restored on reconnect. Server rejections of runtime subscriptions
+also reach `subscription_failed`.
+
+```ruby
+client = Bitflyer.realtime_client
+watchlist = []
+
+update_watchlist = lambda do |product_codes|
+  (watchlist - product_codes).each do |code|
+    client.unsubscribe("lightning_ticker_#{code}")
+  end
+  (product_codes - watchlist).each do |code|
+    client.subscribe("lightning_ticker_#{code}") { |ticker| p [code, ticker] }
+  end
+  watchlist = product_codes
+end
+
+update_watchlist.call(%w[BTC_JPY ETH_JPY])
+# Call again when the user changes the watchlist.
+update_watchlist.call(%w[ETH_JPY XRP_JPY])
+```
+
 Connection monitoring:
 ```ruby
 client = Bitflyer.realtime_client

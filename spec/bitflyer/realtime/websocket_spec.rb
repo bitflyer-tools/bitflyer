@@ -440,6 +440,82 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     expect(ready).to have_received(:call).once
   end
 
+  it 'unsubscribes one runtime channel while retaining the others across reconnect' do
+    client = Bitflyer.realtime_client('key', 'secret')
+    client.ready = ready
+    ticker = spy('ticker callback')
+    orders = spy('orders callback')
+    client.child_order_events = ->(message) { orders.call(message) }
+    receive_frame('0{}')
+    receive_frame('430[null]')
+    receive_frame('431[null]')
+
+    client.subscribe('lightning_ticker_SOL_JPY') { |message| ticker.call(message) }
+    expect(transport).to have_received(:send).with('422["subscribe","lightning_ticker_SOL_JPY"]').once
+    receive_frame('432[null]')
+    receive_frame('42["lightning_ticker_SOL_JPY",1]')
+
+    client.unsubscribe(:lightning_ticker_SOL_JPY)
+    client.unsubscribe('lightning_ticker_SOL_JPY')
+    expect(transport).to have_received(:send).with('42["unsubscribe","lightning_ticker_SOL_JPY"]').once
+    receive_frame('42["lightning_ticker_SOL_JPY",2]')
+    receive_frame('42["child_order_events",3]')
+    expect(ticker).to have_received(:call).with(1).once
+    expect(ticker).to have_received(:call).once
+    expect(orders).to have_received(:call).with(3)
+
+    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil)
+    next_handlers = {}
+    stub_transport(next_transport, next_handlers)
+    allow(transport).to receive(:closed?).and_return(true)
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(next_transport)
+    client.websocket_client.reconnect
+    receive_frame('0{}', next_handlers)
+    receive_frame('430[null]', next_handlers)
+    receive_frame('431[null]', next_handlers)
+    receive_frame('42["child_order_events",4]', next_handlers)
+
+    expect(next_transport).to have_received(:send).with('421["subscribe","child_order_events"]')
+    expect(next_transport).to have_received(:send).exactly(2).times
+    expect(orders).to have_received(:call).with(4)
+    expect(ready).to have_received(:call).twice
+  end
+
+  it 'ignores a canceled setup acknowledgment and reports a runtime rejection once' do
+    client = realtime_client
+    client.ticker_btc_jpy = ->(_message) {}
+    receive_frame('0{}')
+
+    client.unsubscribe('lightning_ticker_BTC_JPY')
+    expect(ready).to have_received(:call).once
+    client.subscribe('lightning_ticker_BTC_JPY') { |_message| }
+    expect(transport).to have_received(:send).with('422["subscribe","lightning_ticker_BTC_JPY"]')
+
+    receive_frame('431["stale rejection"]')
+    receive_frame('432["rejected"]')
+    receive_frame('432["rejected"]')
+    expect(subscription_failed).to have_received(:call).with(:lightning_ticker_BTC_JPY, 'rejected').once
+    expect(subscription_failed).to have_received(:call).once
+    expect(ready).to have_received(:call).once
+  end
+
+  it 'sends subscription changes in order when a send is in progress' do
+    client = realtime_client
+    client.ticker_btc_jpy = ->(_message) {}
+    subscribe_frame = '421["subscribe","lightning_ticker_BTC_JPY"]'
+    unsubscribe_frame = '42["unsubscribe","lightning_ticker_BTC_JPY"]'
+    frames = []
+    allow(transport).to receive(:send) do |frame|
+      client.unsubscribe('lightning_ticker_BTC_JPY') if frame == subscribe_frame
+      frames << frame
+    end
+
+    receive_frame('0{}')
+
+    expect(frames).to eq([subscribe_frame, unsubscribe_frame])
+    expect(ready).to have_received(:call).once
+  end
+
   it 'waits for new acknowledgments after reconnecting and ignores replies from the previous socket' do
     client = realtime_client
     client.ticker_btc_jpy = ->(_message) {}
@@ -461,6 +537,32 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 
     receive_frame('431[null]', next_handlers)
     expect(ready).to have_received(:call).twice
+  end
+
+  it 'ignores an acknowledgment that was being read when the socket was replaced' do
+    client = realtime_client
+    client.ticker_btc_jpy = ->(_message) {}
+    receive_frame('0{}')
+
+    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil)
+    next_handlers = {}
+    stub_transport(next_transport, next_handlers)
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(next_transport)
+
+    payload = double('old acknowledgment')
+    allow(payload).to receive(:data) do
+      allow(transport).to receive(:closed?).and_return(true)
+      client.websocket_client.reconnect
+      receive_frame('0{}', next_handlers)
+      '431[null]'
+    end
+    handlers.fetch(:message).call(payload)
+
+    expect(next_transport).to have_received(:send).with('421["subscribe","lightning_ticker_BTC_JPY"]')
+    expect(ready).not_to have_received(:call)
+
+    receive_frame('431[null]', next_handlers)
+    expect(ready).to have_received(:call).once
   end
 
   it 'becomes ready immediately when setup has no subscriptions' do

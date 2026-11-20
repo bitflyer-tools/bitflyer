@@ -38,6 +38,10 @@ module Bitflyer
 
       def subscription_failed=: (subscription_failed_callback? callback) -> subscription_failed_callback?
 
+      def subscribe: (String | Symbol channel_name) { (untyped message) -> void } -> void
+
+      def unsubscribe: (String | Symbol channel_name) -> void
+
       # BEGIN GENERATED CHANNEL SETTERS
       def board_snapshot_btc_jpy=: (message_callback callback) -> message_callback
 
