@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-24.04
     strategy:
       matrix:
-        ruby: ['3.4', '3.3']
+        ruby: ['.ruby-version', '3.3']
     steps:
       - uses: actions/checkout@v7
       - name: Set up Ruby
