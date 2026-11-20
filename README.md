@@ -43,6 +43,9 @@ If the response has no body, the client returns `nil`.
 HTTP responses outside the 2xx range raise `Bitflyer::HTTP::ResponseError`. The error provides
 the numeric HTTP status in `status` and the raw response body in `body`.
 
+`send_child_order` requires `child_order_type`, `side`, and `size`. A `LIMIT` order also requires
+`price`. Missing or nil required values raise `ArgumentError` before an HTTP request is made.
+
 Order quantities and prices accept integers and finite floats. This also applies to the trigger price
 in parent order conditions. Pass expiration minutes and trailing offsets as integers. The client
 raises `ArgumentError` before sending an order with an unsupported value such as a `BigDecimal`.

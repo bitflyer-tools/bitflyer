@@ -4,6 +4,55 @@ require 'spec_helper'
 require 'bigdecimal'
 
 describe Bitflyer::HTTP::Private::Client do
+  describe '#send_child_order' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:order) { { child_order_type: 'MARKET', side: 'BUY', size: 0.1 } }
+
+    %i[child_order_type side size].each do |field|
+      it "rejects an omitted #{field} before making an HTTP request" do
+        expect(Net::HTTP).not_to receive(:start)
+        expect { client.send_child_order(**order.reject { |key, _| key == field }) }
+          .to raise_error(ArgumentError, "missing keyword: :#{field}")
+      end
+
+      it "rejects a nil #{field} before making an HTTP request" do
+        expect(Net::HTTP).not_to receive(:start)
+        expect { client.send_child_order(**order.merge(field => nil)) }
+          .to raise_error(ArgumentError, "#{field} is required")
+      end
+    end
+
+    [{}, { price: nil }].each do |price_option|
+      it "rejects a limit order with #{price_option.empty? ? 'an omitted' : 'a nil'} price before making an HTTP request" do
+        expect(Net::HTTP).not_to receive(:start)
+        expect { client.send_child_order(**order.merge(child_order_type: 'LIMIT', **price_option)) }
+          .to raise_error(ArgumentError, 'price is required for LIMIT orders')
+      end
+    end
+
+    {
+      'MARKET' => {},
+      'LIMIT' => { price: 30_000 }
+    }.each do |order_type, price_option|
+      it "posts a complete #{order_type} order" do
+        http = instance_double(Net::HTTP)
+        response = instance_double(Net::HTTPOK, code: '200', body: '{"child_order_acceptance_id":"123"}')
+        allow(Net::HTTP).to receive(:start).and_return(http)
+        params = order.merge(child_order_type: order_type, **price_option)
+        expect(http).to receive(:request) do |request|
+          expect(request).to be_an_instance_of(Net::HTTP::Post)
+          expect(request.path).to eq('/v1/me/sendchildorder')
+          expect(JSON.parse(request.body)).to eq(
+            params.merge(product_code: 'BTC_JPY', time_in_force: 'GTC').transform_keys(&:to_s)
+          )
+          response
+        end
+
+        expect(client.send_child_order(**params)).to eq('child_order_acceptance_id' => '123')
+      end
+    end
+  end
+
   describe '#each_execution' do
     it 'yields fills to a block and forwards order filters on every page' do
       connection = instance_double(Bitflyer::HTTP::Connection)
