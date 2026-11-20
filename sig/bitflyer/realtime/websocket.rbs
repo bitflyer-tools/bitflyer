@@ -12,10 +12,11 @@ module Bitflyer
       @monitor: Thread?
       @session_mutex: Thread::Mutex
       @order_books: Hash[String, OrderBook]
-      @board_feeds: Hash[Symbol, Method]
+      @board_feeds: Hash[Symbol, [Method, Symbol]]
       @next_subscription_id: Integer
       @last_setup_subscription_id: Integer
       @pending_subscriptions: Hash[Integer, Symbol]
+      @acknowledged_subscriptions: Hash[Symbol, bool]
       @subscription_rejected: bool
       @awaiting_authentication: bool
       @session_ready: bool
@@ -84,7 +85,9 @@ module Bitflyer
 
       def register_order_book: (String product_code) -> OrderBook
 
-      def register_board_feed: (Symbol channel, Method handler) -> void
+      def register_board_feed: (Symbol channel, Method handler, Symbol delta_channel) -> void
+      def record_subscription_result: (Integer id, Symbol channel, untyped error) -> void
+      def route_board_message: (Symbol channel, untyped message) -> void
 
       def route_message: (Symbol channel, untyped message, Transport? socket) -> message_callback?
 

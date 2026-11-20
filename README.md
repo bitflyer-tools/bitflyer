@@ -119,7 +119,8 @@ ensure
 end
 ```
 
-`book.ready?` reports whether the book has received a snapshot on the current connection.
+`book.ready?` reports whether the book has received a snapshot after the server acknowledged
+the delta subscription on the current connection.
 `book.current` returns `nil` before the first snapshot, after a disconnect until a fresh
 snapshot arrives, and after shutdown. Each view contains frozen `bids` (highest price first)
 and `asks` (lowest price first), with `price` and `size` on each level. Views already read

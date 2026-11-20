@@ -85,6 +85,7 @@ module Bitflyer
 
           @channel_names -= [channel_name]
           @pending_subscriptions.delete_if { |_id, channel| channel == channel_name }
+          @acknowledged_subscriptions.delete(channel_name)
           queue_subscription_frame("42#{['unsubscribe', channel_name].to_json}") if @session_ready
           @websocket_client
         end
@@ -270,7 +271,7 @@ module Bitflyer
 
           error = JSON.parse(json).first
           @pending_subscriptions.delete(id)
-          @subscription_rejected = true if error && id <= @last_setup_subscription_id
+          record_subscription_result(id, channel, error)
           [channel, error]
         end
         @subscription_failed&.call(channel, error) if error
@@ -308,16 +309,25 @@ module Bitflyer
 
       private
 
+      def record_subscription_result(id, channel, error)
+        if error
+          @subscription_rejected = true if id <= @last_setup_subscription_id
+        else
+          @acknowledged_subscriptions[channel] = true
+        end
+      end
+
       def register_order_book(product_code)
         book = OrderBook.new
+        delta_channel = :"lightning_board_#{product_code}"
         # Start receiving deltas before requesting the snapshot.
-        register_board_feed(:"lightning_board_#{product_code}", book.method(:update))
-        register_board_feed(:"lightning_board_snapshot_#{product_code}", book.method(:replace))
+        register_board_feed(delta_channel, book.method(:update), delta_channel)
+        register_board_feed(:"lightning_board_snapshot_#{product_code}", book.method(:replace), delta_channel)
         book
       end
 
-      def register_board_feed(channel, handler)
-        @board_feeds[channel] = handler
+      def register_board_feed(channel, handler, delta_channel)
+        @board_feeds[channel] = [handler, delta_channel]
         @channel_names = (@channel_names + [channel]).uniq
         queue_subscription(channel) if @session_ready && !@channel_callbacks.key?(channel)
       end
@@ -326,9 +336,17 @@ module Bitflyer
         @session_mutex.synchronize do
           return unless @websocket_client.equal?(socket)
 
-          @board_feeds[channel]&.call(message) if @session_ready
+          route_board_message(channel, message)
           @channel_callbacks[channel]
         end
+      end
+
+      def route_board_message(channel, message)
+        feed = @board_feeds[channel]
+        return unless feed
+
+        handler, delta_channel = feed
+        handler.call(message) if @acknowledged_subscriptions.key?(delta_channel)
       end
 
       def queue_subscription(channel)
@@ -557,6 +575,7 @@ module Bitflyer
         @subscription_frames.clear
         @next_subscription_id = @last_setup_subscription_id = 0
         @pending_subscriptions = {}
+        @acknowledged_subscriptions = {}
         @subscription_rejected = false
         @awaiting_authentication = false
         @session_ready = false

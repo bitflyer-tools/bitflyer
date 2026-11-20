@@ -40,6 +40,7 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     frame('0{}')
     expect(transport).to have_received(:send).with('421["subscribe","lightning_board_BTC_JPY"]').once
     expect(transport).to have_received(:send).with('422["subscribe","lightning_board_snapshot_BTC_JPY"]').once
+    frame('431[null]')
 
     board(delta, bids: [[7, 1]])
     expect(book).not_to be_ready
@@ -69,6 +70,7 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
   it 'invalidates before notifying disconnect and waits for a new snapshot on the replacement connection' do
     book
     frame('0{}')
+    frame('431[null]')
     board(snapshot, bids: [[8, 1]])
     at_disconnect = []
     client.disconnected = ->(_error) { at_disconnect << book.current }
@@ -86,6 +88,9 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     frame('0{}', replacement_events)
     expect(replacement).to have_received(:send).with('421["subscribe","lightning_board_BTC_JPY"]').once
     expect(replacement).to have_received(:send).with('422["subscribe","lightning_board_snapshot_BTC_JPY"]').once
+    board(snapshot, bids: [[9, 1]], handlers: replacement_events)
+    expect(book.current).to be_nil
+    frame('431[null]', replacement_events)
     board(delta, bids: [[9, 1]], handlers: replacement_events)
     board(snapshot, bids: [[9, 1]])
     expect(book.current).to be_nil
@@ -97,22 +102,43 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     expect(book.current).to be_nil
   end
 
-  it 'keeps product books separate and preserves raw callbacks on the same channels' do
+  it 'waits for the delta acknowledgement while an existing snapshot callback keeps receiving updates' do
     frame('0{}')
     raw = spy('raw board callback')
     client.board_snapshot_btc_jpy = ->(message) { raw.call(message) }
     book
     eth = client.order_book(product_code: 'ETH_JPY')
     expect(transport).to have_received(:send).with('421["subscribe","lightning_board_snapshot_BTC_JPY"]').once
+    frame('431[null]')
 
     board(snapshot, bids: [[8, 1]])
     expect(raw).to have_received(:call).once
-    expect(eth).not_to be_ready
-    client.unsubscribe(snapshot)
+    expect(book.current).to be_nil
+    frame('432[null]')
+    expect(book.current).to be_nil
+
     board(snapshot, bids: [[9, 1]])
+    board(delta, bids: [[9, 4]])
+    expect(book.current.best_bid.size).to eq(4)
+    expect(raw).to have_received(:call).twice
     board('lightning_board_snapshot_ETH_JPY', bids: [[6, 1]])
-    expect(raw).to have_received(:call).once
-    expect(book.current.best_bid.price).to eq(9)
+    expect(eth).not_to be_ready
+
+    client.unsubscribe(snapshot)
+    board(snapshot, bids: [[10, 1]])
+    frame('433[null]')
+    board('lightning_board_snapshot_ETH_JPY', bids: [[6, 1]])
+    expect(raw).to have_received(:call).twice
+    expect(book.current.best_bid.price).to eq(10)
     expect(eth.current.best_bid.price).to eq(6)
+  end
+
+  it 'keeps the book uninitialized when the delta subscription is rejected' do
+    book
+    frame('0{}')
+    frame('431["subscription rejected"]')
+    frame('432[null]')
+    board(snapshot, bids: [[8, 1]])
+    expect(book.current).to be_nil
   end
 end
