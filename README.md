@@ -189,7 +189,10 @@ If the rejection occurs before callback registration, assigning `disconnected` d
 
 Call `client.shutdown` when you finish using a realtime client. It stops automatic reconnection, closes the connection, and stops the monitoring thread. You can call it more than once, including from a `ready` or subscription callback.
 Concurrent calls wait for the connection to close.
-Calling `shutdown` from a subscription callback skips any remaining events in the current WebSocket frame.
+Subscription callbacks run serially in receive order on a separate thread, so a slow callback
+does not block heartbeat processing. Each client queues up to 1,024 pending events in addition
+to the event being delivered. When the queue is full, new events are dropped.
+Shutdown discards pending events and allows any callback already running to finish.
 
 The realtime client's `websocket_client` reference and the WebSocket client's transport reference
 (`websocket_client`) are read-only. The realtime lifecycle manages connection replacement.
@@ -218,8 +221,8 @@ client.executions_btc_jpy = ->(json){ p json }
 
 To update a watchlist on the same connection, pass the full Socket.IO channel name
 to `subscribe` and `unsubscribe`. A second callback for the same channel replaces the
-previous callback. Unsubscribing stops local delivery and removes the channel from
-the subscriptions restored on reconnect. Server rejections of runtime subscriptions
+previous callback. Unsubscribing discards pending events for that subscription and
+removes the channel from the subscriptions restored on reconnect. Server rejections of runtime subscriptions
 also reach `subscription_failed`.
 Call `subscribe` again to retry a rejected channel on the same connection.
 An acknowledged or pending subscription is reused when its callback changes.
