@@ -111,7 +111,7 @@ module Bitflyer
       end
 
       def send_request(request)
-        http = (@http ||= Net::HTTP.start(@uri.host.to_s, @uri.port, use_ssl: true))
+        http = (@http ||= Net::HTTP.start(@uri.host.to_s, @uri.port, use_ssl: true, keep_alive_timeout: 10))
         sign_request(request, request.path, request.body)
         # Net::HTTP reconnects idle sockets and only retries idempotent requests.
         http.request(request)

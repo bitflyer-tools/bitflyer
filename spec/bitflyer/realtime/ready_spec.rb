@@ -3,7 +3,7 @@
 require 'spec_helper'
 
 describe 'Realtime ready notifications' do
-  let(:transport) { instance_double(Bitflyer::Realtime::Transport, closed?: false, close_on_eof: nil, read_error: nil) }
+  let(:transport) { instance_double(Bitflyer::Realtime::Transport, closed?: false, close_for_shutdown: nil) }
   let(:handlers) { {} }
   let(:notifications) { Queue.new }
   let(:callback) { -> { notifications << :ready } }
@@ -71,7 +71,6 @@ describe 'Realtime ready notifications' do
   end
 
   it 'discards a pending notification on shutdown' do
-    allow(transport).to receive(:close)
     client = Bitflyer.realtime_client
     receive_message('0{}')
 
@@ -93,16 +92,16 @@ describe 'Realtime ready notifications' do
     expect(notifications.size).to eq(1)
   end
 
-  { close: nil, error: Errno::ECONNRESET.new }.each do |event, error|
-    it "preserves the replacement socket's pending notification after a stale #{event}" do
-      replacement = instance_double(Bitflyer::Realtime::Transport, close_on_eof: nil)
+  [nil, Errno::ECONNRESET.new].each do |error|
+    it "preserves the replacement socket's pending notification after a stale close with #{error&.class || "EOF"}" do
+      replacement = instance_double(Bitflyer::Realtime::Transport, close_for_shutdown: nil)
       stub_connection(replacement)
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(transport, replacement)
       allow(transport).to receive(:closed?).and_return(true)
       client = Bitflyer.realtime_client
       disconnected = []
       client.disconnected = ->(reason) { disconnected << reason }
-      stale_handler = handlers.fetch(event)
+      stale_handler = handlers.fetch(:close)
 
       client.websocket_client.reconnect
       receive_message('0{}')
