@@ -104,6 +104,7 @@ To subscribe to the private `child_order_events` and `parent_order_events`, pass
 The `ready` callback is called when the `realtime_client` is ready to receive events (after the socket connection is established, the optional authentication has succeeded, and the channels have been subscribed). If connection is lost, the `disconnected` callback is called, and reconnection is attempted automatically. When the connection is restored and the server acknowledges all subscriptions for that setup, `ready` is called again. If the server rejects a setup subscription, `subscription_failed` receives the channel name as a symbol and the server error. That setup skips `ready`.
 During an outage, retry delays increase exponentially, with jitter and a 30-second cap. When the session becomes ready, the retry delay resets.
 If setup finishes before registration, assigning `ready` delivers the pending notification synchronously, once per connection.
+If a WebSocket write detects a connection reset, the client reports the reset to `disconnected` and replays registered subscriptions after reconnecting.
 
 A `StandardError` raised by `disconnected` is reported to standard error. Automatic reconnection continues when enabled.
 

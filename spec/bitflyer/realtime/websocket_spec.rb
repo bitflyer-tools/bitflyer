@@ -627,7 +627,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     expect(ticker).to have_received(:call).once
     expect(orders).to have_received(:call).with(3)
 
-    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil)
+    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false)
     next_handlers = {}
     stub_transport(next_transport, next_handlers)
     allow(transport).to receive(:closed?).and_return(true)
@@ -686,7 +686,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     receive_frame('431[null]')
     expect(ready).to have_received(:call).once
 
-    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil)
+    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false)
     next_handlers = {}
     stub_transport(next_transport, next_handlers)
     allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(next_transport)
@@ -707,7 +707,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     client.ticker_btc_jpy = ->(_message) {}
     receive_frame('0{}')
 
-    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil)
+    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false)
     next_handlers = {}
     stub_transport(next_transport, next_handlers)
     allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(next_transport)
@@ -776,7 +776,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 end
 
 describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
-  let(:socket) { instance_double(Bitflyer::Realtime::Transport, on: nil, send: nil, close: nil, connect: nil, open?: true) }
+  let(:socket) { instance_double(Bitflyer::Realtime::Transport, on: nil, send: nil, close: nil, connect: nil, open?: true, closed?: false) }
   let(:host) { 'wss://example.test' }
   let(:key) { nil }
   let(:secret) { nil }

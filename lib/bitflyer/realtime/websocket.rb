@@ -120,7 +120,8 @@ module Bitflyer
         return unless now - last_ping_monotonic >= ping_interval
 
         debug_log 'Sent ping'
-        return if socket&.send('2') == false
+        return unless socket
+        return if socket.send('2') == false
 
         @lifecycle_lock.synchronize do
           if @websocket_client.equal?(socket)
@@ -546,6 +547,7 @@ module Bitflyer
 
       def take_ready_callback
         return unless @ready_state == :ready && @ready
+        return if @websocket_client&.closed?
 
         @ready_state = :notified
         @ready
