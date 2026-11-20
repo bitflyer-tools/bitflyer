@@ -95,6 +95,13 @@ describe Bitflyer::HTTP::Private::Client do
       allow(http).to receive(:request).and_return(response)
     end
 
+    it 'filters withdrawals by message ID' do
+      client.withdrawals(message_id: 'example')
+      expect(http).to have_received(:request).with(
+        an_instance_of(Net::HTTP::Get).and(have_attributes(path: '/v1/me/getwithdrawals?message_id=example'))
+      )
+    end
+
     {
       coin_ins: '/v1/me/getcoinins',
       coin_outs: '/v1/me/getcoinouts',

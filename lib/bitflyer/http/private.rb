@@ -56,8 +56,10 @@ module Bitflyer
           @connection.post('/v1/me/withdraw', body).body
         end
 
-        def withdrawals(count: nil, before: nil, after: nil)
-          @connection.get('/v1/me/getwithdrawals', count: count, before: before, after: after).body
+        def withdrawals(count: nil, before: nil, after: nil, message_id: nil)
+          @connection.get(
+            '/v1/me/getwithdrawals', count: count, before: before, after: after, message_id: message_id
+          ).body
         end
 
         def send_child_order(
