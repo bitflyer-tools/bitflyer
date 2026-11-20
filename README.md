@@ -43,6 +43,10 @@ If the response has no body, the client returns `nil`.
 HTTP responses outside the 2xx range raise `Bitflyer::HTTP::ResponseError`. The error provides
 the numeric HTTP status in `status` and the raw response body in `body`.
 
+`cancel_child_order`, `cancel_parent_order`, and `parent_order` require exactly one
+order ID or order acceptance ID. They raise `ArgumentError` before sending a request
+if neither identifier or both identifiers are non-nil.
+
 `send_child_order` requires `child_order_type`, `side`, and `size`. A `LIMIT` order also requires
 `price`. Missing or nil required values raise `ArgumentError` before an HTTP request is made.
 
