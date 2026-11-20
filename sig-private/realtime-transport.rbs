@@ -2,12 +2,14 @@ module Bitflyer
   module Realtime
     class Transport
       @socket: (OpenSSL::SSL::SSLSocket | TCPSocket)?
-      @closed: bool
+      @close_state: (:closing | :closed)?
       @driver: WebSocket::Driver?
       @driver_lock: Mutex
       @close_lock: Mutex
       @handlers: Hash[Symbol, ^(untyped) -> void]
       @events: Array[[Symbol, untyped]]
+
+      def reconnectable?: () -> bool
 
       private
 
@@ -25,20 +27,10 @@ module Bitflyer
     end
 
     class WebSocketClient
-      HANDSHAKE_TIMEOUT_MS: Integer
-
       @connection: [Transport, Thread]?
-      @handshake_deadline: Integer?
-      @expiring_handshake: bool?
       @shutdown_lock: Mutex
 
       private
-
-      def close_expired_handshake: () -> void
-
-      def take_expired_handshake: () -> Transport?
-
-      def pending_handshake?: (Transport) -> bool
 
       def close_connections: () -> void
 

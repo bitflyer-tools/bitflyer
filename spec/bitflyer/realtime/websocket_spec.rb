@@ -14,7 +14,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
   before do
     [original, replacement].each do |transport|
       allow(transport).to receive(:connect)
-      allow(transport).to receive_messages(open?: false, closed?: false)
+      allow(transport).to receive_messages(open?: false, reconnectable?: false)
       allow(transport).to receive(:on) { |event, &handler| handlers[transport][event] = handler }
       allow(transport).to receive(:close_for_shutdown) { handlers[transport].fetch(:close).call(nil) }
     end
@@ -27,11 +27,13 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
 
   after { client.shutdown }
 
-  it 'keeps a pending handshake on the same socket past the first monitor tick' do
+  it 'keeps a pending handshake on the same socket across monitor ticks beyond the former client timeout' do
     client.ready = -> { @ready = true }
 
-    @now += 1_000
-    client.reconnect
+    11.times do
+      @now += 1_000
+      client.reconnect
+    end
     allow(original).to receive(:open?).and_return(true)
     handlers[original].fetch(:open).call
     handlers[original].fetch(:message).call(setup_message)
@@ -42,13 +44,11 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
     expect(@ready).to be(true)
   end
 
-  it 'closes a timed-out socket before replacing it and ignores its late events' do
-    expect(original).to receive(:close_for_shutdown).ordered.and_call_original
-    expect(replacement).to receive(:connect).ordered
+  it 'retries a closed socket and ignores its late events' do
     disconnected = []
     client.disconnected = ->(error) { disconnected << error }
-
-    @now += 10_000
+    allow(original).to receive(:reconnectable?).and_return(true)
+    handlers[original].fetch(:close).call(nil)
     client.reconnect
     handlers[original].fetch(:open).call
     handlers[original].fetch(:message).call(setup_message)
@@ -56,24 +56,13 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
 
     expect(client.websocket_client).to equal(replacement)
     expect(client.last_pong_at).to be_nil
-    expect(disconnected).to be_empty
-  end
-
-  it 'retries a closed socket before its handshake deadline' do
-    disconnected = []
-    client.disconnected = ->(error) { disconnected << error }
-    allow(original).to receive(:closed?).and_return(true)
-    handlers[original].fetch(:close).call(nil)
-    client.reconnect
-
-    expect(client.websocket_client).to equal(replacement)
     expect(disconnected).to eq([nil])
   end
 end
 
 describe Bitflyer::Realtime::WebSocketClient do
   let(:socket) do
-    instance_double(Bitflyer::Realtime::Transport, open?: true, closed?: false, send: nil, close: nil,
+    instance_double(Bitflyer::Realtime::Transport, open?: true, reconnectable?: false, send: nil, close: nil,
                     close_for_shutdown: nil)
   end
   let(:handlers) { {} }
@@ -143,7 +132,7 @@ describe Bitflyer::Realtime::WebSocketClient do
     @client = Bitflyer.realtime_client
     receive_message('0{}')
 
-    allow(socket).to receive(:closed?).and_return(true)
+    allow(socket).to receive(:reconnectable?).and_return(true)
     @client.websocket_client.reconnect
     @client.ticker_btc_jpy = ->(_event) {}
     expect(socket).not_to have_received(:send)
@@ -196,7 +185,7 @@ describe Bitflyer::Realtime::WebSocketClient do
     notifications = []
     @client.disconnected = ->(error) { errors << error }
     allow(socket).to receive(:close) do
-      allow(socket).to receive_messages(open?: false, closed?: true)
+      allow(socket).to receive_messages(open?: false, reconnectable?: true)
       handlers.fetch(:close).call(nil)
     end
 
@@ -213,7 +202,7 @@ describe Bitflyer::Realtime::WebSocketClient do
 end
 
 describe Bitflyer::Realtime::WebSocketClient, 'when replacing a socket' do
-  let(:original_socket) { instance_double(Bitflyer::Realtime::Transport, closed?: false) }
+  let(:original_socket) { instance_double(Bitflyer::Realtime::Transport, reconnectable?: false) }
   let(:replacement_socket) { instance_double(Bitflyer::Realtime::Transport) }
   let(:message_handlers) { {} }
 
@@ -240,7 +229,7 @@ describe Bitflyer::Realtime::WebSocketClient, 'when replacing a socket' do
     expect(original_socket).to receive(:close)
     client.wait_pong
 
-    allow(original_socket).to receive(:closed?).and_return(true)
+    allow(original_socket).to receive(:reconnectable?).and_return(true)
     client.reconnect
     expect(replacement_socket).not_to receive(:send)
     expect(replacement_socket).not_to receive(:close)
@@ -257,7 +246,7 @@ describe Bitflyer::Realtime::WebSocketClient, 'when replacing a socket' do
 
   it 'closes the replacement socket when its own heartbeat times out after setup' do
     client = described_class.new(host: 'wss://example.test', key: nil, secret: nil)
-    allow(original_socket).to receive(:closed?).and_return(true)
+    allow(original_socket).to receive(:reconnectable?).and_return(true)
     client.reconnect
     setup = Struct.new(:data).new('0{"pingInterval":1000,"pingTimeout":1000}')
     message_handlers.fetch(replacement_socket).call(setup)
@@ -391,7 +380,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 end
 
 RSpec.describe Bitflyer::Realtime::WebSocketClient do
-  let(:transport) { instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false) }
+  let(:transport) { instance_double(Bitflyer::Realtime::Transport, send: nil, reconnectable?: false) }
   let(:handlers) { {} }
   let(:ready) { spy('ready callback') }
   let(:subscription_failed) { spy('subscription failure callback') }
@@ -452,7 +441,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     stub_transport(next_transport, next_handlers)
     allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(next_transport)
 
-    allow(transport).to receive(:closed?).and_return(true)
+    allow(transport).to receive(:reconnectable?).and_return(true)
     handlers.fetch(:close).call(nil)
     client.websocket_client.reconnect
     receive_frame('0{}', next_handlers)
