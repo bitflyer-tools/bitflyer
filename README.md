@@ -46,8 +46,8 @@ private_client = Bitflyer.http_private_client('YOUR_API_KEY', 'YOUR_API_SECRET')
 p private_client.positions # will print your positions
 ```
 
-Each HTTP client reuses its HTTPS connection across requests. Call `client.close` to release it.
-The next request on that client opens a new connection.
+Each HTTP client can reuse its HTTPS connection after up to 10 seconds of idle time if the server
+keeps it open. Call `client.close` to release it. The next request on that client opens a new connection.
 
 #### Stream execution history
 
