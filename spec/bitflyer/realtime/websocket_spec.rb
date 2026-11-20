@@ -3,6 +3,34 @@
 require 'spec_helper'
 require 'timeout'
 
+RSpec.describe Bitflyer::Realtime::WebSocketClient, 'pong timeout recovery' do
+  it 'reports a disconnected callback error and reconnects after the pong deadline' do
+    original = Bitflyer::Realtime::Transport.new
+    replacement = Bitflyer::Realtime::Transport.new
+    driver = instance_double(WebSocket::Driver::Client, state: :open, on: nil, start: nil, text: nil, close: nil)
+    socket = instance_double(OpenSSL::SSL::SSLSocket, close: nil)
+    reconnect_attempts = Queue.new
+    allow(WebSocket::Driver).to receive(:client).with(original).and_return(driver)
+    allow(original).to receive(:connect_tls).and_return(socket)
+    allow(original).to receive(:read_messages)
+    allow(replacement).to receive(:connect) { |url| reconnect_attempts << url }
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(original, replacement)
+
+    client = described_class.new(host: 'wss://example.com', key: nil, secret: nil)
+    expect do
+      client.disconnected = ->(_) { raise 'callback failed' }
+      client.setup_by_response(json: '{}')
+      client.last_pong_at = Time.now.to_i - 100
+
+      expect(Timeout.timeout(5) { reconnect_attempts.pop }).to eq('wss://example.com/socket.io/?transport=websocket')
+      expect { client.shutdown }.not_to raise_error
+    end.to output(/callback failed/).to_stderr
+    expect(socket).to have_received(:close).once
+  ensure
+    client&.shutdown
+  end
+end
+
 RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
   let(:transport_class) { Bitflyer::Realtime::Transport }
   let(:original) { transport_class.new }
