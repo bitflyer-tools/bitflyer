@@ -1,5 +1,8 @@
 # Contributing
 
+See the [architecture guide](docs/architecture.md) for an overview of the
+clients and where to start reading the code.
+
 ## Set up the development environment
 
 Fork this repository on GitHub and clone your fork. Use the Ruby version in

@@ -20,7 +20,7 @@ module Bitflyer
     class Client
       extend Forwardable
 
-      attr_accessor websocket_client: WebSocketClient
+      attr_reader websocket_client: WebSocketClient
       attr_accessor ping_interval: Integer?
       attr_accessor ping_timeout: Integer?
       attr_accessor last_ping_at: Integer?
@@ -37,6 +37,10 @@ module Bitflyer
       def disconnected=: (disconnected_callback? callback) -> disconnected_callback?
 
       def subscription_failed=: (subscription_failed_callback? callback) -> subscription_failed_callback?
+
+      def subscribe: (String | Symbol channel_name) { (untyped message) -> void } -> void
+
+      def unsubscribe: (String | Symbol channel_name) -> void
 
       # BEGIN GENERATED CHANNEL SETTERS
       def board_snapshot_btc_jpy=: (message_callback callback) -> message_callback
