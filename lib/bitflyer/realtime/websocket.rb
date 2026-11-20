@@ -3,6 +3,7 @@
 require 'json'
 require 'openssl'
 require 'bitflyer/realtime/transport'
+require_relative 'order_book'
 
 module Bitflyer
   module Realtime
@@ -24,6 +25,8 @@ module Bitflyer
         @debug = debug
         @channel_names = []
         @channel_callbacks = {}
+        @order_books = {}
+        @board_feeds = {}
         @lifecycle_lock = Mutex.new
         @shutdown_lock = Mutex.new
         @monitor_wakeup = ConditionVariable.new
@@ -32,7 +35,6 @@ module Bitflyer
         @authentication_error = nil
         @pending_authentication_error = nil
         @session_mutex = Thread::Mutex.new
-        @subscription_frames = []
         @subscription_writer = Mutex.new
         clear_readiness
         connect
@@ -78,9 +80,17 @@ module Bitflyer
         @session_mutex.synchronize do
           @channel_names = (@channel_names + [channel_name]).uniq
           @channel_callbacks[channel_name] = block
-          queue_subscription(channel_name) if @session_ready
+          queue_subscription(channel_name)
         end
         send_subscription_frames
+      end
+
+      def order_book(product_code:)
+        book = @session_mutex.synchronize do
+          @order_books[product_code] ||= register_order_book(product_code)
+        end
+        send_subscription_frames
+        book
       end
 
       def unsubscribe(channel_name:)
@@ -88,8 +98,11 @@ module Bitflyer
           return unless @channel_callbacks.key?(channel_name)
 
           @channel_callbacks.delete(channel_name)
+          return if @board_feeds.key?(channel_name)
+
           @channel_names -= [channel_name]
           @pending_subscriptions.delete_if { |_id, channel| channel == channel_name }
+          @acknowledged_subscriptions.delete(channel_name)
           queue_subscription_frame("42#{['unsubscribe', channel_name].to_json}") if @session_ready
           @websocket_client
         end
@@ -178,7 +191,7 @@ module Bitflyer
         when '0' then setup_by_response(json: prefix.post_match)
         when '3' then receive_pong
         when '41' then disconnect
-        when '42' then emit_message(json: prefix.post_match)
+        when '42' then emit_message(json: prefix.post_match, socket: socket)
         when '430' then authenticated(json: prefix.post_match)
         when /\A43[1-9]\d*\z/
           acknowledge_subscription(id: prefix[0][2..].to_i, json: prefix.post_match, socket: socket)
@@ -257,7 +270,7 @@ module Bitflyer
           return if @session_ready
 
           @session_ready = true
-          @channel_callbacks.each_key { |channel| queue_subscription(channel) }
+          (@board_feeds.keys | @channel_callbacks.keys).each { |channel| queue_subscription(channel) }
           @last_setup_subscription_id = @next_subscription_id
           unless @pending_subscriptions.empty?
             @subscription_ack_deadline = monotonic_milliseconds + SUBSCRIPTION_ACK_TIMEOUT_MS
@@ -277,7 +290,7 @@ module Bitflyer
 
           error = JSON.parse(json).first
           @pending_subscriptions.delete(id)
-          @subscription_rejected = true if error && id <= @last_setup_subscription_id
+          record_subscription_result(id, channel, error)
           [channel, error]
         end
         @subscription_failed&.call(channel, error) if error
@@ -295,14 +308,14 @@ module Bitflyer
         @websocket_client&.close
       end
 
-      def emit_message(json:)
+      def emit_message(json:, socket: @websocket_client)
         channel_name, *messages = JSON.parse json
         return unless channel_name
 
         messages.each do |message|
           break if @lifecycle_lock.synchronize { lifecycle_inactive? }
 
-          callback = @session_mutex.synchronize { @channel_callbacks[channel_name.to_sym] }
+          callback = route_message(channel_name.to_sym, message, socket)
           callback&.call(message)
         end
       end
@@ -315,7 +328,50 @@ module Bitflyer
 
       private
 
+      def record_subscription_result(id, channel, error)
+        if error
+          @subscription_rejected = true if id <= @last_setup_subscription_id
+        else
+          @acknowledged_subscriptions[channel] = true
+        end
+      end
+
+      def register_order_book(product_code)
+        book = OrderBook.new
+        delta_channel = :"lightning_board_#{product_code}"
+        # Start receiving deltas before requesting the snapshot.
+        register_board_feed(delta_channel, book.method(:update), delta_channel)
+        register_board_feed(:"lightning_board_snapshot_#{product_code}", book.method(:replace), delta_channel)
+        book
+      end
+
+      def register_board_feed(channel, handler, delta_channel)
+        @board_feeds[channel] = [handler, delta_channel]
+        @channel_names = (@channel_names + [channel]).uniq
+        queue_subscription(channel)
+      end
+
+      def route_message(channel, message, socket)
+        @session_mutex.synchronize do
+          return unless @websocket_client.equal?(socket)
+
+          route_board_message(channel, message)
+          @channel_callbacks[channel]
+        end
+      end
+
+      def route_board_message(channel, message)
+        feed = @board_feeds[channel]
+        return unless feed
+
+        handler, delta_channel = feed
+        handler.call(message) if @acknowledged_subscriptions.key?(delta_channel)
+      end
+
       def queue_subscription(channel)
+        return unless @session_ready
+        return if @acknowledged_subscriptions.key?(channel) || @pending_subscriptions.value?(channel)
+
         @next_subscription_id += 1
         @pending_subscriptions[@next_subscription_id] = channel
         queue_subscription_frame("42#{@next_subscription_id}#{['subscribe', channel].to_json}")
@@ -553,9 +609,11 @@ module Bitflyer
       end
 
       def clear_readiness
-        @subscription_frames.clear
+        @order_books.each_value(&:invalidate)
+        @subscription_frames = []
         @next_subscription_id = @last_setup_subscription_id = 0
         @pending_subscriptions = {}
+        @acknowledged_subscriptions = {}
         @subscription_ack_deadline = nil
         @subscription_rejected = false
         @awaiting_authentication = false

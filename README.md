@@ -101,6 +101,41 @@ You can set lambda to get realtime events.
 
 `{event_name}` and `{product_code}` are defined in [channels.rb](./lib/bitflyer/realtime/channels.rb).
 
+#### Live order book
+
+Use `order_book` to track a product's snapshot and delta channels on the realtime client.
+Repeated calls for the same product return the same book. The subscriptions stay active
+for the lifetime of the client and can coexist with raw board callbacks.
+
+```ruby
+client = Bitflyer.realtime_client
+book = client.order_book(product_code: 'BTC_JPY')
+
+begin
+  loop do
+    if (depth = book.current)
+      p [depth.best_bid&.price, depth.best_ask&.price, depth.spread]
+    else
+      puts 'Waiting for an order book snapshot'
+    end
+    sleep 1
+  end
+ensure
+  client.shutdown
+end
+```
+
+`book.ready?` reports whether the book has received a snapshot after the server acknowledged
+the delta subscription on the current connection.
+`book.current` returns `nil` before the first snapshot, after a disconnect until a fresh
+snapshot arrives, and after shutdown. Each view contains frozen `bids` (highest price first)
+and `asks` (lowest price first), with `price` and `size` on each level. Views already read
+stay unchanged as new messages arrive. `best_bid` and `best_ask` return the first level on
+their side, and `spread` is the best ask price minus the best bid price when both exist.
+
+See the [snapshot](https://bf-lightning-api.readme.io/docs/realtime-board-snapshot) and
+[delta](https://bf-lightning-api.readme.io/docs/realtime-board) channel documentation.
+
 #### Private events
 
 To subscribe to the private `child_order_events` and `parent_order_events`, pass your API key and secret when creating the `realtime_client`.
@@ -154,6 +189,8 @@ to `subscribe` and `unsubscribe`. A second callback for the same channel replace
 previous callback. Unsubscribing stops local delivery and removes the channel from
 the subscriptions restored on reconnect. Server rejections of runtime subscriptions
 also reach `subscription_failed`.
+Call `subscribe` again to retry a rejected channel on the same connection.
+An acknowledged or pending subscription is reused when its callback changes.
 
 ```ruby
 client = Bitflyer.realtime_client
