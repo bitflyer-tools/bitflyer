@@ -87,6 +87,7 @@ To subscribe to the private `child_order_events` and `parent_order_events`, pass
 
 The `ready` callback is called when the `realtime_client` is ready to receive events (after the socket connection is established, the optional authentication has succeeded, and the channels have been subscribed). If connection is lost, the `disconnected` callback is called, and reconnection is attempted automatically. When the connection is restored and the server acknowledges all subscriptions for that setup, `ready` is called again. If the server rejects a setup subscription, `subscription_failed` receives the channel name as a symbol and the server error. That setup skips `ready`.
 If setup finishes before registration, assigning `ready` delivers the pending notification synchronously, once per connection.
+If any setup subscription acknowledgment is still pending after 10 seconds, the client closes the connection and retries the registered subscriptions on a new connection.
 
 If the server rejects authentication, the client closes the connection and passes a `RuntimeError` with the server response to `disconnected`. Authentication rejection stops automatic reconnection.
 

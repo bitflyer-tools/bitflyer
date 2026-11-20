@@ -26,15 +26,19 @@ module Bitflyer
 
     class WebSocketClient
       HANDSHAKE_TIMEOUT_MS: Integer
+      SUBSCRIPTION_ACK_TIMEOUT_MS: Integer
 
       @connection: [Transport, Thread]?
       @handshake_deadline: Integer?
       @expiring_handshake: bool?
+      @subscription_ack_deadline: Integer?
       @shutdown_lock: Mutex
 
       private
 
       def close_expired_handshake: () -> void
+
+      def close_expired_subscriptions: () -> void
 
       def take_expired_handshake: () -> Transport?
 

@@ -8,7 +8,8 @@ module Bitflyer
   module Realtime
     class WebSocketClient # rubocop:disable Metrics/ClassLength
       HANDSHAKE_TIMEOUT_MS = 10_000
-      private_constant :HANDSHAKE_TIMEOUT_MS
+      SUBSCRIPTION_ACK_TIMEOUT_MS = 10_000
+      private_constant :HANDSHAKE_TIMEOUT_MS, :SUBSCRIPTION_ACK_TIMEOUT_MS
 
       attr_accessor :websocket_client, :channel_names, :channel_callbacks, :ping_interval, :ping_timeout,
                     :disconnected, :subscription_failed
@@ -214,6 +215,9 @@ module Bitflyer
           return if @session_ready
 
           @pending_subscriptions = @channel_callbacks.each_key.with_index(1).to_h { |channel, id| [id, channel] }
+          unless @pending_subscriptions.empty?
+            @subscription_ack_deadline = monotonic_milliseconds + SUBSCRIPTION_ACK_TIMEOUT_MS
+          end
           @session_ready = true
           [@websocket_client, @pending_subscriptions.to_a]
         end
@@ -404,11 +408,25 @@ module Bitflyer
             if @websocket_client&.open?
               send_ping
               wait_pong
+              close_expired_subscriptions
             else
               reconnect
             end
           end
         end
+      end
+
+      def close_expired_subscriptions
+        socket = @session_mutex.synchronize do
+          deadline = @subscription_ack_deadline
+          return unless deadline && !@pending_subscriptions.empty? && monotonic_milliseconds >= deadline
+
+          @subscription_ack_deadline = nil
+          @pending_subscriptions.clear
+          @websocket_client
+        end
+        debug_log 'Timed out waiting for setup subscription acknowledgments'
+        socket&.close
       end
 
       def wait_for_monitor_tick
@@ -454,6 +472,7 @@ module Bitflyer
 
       def clear_readiness
         @pending_subscriptions = {}
+        @subscription_ack_deadline = nil
         @subscription_rejected = false
         @awaiting_authentication = false
         @session_ready = false
