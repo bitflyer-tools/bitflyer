@@ -69,6 +69,32 @@ keeps it open. Call `client.close` to release it. The next request on that clien
 `withdraw` requires non-`nil` `bank_account_id` and `amount` keywords. Pass `code` to include a
 two-factor authentication code when required.
 
+#### Crypto CFD funding rates
+
+Use the public HTTP client to fetch the upcoming funding rate and its UTC settlement time,
+or to retrieve past rates in descending order by calculation time.
+
+```ruby
+require 'bitflyer'
+
+public_client = Bitflyer.http_public_client
+upcoming = public_client.funding_rate(product_code: 'FX_BTC_JPY')
+p upcoming.values_at('current_funding_rate', 'next_funding_rate_settledate')
+
+history = public_client.funding_rate_history(
+  product_code: 'FX_BTC_JPY',
+  from: '2024-04-14T00:00:00',
+  to: '2024-04-16T00:00:00',
+  count: 10
+)
+p history
+```
+
+Pass `from` and `to` as UTC timestamp strings. Both bounds are optional and apply to
+`calculation_date`. The API defaults to 100 records and accepts at most 500 per request.
+When you supply `from`, the API selects the oldest matching records up to `count` and
+returns them newest first.
+
 #### Stream execution history
 
 `each_execution` on either HTTP client fetches pages on demand and yields one execution at a time
