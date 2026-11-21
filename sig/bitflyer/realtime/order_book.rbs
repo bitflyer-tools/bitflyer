@@ -10,9 +10,29 @@ module Bitflyer
         def initialize: (price: number, size: number) -> void
       end
 
+      interface _Side
+        def each: () -> Enumerator[Level, _Side]
+                | () { (Level) -> void } -> _Side
+        def map: [T] () { (Level) -> T } -> Array[T]
+               | () -> Enumerator[Level, Array[untyped]]
+        def []: (int index) -> Level?
+              | (int start, int length) -> Array[Level]?
+              | (Range[Integer?] range) -> Array[Level]?
+        def fetch: (int index) -> Level
+                  | [T] (int index, T default) -> (Level | T)
+                  | [T] (int index) { (int index) -> T } -> (Level | T)
+        def first: () -> Level?
+                 | (int count) -> Array[Level]
+        def last: () -> Level?
+                | (int count) -> Array[Level]
+        def empty?: () -> bool
+        def length: () -> Integer
+        def size: () -> Integer
+      end
+
       class View
-        attr_reader bids: Array[Level]
-        attr_reader asks: Array[Level]
+        attr_reader bids: _Side
+        attr_reader asks: _Side
 
         def initialize: (bids: Array[Level], asks: Array[Level]) -> void
         def best_bid: () -> Level?
