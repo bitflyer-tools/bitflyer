@@ -186,19 +186,20 @@ module Bitflyer
       def handle_message(payload:, socket: @websocket_client) # rubocop:disable Metrics/CyclomaticComplexity
         return if @lifecycle_lock.synchronize { lifecycle_inactive? }
 
-        data = payload.data
-        debug_log data
-        prefix = /\A\d+/.match(data)
+        prefix = /\A\d+/.match(payload.data)
         return unless prefix
 
-        case prefix[0]
+        code = prefix[0]
+        debug_log "Received packet #{code}"
+
+        case code
         when '0' then setup_by_response(json: prefix.post_match, socket: socket)
         when '3' then receive_pong
         when '41' then disconnect(socket: socket)
         when '42' then emit_message(json: prefix.post_match, socket: socket)
         when '430' then authenticated(json: prefix.post_match, socket: socket)
         when /\A43[1-9]\d*\z/
-          acknowledge_subscription(id: prefix[0][2..].to_i, json: prefix.post_match, socket: socket)
+          acknowledge_subscription(id: code[2..].to_i, json: prefix.post_match, socket: socket)
         end
       rescue JSON::ParserError
         puts 'Invalid JSON in realtime frame'
@@ -308,6 +309,7 @@ module Bitflyer
         channel_name, *messages = JSON.parse json
         return unless channel_name
 
+        debug_log "Received event on #{channel_name}"
         channel = channel_name.to_sym
         route_messages(channel, messages, socket) do |token|
           messages.each { |message| enqueue_callback(channel, token, message) }
