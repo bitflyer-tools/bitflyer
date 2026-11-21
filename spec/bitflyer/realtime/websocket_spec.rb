@@ -992,6 +992,43 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     expect(ready).to have_received(:call).once
   end
 
+  it 'leaves the replacement open when reading a disconnect frame from the previous socket' do
+    websocket = realtime_client.websocket_client
+    replacement = instance_double(Bitflyer::Realtime::Transport, close: nil)
+    stub_transport(replacement, {})
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(replacement)
+    allow(transport).to receive(:close)
+
+    payload = double('buffered disconnect frame')
+    allow(payload).to receive(:data) do
+      allow(transport).to receive_messages(closed?: true, reconnectable?: true)
+      handlers.fetch(:close).call(nil)
+      websocket.reconnect
+      '41'
+    end
+    handlers.fetch(:message).call(payload)
+
+    expect(websocket.websocket_client).to equal(replacement)
+    expect(replacement).not_to have_received(:close)
+  end
+
+  it 'closes the active socket on a disconnect frame and reconnects' do
+    websocket = realtime_client.websocket_client
+    replacement = instance_double(Bitflyer::Realtime::Transport)
+    stub_transport(replacement, {})
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(replacement)
+    allow(transport).to receive(:close) do
+      allow(transport).to receive_messages(closed?: true, reconnectable?: true)
+      handlers.fetch(:close).call(nil)
+    end
+
+    receive_frame('41')
+
+    expect(transport).to have_received(:close).once
+    websocket.reconnect
+    expect(websocket.websocket_client).to equal(replacement)
+  end
+
   it 'becomes ready immediately when setup has no subscriptions' do
     realtime_client
     receive_frame('0{}')

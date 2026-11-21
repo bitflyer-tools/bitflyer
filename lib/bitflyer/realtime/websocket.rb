@@ -194,7 +194,7 @@ module Bitflyer
         case prefix[0]
         when '0' then setup_by_response(json: prefix.post_match, socket: socket)
         when '3' then receive_pong
-        when '41' then disconnect
+        when '41' then disconnect(socket: socket)
         when '42' then emit_message(json: prefix.post_match, socket: socket)
         when '430' then authenticated(json: prefix.post_match, socket: socket)
         when /\A43[1-9]\d*\z/
