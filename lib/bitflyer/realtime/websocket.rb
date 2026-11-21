@@ -73,7 +73,7 @@ module Bitflyer
           @pending_authentication_error = nil
           pending_error
         end
-        notify_disconnected(error, callback) if error
+        notify_disconnected(error, callback) if error && callback
         callback
       end
 
@@ -211,14 +211,17 @@ module Bitflyer
         puts e.backtrace&.join("\n")
       end
 
-      def handle_close(error:, socket: @websocket_client)
+      def handle_close(error:, socket: @websocket_client, complete_close: nil)
         debug_log error
-        return unless @lifecycle_lock.synchronize do
+        callback = @lifecycle_lock.synchronize do
           connecting_socket = @connection&.first
-          !lifecycle_inactive? && (reset_readiness(socket) || (socket && connecting_socket.equal?(socket)))
-        end
+          next if lifecycle_inactive? || !(reset_readiness(socket) || (socket && connecting_socket.equal?(socket)))
 
-        notify_disconnected(error)
+          # Keep retries gated until the previous session has been invalidated.
+          complete_close&.call
+          @disconnected
+        end
+        dispatch_disconnected(error, callback)
       end
 
       def setup_by_response(json:, socket: @websocket_client)
@@ -529,7 +532,9 @@ module Bitflyer
         transport.on(:message) do |payload|
           this.handle_message(payload: payload, socket: transport) if this.websocket_client.equal?(transport)
         end
-        transport.on(:close) { |error| this.handle_close(error: error, socket: transport) }
+        transport.on(:close) do |error, complete_close|
+          this.handle_close(error: error, socket: transport, complete_close: complete_close)
+        end
       end
 
       def activate_transport(transport)
@@ -805,11 +810,15 @@ module Bitflyer
           @pending_authentication_error = error unless @disconnected
           @disconnected
         end
-        notify_disconnected(error, callback)
+        dispatch_disconnected(error, callback)
       end
 
-      def notify_disconnected(error, callback = @disconnected)
-        callback&.call(error)
+      def dispatch_disconnected(error, callback)
+        Thread.new { notify_disconnected(error, callback) } if callback
+      end
+
+      def notify_disconnected(error, callback)
+        callback.call(error)
       rescue StandardError => e
         warn e.full_message(highlight: false)
       end

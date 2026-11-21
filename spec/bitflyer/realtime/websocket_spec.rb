@@ -10,6 +10,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'pong timeout recovery' do
     driver = instance_double(WebSocket::Driver::Client, state: :open, on: nil, start: nil, text: nil, close: nil)
     socket = instance_double(OpenSSL::SSL::SSLSocket, close: nil)
     reconnect_attempts = Queue.new
+    warnings = Queue.new
     allow(WebSocket::Driver).to receive(:client).with(original).and_return(driver)
     allow(original).to receive(:connect_tls).and_return(socket)
     allow(original).to receive(:read_messages)
@@ -17,17 +18,81 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'pong timeout recovery' do
     allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(original, replacement)
 
     client = described_class.new(host: 'wss://example.com', key: nil, secret: nil)
+    allow(client).to receive(:warn).and_wrap_original do |warn, message|
+      warn.call(message)
+      warnings << true
+    end
     expect do
       client.disconnected = ->(_) { raise 'callback failed' }
       client.setup_by_response(json: '{}')
       client.last_pong_at = Time.now.to_i - 100
 
       expect(Timeout.timeout(5) { reconnect_attempts.pop }).to eq('wss://example.com/socket.io/?transport=websocket')
+      expect(warnings.pop(timeout: 5)).to be(true)
       expect { client.shutdown }.not_to raise_error
     end.to output(/callback failed/).to_stderr
     expect(socket).to have_received(:close).once
   ensure
     client&.shutdown
+  end
+end
+
+RSpec.describe Bitflyer::Realtime::WebSocketClient, 'blocked disconnect callbacks' do
+  [:reader, :pong_timeout].each do |trigger|
+    it "reaches readiness on a replacement while the #{trigger} disconnect callback is blocked" do
+      original = Bitflyer::Realtime::Transport.new
+      replacement = Bitflyer::Realtime::Transport.new
+      driver = instance_double(WebSocket::Driver::Client, state: :open, on: nil, start: nil, text: nil, close: nil)
+      socket = instance_double(OpenSSL::SSL::SSLSocket)
+      eof = Queue.new
+      release = Queue.new
+      disconnected = Queue.new
+      ready = Queue.new
+      reconnected = Queue.new
+      allow(socket).to receive(:readpartial) { eof.pop; raise EOFError }
+      allow(socket).to receive(:close) { eof << true }
+      allow(WebSocket::Driver).to receive(:client).with(original).and_return(driver)
+      allow(original).to receive(:connect_tls).and_return(socket)
+      allow(replacement).to receive_messages(connect: nil, closed?: false)
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(original, replacement)
+
+      client = described_class.new(host: 'wss://example.com', key: nil, secret: nil)
+      allow(client).to receive(:reconnect).and_wrap_original do |reconnect|
+        reconnect.call
+        reconnected << client.websocket_client
+      end
+      client.ready = -> { ready << client.websocket_client }
+      client.disconnected = lambda do |error|
+        disconnected << [error, original.reconnectable?, client.instance_variable_get(:@session_ready), Thread.current]
+        release.pop
+      end
+      client.setup_by_response(json: '{}')
+      expect(ready.pop(timeout: 5)).to equal(original)
+
+      if trigger == :reader
+        eof << true
+      else
+        client.last_pong_at = Time.now.to_i - 100
+      end
+
+      notification = disconnected.pop(timeout: 5)
+      expect(notification).to match([nil, true, false, an_instance_of(Thread)])
+      callback_thread = notification.last
+      expect(reconnected.pop(timeout: 5)).to equal(replacement)
+      client.setup_by_response(json: '{}', socket: replacement)
+      expect(ready.pop(timeout: 5)).to equal(replacement)
+      expect(callback_thread).to be_alive
+      expect(original.thread.join(5)).to equal(original.thread)
+      original.close
+      expect(socket).to have_received(:close).once
+      expect(disconnected).to be_empty
+    ensure
+      release << true
+      eof << true
+      client&.shutdown
+      original&.thread&.join(5)
+      callback_thread&.join(5)
+    end
   end
 end
 
@@ -79,7 +144,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
   end
 
   it 'retries a closed socket and ignores its late events' do
-    disconnected = []
+    disconnected = Queue.new
     client.disconnected = ->(error) { disconnected << error }
     allow(original).to receive(:reconnectable?).and_return(true)
     handlers[original].fetch(:close).call(nil)
@@ -90,7 +155,8 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
 
     expect(client.websocket_client).to equal(replacement)
     expect(client.last_pong_at).to be_nil
-    expect(disconnected).to eq([nil])
+    expect(Timeout.timeout(5) { disconnected.pop }).to be_nil
+    expect(disconnected).to be_empty
   end
 
   it 'keeps the replacement setup deadline when an old setup frame is already being dispatched' do
@@ -482,7 +548,7 @@ describe Bitflyer::Realtime::WebSocketClient do
     @client = Bitflyer.realtime_client('key', 'secret')
     @client.child_order_events = ->(_event) {}
     Timeout.timeout(5) { @reconnected.pop }
-    errors = []
+    errors = Queue.new
     notifications = []
     callback = ->(error) { errors << error }
     @client.disconnected = callback
@@ -501,7 +567,8 @@ describe Bitflyer::Realtime::WebSocketClient do
     expect(socket).not_to have_received(:send).with('421["subscribe","child_order_events"]')
     expect(socket).to have_received(:connect).twice
     expect(notifications).to be_empty
-    expect(errors.map(&:message)).to eq(['Authentication failed: [{"message":"Invalid API key"}]'])
+    expect(errors.pop(timeout: 5)&.message).to eq('Authentication failed: [{"message":"Invalid API key"}]')
+    expect(errors).to be_empty
   end
 
   it 'delivers the original authentication error when a callback is registered after construction' do
@@ -549,7 +616,7 @@ describe Bitflyer::Realtime::WebSocketClient do
       finish_close.pop
       handlers.fetch(:close).call(nil)
     end
-    errors = []
+    errors = Queue.new
     callback = ->(error) { errors << error }
     rejection = Thread.new { receive_message('430[{"message":"Invalid API key"}]') }
 
@@ -563,7 +630,8 @@ describe Bitflyer::Realtime::WebSocketClient do
     end
     @client.disconnected = callback
 
-    expect(errors.map(&:message)).to eq(['Authentication failed: [{"message":"Invalid API key"}]'])
+    expect(errors.pop(timeout: 5)&.message).to eq('Authentication failed: [{"message":"Invalid API key"}]')
+    expect(errors).to be_empty
   end
 end
 
