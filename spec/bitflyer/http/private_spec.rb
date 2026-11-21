@@ -104,6 +104,55 @@ describe Bitflyer::HTTP::Private::Client do
     end
   end
 
+  describe '#parent_orders' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:http) { instance_double(Net::HTTP) }
+    let(:response) { instance_double(Net::HTTPOK, code: '200', body: '[{"id":75,"parent_order_state":"ACTIVE"}]') }
+
+    before do
+      allow(Net::HTTP).to receive(:start).and_return(http)
+      allow(http).to receive(:request).and_return(response)
+      allow(Time).to receive(:now).and_return(Time.at(1_000_000))
+    end
+
+    it 'requests the default product without optional filters' do
+      client.parent_orders
+
+      expect(http).to have_received(:request).with(
+        an_instance_of(Net::HTTP::Get).and(have_attributes(path: '/v1/me/getparentorders?product_code=BTC_JPY'))
+      )
+    end
+
+    it 'sends the product, state, and pagination filters and returns the parsed orders' do
+      orders = client.parent_orders(product_code: 'ETH_JPY', count: 10, before: 100, after: 50,
+                                    parent_order_state: 'ACTIVE')
+
+      expect(orders).to eq([{ 'id' => 75, 'parent_order_state' => 'ACTIVE' }])
+      expect(http).to have_received(:request) do |request|
+        uri = URI.parse(request.path)
+        expect(request).to be_an_instance_of(Net::HTTP::Get)
+        expect(uri.path).to eq('/v1/me/getparentorders')
+        expect(URI.decode_www_form(uri.query).to_h).to eq(
+          'product_code' => 'ETH_JPY', 'count' => '10', 'before' => '100', 'after' => '50',
+          'parent_order_state' => 'ACTIVE'
+        )
+      end
+    end
+
+    context 'when the API rejects the request' do
+      let(:body) { '{"error":"Unauthorized"}' }
+      let(:response) { instance_double(Net::HTTPUnauthorized, code: '401', body: body) }
+
+      it 'raises a response error with the status and raw body' do
+        expect do
+          client.parent_orders
+        end.to raise_error(Bitflyer::HTTP::ResponseError, 'bitFlyer API returned HTTP 401') { |error|
+          expect(error).to have_attributes(status: 401, body: body)
+        }
+      end
+    end
+  end
+
   describe 'single-order requests' do
     let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
     let(:connection) { instance_double(Bitflyer::HTTP::Connection) }
