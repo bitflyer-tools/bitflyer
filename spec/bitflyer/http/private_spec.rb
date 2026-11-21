@@ -239,20 +239,58 @@ describe Bitflyer::HTTP::Private::Client do
         .to raise_error(ArgumentError, 'size must be an Integer or a finite Float')
     end
 
-    it 'serializes the order conditions as a JSON array' do
+    {
+      'MARKET' => {},
+      'LIMIT' => { price: 30_000 },
+      'STOP' => { trigger_price: 29_000 },
+      'STOP_LIMIT' => { price: 28_800, trigger_price: 29_000 },
+      'TRAIL' => { offset: 100 }
+    }.each do |type, extra_fields|
+      required_fields = type == 'MARKET' ? %i[product_code condition_type side size] : extra_fields.keys
+      required_fields.each do |field|
+        it "rejects a #{type} condition missing #{field} before making an HTTP request" do
+          expect(Net::HTTP).not_to receive(:start)
+          incomplete = condition.merge(condition_type: type, **extra_fields).reject { |key, _| key == field }
+
+          expect { client.send_parent_order(parameters: [condition, incomplete]) }
+            .to raise_error(ArgumentError, "#{field} is required in a parent order condition")
+        end
+      end
+    end
+
+    it 'rejects a nil required field in a string-keyed condition before making an HTTP request' do
+      expect(Net::HTTP).not_to receive(:start)
+      incomplete = condition.transform_keys(&:to_s).merge('condition_type' => 'LIMIT', 'price' => nil)
+
+      expect { client.send_parent_order(parameters: [incomplete]) }
+        .to raise_error(ArgumentError, 'price is required in a parent order condition')
+    end
+
+    it 'rejects a non-hash condition before making an HTTP request' do
+      expect(Net::HTTP).not_to receive(:start)
+
+      expect { client.send_parent_order(parameters: [nil]) }
+        .to raise_error(ArgumentError, 'each parent order condition must be a hash')
+    end
+
+    it 'serializes symbol-keyed and string-keyed order conditions as a JSON array' do
       http = instance_double(Net::HTTP)
       response = instance_double(Net::HTTPOK, code: '200', body: '{"parent_order_acceptance_id":"123"}')
+      stop_limit = condition.merge(condition_type: 'STOP_LIMIT', price: 28_800, trigger_price: 29_000)
+      trail = condition.transform_keys(&:to_s).merge('condition_type' => 'TRAIL', 'offset' => 100)
       allow(Net::HTTP).to receive(:start).and_return(http)
       expect(http).to receive(:request) do |request|
         expect(request.path).to eq('/v1/me/sendparentorder')
         expect(JSON.parse(request.body)).to eq(
+          'order_method' => 'OCO',
           'time_in_force' => 'GTC',
-          'parameters' => [condition.transform_keys(&:to_s)]
+          'parameters' => [stop_limit.transform_keys(&:to_s), trail]
         )
         response
       end
 
-      expect(client.send_parent_order(parameters: [condition])).to eq('parent_order_acceptance_id' => '123')
+      expect(client.send_parent_order(parameters: [stop_limit, trail], order_method: 'OCO'))
+        .to eq('parent_order_acceptance_id' => '123')
     end
   end
 
