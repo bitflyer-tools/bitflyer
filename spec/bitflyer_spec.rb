@@ -376,31 +376,40 @@ describe Bitflyer do
       end
     end
 
-    it 'reconnects after the peer closes during the WebSocket handshake' do
-      allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
-      TCPServer.open('127.0.0.1', 0) do |server|
-        use_tcp_peer(server)
-        @client = Bitflyer.realtime_client
-        transport = @client.websocket_client.websocket_client
-        disconnected = Queue.new
-        @client.disconnected = ->(error) { disconnected << error }
+    [false, true].each do |upgraded|
+      it "reconnects after EOF #{upgraded ? 'after' : 'during'} the WebSocket handshake" do
+        allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
+        TCPServer.open('127.0.0.1', 0) do |server|
+          use_tcp_peer(server)
+          @client = Bitflyer.realtime_client
+          transport = @client.websocket_client.websocket_client
+          disconnected = Queue.new
+          @client.disconnected = ->(error) { disconnected << error }
 
-        peer = replacement_peer = nil
-        Timeout.timeout(5) do
-          peer = server.accept
-          peer.each_line { |line| break if line == "\r\n" }
-          peer.close
-          disconnected.pop
-          replacement_peer = server.accept
-          replacement_peer.each_line { |line| break if line == "\r\n" }
-          expect(transport).to be_closed
-          expect(transport.thread.join(1)).to eq(transport.thread)
-          expect(Bitflyer::Realtime::Transport).to have_received(:new).twice
+          ready = Queue.new
+          @client.ready = -> { ready << true }
+          peer = replacement_peer = nil
+          Timeout.timeout(5) do
+            peer = server.accept
+            if upgraded
+              send_greeting(peer, '0{}')
+              ready.pop
+            else
+              peer.gets("\r\n\r\n")
+            end
+            peer.close
+            expect(disconnected.pop).to be_nil
+            replacement_peer = server.accept
+            replacement_peer.each_line { |line| break if line == "\r\n" }
+            expect(transport).to be_closed
+            expect(transport.thread.join(1)).to eq(transport.thread)
+            expect(Bitflyer::Realtime::Transport).to have_received(:new).twice
+          end
+        ensure
+          @client&.shutdown
+          peer&.close
+          replacement_peer&.close
         end
-      ensure
-        @client&.shutdown
-        peer&.close
-        replacement_peer&.close
       end
     end
 
@@ -526,13 +535,14 @@ describe Bitflyer do
         allow(raw_socket).to receive(:close) { write_released << true }
         allow(replacement).to receive(:connect) { reconnected << true }
         read_error = Errno::ECONNRESET.new if disconnect == :reset
+        allow(raw_socket).to receive(:readpartial).and_raise(read_error || EOFError)
         client.disconnected = ->(error) { disconnected << error }
         client.ping_interval = 0
         client.last_ping_at = Time.now.to_i - 1
 
         Timeout.timeout(5) do
           ping_started.pop
-          transport.__send__(:terminate, read_error)
+          transport.__send__(:read_messages)
           reconnected.pop
         end
 
