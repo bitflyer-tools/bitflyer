@@ -108,7 +108,8 @@ module Bitflyer
 
       def lifecycle_inactive?: () -> bool
 
-      def notify_ready: (Transport?) -> void
+      def notify_ready: (Transport?, ?async: bool) -> void
+      def prepare_ready_callback: (Transport?) -> ready_callback?
 
       def take_ready_callback: () -> ready_callback?
 

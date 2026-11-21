@@ -282,7 +282,7 @@ module Bitflyer
           end
         end
         send_subscription_frames
-        notify_ready(socket)
+        notify_ready(socket, async: true)
       end
 
       def acknowledge_subscription(id:, json:, socket: @websocket_client)
@@ -298,8 +298,9 @@ module Bitflyer
           record_subscription_result(id, channel, error)
           [channel, error]
         end
-        @subscription_failed&.call(channel, error) if error
-        notify_ready(socket)
+        failure = @subscription_failed
+        enqueue_notification(socket) { failure.call(channel, error) } if error && failure
+        notify_ready(socket, async: true)
       end
 
       def receive_pong
@@ -350,10 +351,20 @@ module Bitflyer
           return if @callback_queue.size >= CALLBACK_QUEUE_LIMIT
           return unless subscribed_callback(channel, token)
 
-          @callback_worker ||= Thread.new { deliver_callbacks }
-          @callback_queue << [channel, token, message, socket]
-          @callback_wakeup.signal
+          push_callback([channel, token, message, socket])
         end
+      end
+
+      def enqueue_notification(socket, &notification)
+        @lifecycle_lock.synchronize do
+          push_callback([nil, nil, notification, socket]) if active_callback_transport?(socket)
+        end
+      end
+
+      def push_callback(event)
+        @callback_worker ||= Thread.new { deliver_callbacks }
+        @callback_queue << event
+        @callback_wakeup.signal
       end
 
       def deliver_callbacks
@@ -371,9 +382,11 @@ module Bitflyer
 
       def deliver_callback(channel, token, message, socket)
         callback = @lifecycle_lock.synchronize do
-          subscribed_callback(channel, token) if active_callback_transport?(socket)
+          return unless active_callback_transport?(socket)
+
+          subscribed_callback(channel, token) if channel
         end
-        callback&.call(message)
+        channel ? callback&.call(message) : message.call
       rescue StandardError => e
         puts e
         puts e.backtrace&.join("\n")
@@ -728,8 +741,15 @@ module Bitflyer
         @stopped || !@authentication_error.nil?
       end
 
-      def notify_ready(socket)
-        notification = @lifecycle_lock.synchronize do
+      def notify_ready(socket, async: false)
+        notification = prepare_ready_callback(socket)
+        return unless notification
+
+        async ? enqueue_notification(socket) { notification.call } : notification.call
+      end
+
+      def prepare_ready_callback(socket)
+        @lifecycle_lock.synchronize do
           return if lifecycle_inactive?
 
           @session_mutex.synchronize do
@@ -744,7 +764,6 @@ module Bitflyer
             take_ready_callback
           end
         end
-        notification&.call
       end
 
       def setup_subscriptions_acknowledged?

@@ -151,12 +151,8 @@ describe Bitflyer do
             send_greeting(peer, payload)
 
             callback_thread = completed.pop
-            if callback == :ready
-              expect(callback_thread).to equal(transport.thread)
-            else
-              expect(callback_thread).not_to equal(transport.thread)
-              expect(callback_thread.join(1)).to equal(callback_thread)
-            end
+            expect(callback_thread).not_to equal(transport.thread)
+            expect(callback_thread.join(1)).to equal(callback_thread)
             expect(transport.thread.join(1)).to equal(transport.thread)
             expect(transport).to be_closed
             expect(monitor).not_to be_alive
@@ -317,7 +313,7 @@ describe Bitflyer do
 
       expect(replacement).to have_received(:send).with(start_with('420["auth",')).ordered
       expect(replacement).to have_received(:send).with('421["subscribe","lightning_ticker_BTC_JPY"]').ordered
-      expect(ready.size).to eq(1)
+      expect(ready.pop(timeout: 5)).to be(true)
     end
 
     it 'keeps the pending handshake through a monitor tick and releases the transport on shutdown' do
@@ -626,14 +622,14 @@ describe Bitflyer do
 
     it 'signals readiness after authentication succeeds' do
       client = @client = Bitflyer.realtime_client('key', 'secret')
-      ready = spy('ready callback')
-      client.ready = ready
+      ready = Queue.new
+      client.ready = -> { ready << true }
 
       receive_frame('0{}')
-      expect(ready).not_to have_received(:call)
+      expect(ready).to be_empty
       receive_frame('430[null]')
 
-      expect(ready).to have_received(:call).once
+      expect(ready.pop(timeout: 5)).to be(true)
       expect(socket).not_to have_received(:close)
     end
 

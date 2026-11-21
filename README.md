@@ -196,10 +196,11 @@ If the rejection occurs before callback registration, assigning `disconnected` d
 
 Call `client.shutdown` when you finish using a realtime client. It stops automatic reconnection, closes the connection, and stops the monitoring thread. You can call it more than once, including from a `ready` or subscription callback.
 Concurrent calls wait for the connection to close.
-Subscription callbacks run serially in receive order on a separate thread, so a slow callback
-does not block heartbeat processing. Each client queues up to 1,024 pending events in addition
-to the event being delivered. When the queue is full, new events are dropped.
-Disconnecting or shutting down discards pending events from that connection and allows any
+Market data callbacks and `ready` and `subscription_failed` notifications from incoming frames
+run serially on a separate thread, so a slow callback does not block heartbeat processing.
+When 1,024 callbacks are pending, new market data events are dropped. Notifications
+can still be queued.
+Disconnecting or shutting down discards pending callbacks from that connection and allows any
 callback already running to finish.
 
 The realtime client's `websocket_client` reference and the WebSocket client's transport reference
