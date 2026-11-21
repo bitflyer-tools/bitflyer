@@ -71,8 +71,9 @@ p private_client.positions # will print your positions
 Each HTTP client can reuse its HTTPS connection after up to 10 seconds of idle time if the server
 keeps it open. Call `client.close` to release it. The next request on that client opens a new connection.
 
-`withdraw` requires non-`nil` `bank_account_id` and `amount` keywords. Pass `code` to include a
-two-factor authentication code when required.
+`withdraw` requires non-`nil` `bank_account_id` and `amount` keywords. The amount must be an integer
+or a finite float. Unsupported amounts raise `ArgumentError` before an HTTP request is sent.
+Pass `code` to include a two-factor authentication code when required.
 
 #### Crypto CFD funding rates
 

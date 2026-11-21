@@ -29,9 +29,10 @@ module Bitflyer
 
         def deposits: (?count: Integer?, ?before: Integer?, ?after: Integer?) -> untyped
 
+        # Amount accepts Integer or finite Float.
         def withdraw: (
           bank_account_id: Integer,
-          amount: Numeric,
+          amount: Integer | Float,
           ?currency_code: String,
           ?code: String?
         ) -> untyped
