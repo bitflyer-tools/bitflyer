@@ -55,6 +55,8 @@ module Bitflyer
 
       def send_request: (Net::HTTPRequest request) -> Net::HTTPResponse
 
+      def request_with_retry: (Net::HTTP http, Net::HTTPRequest request) -> Net::HTTPResponse
+
       def read_response_body: (Net::HTTPResponse response) -> String?
 
       def close_session: () -> void

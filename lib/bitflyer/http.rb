@@ -118,12 +118,30 @@ module Bitflyer
       end
 
       def send_request(request)
-        http = (@http ||= Net::HTTP.start(@uri.host.to_s, @uri.port, use_ssl: true, keep_alive_timeout: 10))
+        http = (@http ||= Net::HTTP.start(
+          @uri.host.to_s, @uri.port, use_ssl: true, keep_alive_timeout: 10, max_retries: 0
+        ))
         sign_request(request, request.path, request.body)
-        http.request(request) { |response| response.body = read_response_body(response) }
+        request_with_retry(http, request)
       rescue StandardError
         close_session
         raise
+      end
+
+      def request_with_retry(http, request)
+        # Each attempt buffers its own body, so a failed GET can restart safely.
+        retry_get = request.method == 'GET'
+        begin
+          http.request(request) { |response| response.body = read_response_body(response) }
+        rescue Net::OpenTimeout
+          raise
+        rescue Timeout::Error, IOError, Errno::ECONNRESET, Errno::ECONNABORTED,
+               Errno::EPIPE, Errno::ETIMEDOUT, OpenSSL::SSL::SSLError
+          raise unless retry_get
+
+          retry_get = false
+          retry
+        end
       end
 
       def read_response_body(response)
