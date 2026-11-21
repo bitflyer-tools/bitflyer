@@ -132,6 +132,27 @@ end
 stops when a page is empty, when the cursor stops moving backward, or when the caller stops
 consuming the enumerator. Request errors propagate to the caller.
 
+#### Stream account balance history
+
+Use `each_balance_history` on the private HTTP client to fetch pages on demand and yield one
+balance entry at a time in API response order. Each page's lowest ID becomes the next
+exclusive `before` cursor. To resume an older-history export, pass the last successfully
+processed ID for the same currency as `before`. Use `after` to set an exclusive lower bound.
+
+```ruby
+require 'bitflyer'
+
+private_client = Bitflyer.http_private_client('YOUR_API_KEY', 'YOUR_API_SECRET')
+saved_balance_id = Integer(ENV.fetch('BITFLYER_SAVED_BALANCE_ID'), 10)
+private_client.each_balance_history(currency_code: 'JPY', before: saved_balance_id, count: 50, max_pages: 5) do |entry|
+  p entry
+end
+```
+
+Omit the block to get an enumerator. `max_pages` defaults to 10 and accepts 0 to skip fetching.
+Iteration stops when the budget is reached, a page is empty, the cursor stops moving backward,
+or the caller stops consuming entries. Request errors propagate to the caller.
+
 ### Realtime API
 
 #### Public events
