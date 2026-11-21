@@ -17,7 +17,7 @@ module Bitflyer
       private_constant :CONNECTION_TIMEOUT, :SESSION_RESPONSE_TIMEOUT_MS, :CALLBACK_QUEUE_LIMIT,
                        :SUBSCRIPTION_ACK_TIMEOUT_MS, :RECONNECT_BASE_DELAY, :RECONNECT_MAX_DELAY
 
-      attr_accessor :channel_names, :channel_callbacks, :ping_interval, :ping_timeout, :subscription_failed
+      attr_accessor :ping_interval, :ping_timeout, :subscription_failed
       attr_reader :websocket_client, :ready, :disconnected, :last_ping_at, :last_pong_at
 
       def initialize(host:, key:, secret:, debug: false)
@@ -25,7 +25,6 @@ module Bitflyer
         @key = key
         @secret = secret
         @debug = debug
-        @channel_names = []
         @channel_callbacks = {}
         @order_books = {}
         @board_feeds = {}
@@ -55,6 +54,14 @@ module Bitflyer
 
       def inspect = "#<#{self.class}>"
 
+      def channel_names
+        @session_mutex.synchronize { registered_channels.freeze }
+      end
+
+      def channel_callbacks
+        @session_mutex.synchronize { @channel_callbacks.dup.freeze }
+      end
+
       def ready=(callback)
         notification = @session_mutex.synchronize do
           @ready = callback
@@ -80,7 +87,6 @@ module Bitflyer
       def subscribe(channel_name:, &block)
         debug_log "Subscribe #{channel_name}"
         @session_mutex.synchronize do
-          @channel_names = (@channel_names + [channel_name]).uniq
           @subscription_tokens[channel_name] ||= Object.new
           @channel_callbacks[channel_name] = block
           queue_subscription(channel_name)
@@ -106,7 +112,6 @@ module Bitflyer
             @callback_queue.delete_if { |channel,| channel == channel_name }
             return if @board_feeds.key?(channel_name)
 
-            @channel_names -= [channel_name]
             @pending_subscriptions.delete_if { |_id, (channel, _deadline)| channel == channel_name }
             @acknowledged_subscriptions.delete(channel_name)
             queue_subscription_frame("42#{['unsubscribe', channel_name].to_json}") if @session_ready
@@ -270,7 +275,7 @@ module Bitflyer
           return if !@websocket_client.equal?(socket) || @session_ready
 
           @session_ready = true
-          (@board_feeds.keys | @channel_callbacks.keys).each { |channel| queue_subscription(channel, setup: true) }
+          registered_channels.each { |channel| queue_subscription(channel, setup: true) }
           @last_setup_subscription_id = @next_subscription_id
           unless @pending_subscriptions.empty?
             @subscription_ack_deadline = monotonic_milliseconds + SUBSCRIPTION_ACK_TIMEOUT_MS
@@ -326,6 +331,10 @@ module Bitflyer
       end
 
       private
+
+      def registered_channels
+        @board_feeds.keys | @channel_callbacks.keys
+      end
 
       def initialize_callbacks
         @subscription_tokens = {}
@@ -404,7 +413,6 @@ module Bitflyer
 
       def register_board_feed(channel, handler, delta_channel)
         @board_feeds[channel] = [handler, delta_channel]
-        @channel_names = (@channel_names + [channel]).uniq
         queue_subscription(channel)
       end
 

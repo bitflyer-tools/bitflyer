@@ -850,6 +850,44 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     expect(ready).to have_received(:call).once
   end
 
+  it 'exposes frozen channel snapshots and sends changes through the subscription methods' do
+    client = realtime_client
+    websocket = client.websocket_client
+    channel = :lightning_ticker_BTC_JPY
+    callback = ->(_message) {}
+    expect(websocket).not_to respond_to(:channel_names=)
+    expect(websocket).not_to respond_to(:channel_callbacks=)
+
+    client.ticker_btc_jpy = callback
+    names = websocket.channel_names
+    callbacks = websocket.channel_callbacks
+    expect(names).to eq([channel]).and be_frozen
+    expect(callbacks).to eq(channel => callback).and be_frozen
+
+    receive_frame('0{}')
+    expect(transport).to have_received(:send).with('421["subscribe","lightning_ticker_BTC_JPY"]').once
+    client.unsubscribe(channel)
+    expect(transport).to have_received(:send).with('42["unsubscribe","lightning_ticker_BTC_JPY"]').once
+    expect(websocket.channel_names).to be_empty
+    expect(websocket.channel_callbacks).to be_empty
+    expect(names).to eq([channel])
+    expect(callbacks).to eq(channel => callback)
+  end
+
+  it 'keeps order book channels registered after removing a user callback' do
+    client = realtime_client
+    websocket = client.websocket_client
+    client.order_book(product_code: 'BTC_JPY')
+    client.board_btc_jpy = ->(_message) {}
+    client.unsubscribe(:lightning_board_BTC_JPY)
+
+    expect(websocket.channel_names).to eq(%i[lightning_board_BTC_JPY lightning_board_snapshot_BTC_JPY])
+    expect(websocket.channel_callbacks).to be_empty
+    receive_frame('0{}')
+    expect(transport).to have_received(:send).with('421["subscribe","lightning_board_BTC_JPY"]').once
+    expect(transport).to have_received(:send).with('422["subscribe","lightning_board_snapshot_BTC_JPY"]').once
+  end
+
   it 'unsubscribes one runtime channel while retaining the others across reconnect' do
     client = Bitflyer.realtime_client('key', 'secret')
     client.ready = ready

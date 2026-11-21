@@ -238,6 +238,11 @@ connection check reports the timeout. Other subscriptions stay active.
 Call `subscribe` again to retry a failed channel on the same connection.
 An acknowledged or pending subscription is reused when its callback changes.
 
+The WebSocket client's `channel_names` and `channel_callbacks` return frozen snapshots
+of the registered channels and their user callbacks, respectively. `channel_names`
+also includes channels managed by `order_book`. Use `subscribe` and `unsubscribe`
+to change user subscriptions.
+
 ```ruby
 client = Bitflyer.realtime_client
 watchlist = []
