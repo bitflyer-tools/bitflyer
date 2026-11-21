@@ -222,9 +222,11 @@ client.executions_btc_jpy = ->(json){ p json }
 To update a watchlist on the same connection, pass the full Socket.IO channel name
 to `subscribe` and `unsubscribe`. A second callback for the same channel replaces the
 previous callback. Unsubscribing discards pending events for that subscription and
-removes the channel from the subscriptions restored on reconnect. Server rejections of runtime subscriptions
-also reach `subscription_failed`.
-Call `subscribe` again to retry a rejected channel on the same connection.
+removes the channel from the subscriptions restored on reconnect. For runtime
+subscriptions, `subscription_failed` reports server rejections and acknowledgment
+timeouts. If an acknowledgment is still pending after 10 seconds, the next
+connection check reports the timeout. Other subscriptions stay active.
+Call `subscribe` again to retry a failed channel on the same connection.
 An acknowledged or pending subscription is reused when its callback changes.
 
 ```ruby
