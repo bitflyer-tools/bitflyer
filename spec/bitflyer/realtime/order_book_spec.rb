@@ -54,6 +54,11 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     expect(view.best_ask.size).to eq(4)
     expect(view.spread).to eq(1)
     expect(view.bids).to be_frozen
+    expect(view.asks).to be_frozen
+    expect(view.bids[0]).to equal(view.best_bid)
+    expect(view.asks.fetch(0)).to equal(view.best_ask)
+    expect { view.bids.clear }.to raise_error(FrozenError)
+    expect { view.asks.clear }.to raise_error(FrozenError)
     expect(view.best_bid).to be_frozen
 
     board(delta, bids: [[9.0, 0], [8, 5], [0, 10]], asks: [[10, 0], [11, 2], [0, 3]])
