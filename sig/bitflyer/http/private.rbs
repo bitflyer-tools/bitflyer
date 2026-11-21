@@ -136,6 +136,21 @@ module Bitflyer
 
         def balance_history: (?currency_code: String?, ?count: Integer?, ?before: Integer?, ?after: Integer?) -> untyped
 
+        def each_balance_history: (
+          ?currency_code: String?,
+          ?count: Integer?,
+          ?before: Integer?,
+          ?after: Integer?,
+          ?max_pages: Integer
+        ) -> Enumerator[untyped, untyped]
+                                | (
+          ?currency_code: String?,
+          ?count: Integer?,
+          ?before: Integer?,
+          ?after: Integer?,
+          ?max_pages: Integer
+        ) { (untyped) -> void } -> nil
+
         def positions: (?product_code: String) -> untyped
 
         def trading_commission: (?product_code: String) -> untyped

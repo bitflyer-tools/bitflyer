@@ -11,7 +11,8 @@ arguments to API paths and request parameters. Each client delegates requests
 to its own `HTTP::Connection` in [`http.rb`](../lib/bitflyer/http.rb). The
 connection manages the HTTPS session, signs requests when credentials are
 present, and handles response parsing and HTTP errors. Both clients also use
-`HTTP::ExecutionHistory` in the same file to paginate `each_execution`.
+`HTTP::IdPagination` in the same file to paginate `each_execution` and the private client's
+`each_balance_history`.
 
 For endpoint changes, start with the client method and its matching specs in
 [`spec/bitflyer/http/`](../spec/bitflyer/http). For shared request or response
