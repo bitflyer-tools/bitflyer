@@ -1183,7 +1183,7 @@ describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
     expect(socket).to have_received(:close).once
   end
 
-  it 'discards queued events after unsubscribing and resubscribing to the same channel' do
+  it 'frees callback capacity on unsubscribe and preserves the order of other queued events' do
     channel = :lightning_ticker_BTC_JPY
     started = Queue.new
     resume = Queue.new
@@ -1197,16 +1197,21 @@ describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
     end
     receive_frame('0{}')
     client.subscribe(channel_name: channel, &callback)
-    receive_frame('42["lightning_ticker_BTC_JPY","running","stale"]')
+    client.subscribe(channel_name: :lightning_ticker_ETH_JPY) { |message| events << message }
+    receive_frame('42["lightning_ticker_BTC_JPY","running"]')
     expect(started.pop(timeout: 5)).to be(true)
 
+    receive_frame('42["lightning_ticker_ETH_JPY","first"]')
+    receive_frame("42#{JSON.generate([channel, *Array.new(1_022, 'stale')])}")
+    receive_frame('42["lightning_ticker_ETH_JPY","second"]')
+    receive_frame('42["lightning_ticker_ETH_JPY","overflow"]')
     client.unsubscribe(channel_name: channel)
+    receive_frame('42["lightning_ticker_ETH_JPY","third"]')
     client.subscribe(channel_name: channel, &callback)
     receive_frame('42["lightning_ticker_BTC_JPY","fresh"]')
     resume << true
 
-    expect(events.pop(timeout: 5)).to eq('running')
-    expect(events.pop(timeout: 5)).to eq('fresh')
+    expect(Array.new(5) { events.pop(timeout: 5) }).to eq(%w[running first second third fresh])
   ensure
     resume.close
   end

@@ -97,18 +97,21 @@ module Bitflyer
       end
 
       def unsubscribe(channel_name:)
-        socket = @session_mutex.synchronize do
-          return unless @channel_callbacks.key?(channel_name)
+        socket = @lifecycle_lock.synchronize do
+          @session_mutex.synchronize do
+            return unless @channel_callbacks.key?(channel_name)
 
-          @channel_callbacks.delete(channel_name)
-          @subscription_tokens.delete(channel_name)
-          return if @board_feeds.key?(channel_name)
+            @channel_callbacks.delete(channel_name)
+            @subscription_tokens.delete(channel_name)
+            @callback_queue.delete_if { |channel, _token, _message| channel == channel_name }
+            return if @board_feeds.key?(channel_name)
 
-          @channel_names -= [channel_name]
-          @pending_subscriptions.delete_if { |_id, (channel, _deadline)| channel == channel_name }
-          @acknowledged_subscriptions.delete(channel_name)
-          queue_subscription_frame("42#{['unsubscribe', channel_name].to_json}") if @session_ready
-          @websocket_client
+            @channel_names -= [channel_name]
+            @pending_subscriptions.delete_if { |_id, (channel, _deadline)| channel == channel_name }
+            @acknowledged_subscriptions.delete(channel_name)
+            queue_subscription_frame("42#{['unsubscribe', channel_name].to_json}") if @session_ready
+            @websocket_client
+          end
         end
         send_subscription_frames
         notify_ready(socket)
@@ -326,24 +329,33 @@ module Bitflyer
 
       def initialize_callbacks
         @subscription_tokens = {}
-        @callback_queue = SizedQueue.new(CALLBACK_QUEUE_LIMIT)
+        @callback_queue = []
+        @callback_wakeup = ConditionVariable.new
         @callback_worker = nil
       end
 
       def enqueue_callback(channel, token, message)
         @lifecycle_lock.synchronize do
           return if lifecycle_inactive?
+          return if @callback_queue.size >= CALLBACK_QUEUE_LIMIT
+          return unless subscribed_callback(channel, token)
 
           @callback_worker ||= Thread.new { deliver_callbacks }
-          @callback_queue.push([channel, token, message], true)
+          @callback_queue << [channel, token, message]
+          @callback_wakeup.signal
         end
-      rescue ThreadError
-        # A full queue drops the incoming event without blocking the reader.
       end
 
       def deliver_callbacks
-        while (event = @callback_queue.pop)
+        while (event = next_callback_event)
           deliver_callback(*event)
+        end
+      end
+
+      def next_callback_event
+        @lifecycle_lock.synchronize do
+          @callback_wakeup.wait(@lifecycle_lock) while @callback_queue.empty? && !lifecycle_inactive?
+          @callback_queue.shift
         end
       end
 
@@ -364,8 +376,8 @@ module Bitflyer
       end
 
       def stop_callbacks
-        @callback_queue.close
         @callback_queue.clear
+        @callback_wakeup.signal
       end
 
       def record_subscription_result(id, channel, error)
