@@ -10,6 +10,14 @@ module Bitflyer
         def initialize: (price: number, size: number) -> void
       end
 
+      class TopOfBook
+        attr_reader best_bid: Level?
+        attr_reader best_ask: Level?
+
+        def initialize: (best_bid: Level?, best_ask: Level?) -> void
+        def spread: () -> number?
+      end
+
       interface _Side
         def each: () -> Enumerator[Level, _Side]
                 | () { (Level) -> void } -> _Side
@@ -30,24 +38,23 @@ module Bitflyer
         def size: () -> Integer
       end
 
-      class View
+      class View < TopOfBook
         attr_reader bids: _Side
         attr_reader asks: _Side
 
         def initialize: (bids: Array[Level], asks: Array[Level]) -> void
-        def best_bid: () -> Level?
-        def best_ask: () -> Level?
-        def spread: () -> number?
       end
 
       @lock: Mutex
       @bids: Hash[Rational, Level]
       @asks: Hash[Rational, Level]
       @current: View?
+      @top_of_book: TopOfBook?
       @ready: bool
 
       def initialize: () -> void
       def current: () -> View?
+      def top_of_book: () -> TopOfBook?
       def ready?: () -> bool
 
       def replace: (untyped message) -> void

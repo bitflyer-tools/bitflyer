@@ -54,6 +54,7 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     expect(view.best_bid.size).to eq(2)
     expect(view.best_ask.size).to eq(4)
     expect(view.spread).to eq(1)
+    expect(view).to be_frozen
     expect(view.bids).to be_frozen
     expect(view.asks).to be_frozen
     expect(view.bids[0]).to equal(view.best_bid)
@@ -71,6 +72,32 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     expect(book.current.bids).to be_empty
     expect(book.current.asks.map(&:price)).to eq([13])
     expect(book.current.spread).to be_nil
+  end
+
+  it 'reads the best levels after deltas without building sorted depth' do
+    book
+    frame('0{}')
+    frame('431[null]')
+    expect(book.top_of_book).to be_nil
+    board(snapshot, bids: [[8, 1], [9, 2]], asks: [[12, 3], [10, 4]])
+    before_delta = book.top_of_book
+
+    expect(book).not_to receive(:sorted_levels)
+    board(delta, bids: [[9.0, 0]])
+    top = book.top_of_book
+    expect([top.best_bid.price, top.best_ask.price, top.spread]).to eq([8, 10, 2])
+    expect(top).to be_frozen
+    expect(before_delta.best_bid.price).to eq(9)
+
+    board(delta, asks: [[10, 6]])
+    expect(book.top_of_book.best_ask.size).to eq(6)
+    expect(top.best_ask.size).to eq(4)
+
+    board(delta, bids: [[8, 0]])
+    top = book.top_of_book
+    expect(top.best_bid).to be_nil
+    expect(top.best_ask.price).to eq(10)
+    expect(top.spread).to be_nil
   end
 
   it 'invalidates after a malformed delta and waits for a valid snapshot' do
@@ -106,10 +133,11 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     frame('0{}')
     frame('431[null]')
     board(snapshot, bids: [[8, 1]])
+    expect(book.top_of_book.best_bid.price).to eq(8)
     at_disconnect = Queue.new
-    client.disconnected = ->(_error) { at_disconnect << book.current }
+    client.disconnected = ->(_error) { at_disconnect << [book.current, book.top_of_book] }
     events.fetch(:close).call(nil)
-    expect(Timeout.timeout(5) { at_disconnect.pop }).to be_nil
+    expect(Timeout.timeout(5) { at_disconnect.pop }).to eq([nil, nil])
     board(snapshot, bids: [[9, 1]])
     expect(book.current).to be_nil
 
@@ -132,7 +160,9 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     board(snapshot, asks: [[10, 1]], handlers: replacement_events)
     expect(book.current.bids).to be_empty
     expect(book.current.best_ask.price).to eq(10)
+    expect(book.top_of_book.best_ask.price).to eq(10)
     client.shutdown
+    expect(book.top_of_book).to be_nil
     expect(book.current).to be_nil
   end
 
