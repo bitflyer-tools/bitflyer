@@ -14,6 +14,8 @@ describe 'Realtime ready notifications' do
     allow_any_instance_of(Bitflyer::Realtime::WebSocketClient).to receive(:start_monitoring)
   end
 
+  after { @client&.shutdown }
+
   def stub_connection(socket)
     allow(socket).to receive(:on) { |event, &handler| handlers[event] = handler }
     allow(socket).to receive(:connect) { handlers.fetch(:open).call }
@@ -24,14 +26,15 @@ describe 'Realtime ready notifications' do
   end
 
   it 'notifies a callback registered before setup once' do
-    client = Bitflyer.realtime_client
+    client = @client = Bitflyer.realtime_client
     client.ready = callback
 
     expect(notifications.size).to eq(0)
     receive_message('0{}')
     receive_message('0{}')
 
-    expect(notifications.size).to eq(1)
+    expect(notifications.pop(timeout: 5)).to eq(:ready)
+    expect(notifications).to be_empty
   end
 
   it 'notifies a callback registered after setup during construction once' do
@@ -40,15 +43,16 @@ describe 'Realtime ready notifications' do
       receive_message('0{}')
     end
 
-    client = Bitflyer.realtime_client
-    client.ready = callback
+    client = @client = Bitflyer.realtime_client
+    client.ready = -> { notifications << Thread.current }
     client.ready = callback
 
-    expect(notifications.size).to eq(1)
+    expect(notifications.pop(true)).to eq(Thread.current)
+    expect(notifications).to be_empty
   end
 
   it 'notifies once when setup and registration run concurrently and again after reconnect' do
-    client = Bitflyer.realtime_client
+    client = @client = Bitflyer.realtime_client
     start = Queue.new
     workers = [
       Thread.new { start.pop; receive_message('0{}') },
@@ -57,11 +61,11 @@ describe 'Realtime ready notifications' do
 
     workers.each { start << true }
     workers.each(&:value)
-    expect(notifications.size).to eq(1)
+    expect(notifications.pop(timeout: 5)).to eq(:ready)
 
     handlers.fetch(:close).call(nil)
     client.ready = callback
-    expect(notifications.size).to eq(1)
+    expect(notifications).to be_empty
 
     replacement = instance_double(Bitflyer::Realtime::Transport, closed?: false, close_for_shutdown: nil)
     stub_connection(replacement)
@@ -70,11 +74,12 @@ describe 'Realtime ready notifications' do
     client.websocket_client.reconnect
     receive_message('0{}')
 
-    expect(notifications.size).to eq(2)
+    expect(notifications.pop(timeout: 5)).to eq(:ready)
+    expect(notifications).to be_empty
   end
 
   it 'discards a pending notification on shutdown' do
-    client = Bitflyer.realtime_client
+    client = @client = Bitflyer.realtime_client
     receive_message('0{}')
 
     client.shutdown
@@ -85,14 +90,14 @@ describe 'Realtime ready notifications' do
 
   it 'waits for successful authentication before notifying' do
     allow(transport).to receive(:send)
-    client = Bitflyer.realtime_client('key', 'secret')
+    client = @client = Bitflyer.realtime_client('key', 'secret')
     receive_message('0{}')
     client.ready = callback
 
     expect(notifications.size).to eq(0)
     receive_message('430[null]')
 
-    expect(notifications.size).to eq(1)
+    expect(notifications.pop(timeout: 5)).to eq(:ready)
   end
 
   [nil, Errno::ECONNRESET.new].each do |error|
@@ -101,7 +106,7 @@ describe 'Realtime ready notifications' do
       stub_connection(replacement)
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(transport, replacement)
       allow(transport).to receive(:reconnectable?).and_return(true)
-      client = Bitflyer.realtime_client
+      client = @client = Bitflyer.realtime_client
       disconnected = []
       client.disconnected = ->(reason) { disconnected << reason }
       stale_handler = handlers.fetch(:close)
