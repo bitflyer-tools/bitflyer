@@ -377,11 +377,33 @@ describe Bitflyer::HTTP::Private::Client do
       )
     end
 
+    it 'signs the collateral history query and returns the parsed records' do
+      path = '/v1/me/getcollateralhistory?count=10&before=100&after=50'
+      records = [
+        { 'id' => 75, 'currency_code' => 'JPY', 'change' => -6, 'amount' => 994,
+          'reason_code' => 'CLEARING_COLL', 'date' => '2024-04-15T02:37:41.327' }
+      ]
+      allow(response).to receive(:body).and_return(JSON.generate(records))
+      expect(http).to receive(:request) do |request|
+        expect(request).to be_an_instance_of(Net::HTTP::Get)
+        expect(request.path).to eq(path)
+        expect(request['ACCESS-KEY']).to eq('test_key')
+        timestamp = request['ACCESS-TIMESTAMP']
+        expect(timestamp).to match(/\A\d+\z/)
+        signature = OpenSSL::HMAC.hexdigest('SHA256', 'test_secret', "#{timestamp}GET#{path}")
+        expect(request['ACCESS-SIGN']).to eq(signature)
+        response
+      end
+
+      expect(client.collateral_history(count: 10, before: 100, after: 50)).to eq(records)
+    end
+
     {
       coin_ins: '/v1/me/getcoinins',
       coin_outs: '/v1/me/getcoinouts',
       deposits: '/v1/me/getdeposits',
-      withdrawals: '/v1/me/getwithdrawals'
+      withdrawals: '/v1/me/getwithdrawals',
+      collateral_history: '/v1/me/getcollateralhistory'
     }.each do |method, path|
       describe "##{method}" do
         it 'requests the default page without a query string' do
