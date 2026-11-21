@@ -105,6 +105,25 @@ Pass `from` and `to` as UTC timestamp strings. Both bounds are optional and appl
 When you supply `from`, the API selects the oldest matching records up to `count` and
 returns them newest first.
 
+#### Crypto CFD margin change history
+
+Use the private HTTP client to fetch one page of margin changes. The optional `count`
+sets the page size, and `before` and `after` set exclusive bounds on record IDs.
+
+```ruby
+require 'bitflyer'
+
+private_client = Bitflyer.http_private_client('YOUR_API_KEY', 'YOUR_API_SECRET')
+history = private_client.collateral_history(count: 10)
+history.each do |record|
+  p record.values_at('date', 'currency_code', 'change', 'amount', 'reason_code')
+end
+```
+
+Each record includes the margin change in `change`, the resulting balance in `amount`,
+and the reason code and timestamp as returned by bitFlyer.
+See the [margin change history API documentation](https://lightning.bitflyer.com/docs?lang=en#get-margin-change-history).
+
 #### Stream execution history
 
 `each_execution` on either HTTP client fetches pages on demand and yields one execution at a time
