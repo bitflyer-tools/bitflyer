@@ -4,6 +4,15 @@ module Bitflyer
   module HTTP
     module Private
       class Client # rubocop:disable Metrics/ClassLength
+        PARENT_ORDER_REQUIRED_FIELDS = %w[product_code condition_type side size].freeze
+        PARENT_ORDER_CONDITION_FIELDS = {
+          'LIMIT' => %w[price].freeze,
+          'STOP' => %w[trigger_price].freeze,
+          'STOP_LIMIT' => %w[price trigger_price].freeze,
+          'TRAIL' => %w[offset].freeze
+        }.freeze
+        private_constant :PARENT_ORDER_REQUIRED_FIELDS, :PARENT_ORDER_CONDITION_FIELDS
+
         def initialize(key, secret)
           @connection = Connection.new(key, secret)
         end
@@ -110,7 +119,7 @@ module Bitflyer
             parameters: parameters
           }.delete_if { |_, v| v.nil? }
           validate_order_numbers(body)
-          parameters.each { |condition| validate_order_numbers(condition) if condition.is_a?(Hash) }
+          parameters.each { |condition| validate_parent_order_condition(condition) }
           @connection.post('/v1/me/sendparentorder', body).body
         end
 
@@ -233,6 +242,18 @@ module Bitflyer
           return supplied if supplied.size == 1
 
           raise ArgumentError, "Provide exactly one of #{identifiers.keys.join(' or ')}"
+        end
+
+        def validate_parent_order_condition(condition)
+          raise ArgumentError, 'each parent order condition must be a hash' unless condition.is_a?(Hash)
+
+          fields = condition.transform_keys(&:to_s)
+          condition_type = fields['condition_type'].to_s
+          required = PARENT_ORDER_REQUIRED_FIELDS + PARENT_ORDER_CONDITION_FIELDS.fetch(condition_type, [])
+          required.each do |field|
+            raise ArgumentError, "#{field} is required in a parent order condition" if fields.fetch(field, nil).nil?
+          end
+          validate_order_numbers(condition)
         end
 
         def validate_order_numbers(fields)
