@@ -64,7 +64,12 @@ module Bitflyer
 
       # @api private
       def update(message)
-        @lock.synchronize { merge(message) if @ready }
+        @lock.synchronize do
+          merge(message) if @ready
+        rescue StandardError
+          reset
+          raise
+        end
       end
 
       # @api private

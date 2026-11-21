@@ -67,6 +67,34 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     expect(book.current.spread).to be_nil
   end
 
+  it 'invalidates after a malformed delta and waits for a valid snapshot' do
+    book
+    frame('0{}')
+    frame('431[null]')
+    board(snapshot, bids: [[100, 1]], asks: [[110, 1]])
+    expect(book).to be_ready
+
+    malformed = { bids: [{ price: 105, size: 1 }], asks: [{}] }
+    expect { frame("42#{[delta, malformed].to_json}") }.to output(/key not found: "price"/).to_stdout
+    expect(book).not_to be_ready
+    expect(book.current).to be_nil
+
+    board(delta, bids: [[106, 1]])
+    expect(book).not_to be_ready
+    expect(book.current).to be_nil
+
+    expect { frame("42#{[snapshot, malformed].to_json}") }.to output(/key not found: "price"/).to_stdout
+    expect(book.current).to be_nil
+
+    board(snapshot, bids: [[101, 1]], asks: [[111, 1]])
+    expect(book).to be_ready
+    expect(book.current.bids.map(&:price)).to eq([101])
+    expect(book.current.asks.map(&:price)).to eq([111])
+
+    board(delta, bids: [[102, 2]])
+    expect(book.current.best_bid.price).to eq(102)
+  end
+
   it 'invalidates before notifying disconnect and waits for a new snapshot on the replacement connection' do
     book
     frame('0{}')

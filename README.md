@@ -162,8 +162,9 @@ end
 
 `book.ready?` reports whether the book has received a snapshot after the server acknowledged
 the delta subscription on the current connection.
-`book.current` returns `nil` before the first snapshot, after a disconnect until a fresh
-snapshot arrives, and after shutdown. Each view contains frozen `bids` (highest price first)
+`book.current` returns `nil` before the first snapshot, after shutdown, and while waiting
+for a fresh snapshot after a disconnect or a delta that fails to apply. The book ignores
+deltas while waiting for a fresh snapshot. Each view contains frozen `bids` (highest price first)
 and `asks` (lowest price first), with `price` and `size` on each level. Views already read
 stay unchanged as new messages arrive. `best_bid` and `best_ask` return the first level on
 their side, and `spread` is the best ask price minus the best bid price when both exist.
