@@ -203,10 +203,10 @@ module Bitflyer
           after: nil,
           child_order_id: nil,
           child_order_acceptance_id: nil,
-          max_pages: ExecutionHistory::DEFAULT_MAX_PAGES,
+          max_pages: IdPagination::DEFAULT_MAX_PAGES,
           &block
         )
-          stream = ExecutionHistory.stream(before, max_pages) do |cursor|
+          stream = IdPagination.stream(before, max_pages) do |cursor|
             executions(
               product_code: product_code, count: count, before: cursor, after: after,
               child_order_id: child_order_id, child_order_acceptance_id: child_order_acceptance_id
@@ -226,6 +226,19 @@ module Bitflyer
             after: after
           }.delete_if { |_, v| v.nil? }
           @connection.get('/v1/me/getbalancehistory', query).body
+        end
+
+        def each_balance_history(
+          currency_code: nil, count: nil, before: nil, after: nil, max_pages: IdPagination::DEFAULT_MAX_PAGES,
+          &block
+        )
+          stream = IdPagination.stream(before, max_pages) do |cursor|
+            balance_history(currency_code: currency_code, count: count, before: cursor, after: after)
+          end
+          return stream unless block
+
+          stream.each(&block)
+          nil
         end
 
         def positions(product_code: 'FX_BTC_JPY')

@@ -14,7 +14,7 @@ module Bitflyer
 
     Response = Struct.new(:body)
 
-    module ExecutionHistory
+    module IdPagination
       DEFAULT_MAX_PAGES = 10
 
       def self.stream(before, max_pages)
@@ -26,10 +26,10 @@ module Bitflyer
             page = yield(cursor)
             break if page.empty?
 
-            next_cursor = page.map { |execution| execution.fetch('id') }.min
+            next_cursor = page.map { |entry| entry.fetch('id') }.min
             break if cursor && next_cursor >= cursor
 
-            page.each { |execution| yielder << execution }
+            page.each { |entry| yielder << entry }
             cursor = next_cursor
           end
         end
@@ -42,7 +42,7 @@ module Bitflyer
       end
       private_class_method :validate_page_budget
     end
-    private_constant :ExecutionHistory
+    private_constant :IdPagination
 
     class ResponseError < StandardError
       attr_reader :status, :body

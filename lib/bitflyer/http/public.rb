@@ -48,10 +48,10 @@ module Bitflyer
         end
 
         def each_execution(
-          product_code: 'BTC_JPY', count: nil, before: nil, after: nil, max_pages: ExecutionHistory::DEFAULT_MAX_PAGES,
+          product_code: 'BTC_JPY', count: nil, before: nil, after: nil, max_pages: IdPagination::DEFAULT_MAX_PAGES,
           &block
         )
-          stream = ExecutionHistory.stream(before, max_pages) do |cursor|
+          stream = IdPagination.stream(before, max_pages) do |cursor|
             executions(product_code: product_code, count: count, before: cursor, after: after)
           end
           return stream unless block

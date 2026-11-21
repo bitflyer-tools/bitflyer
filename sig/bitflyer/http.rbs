@@ -3,7 +3,7 @@ module Bitflyer
     BASE_URL: String
     MAX_RESPONSE_BODY_BYTES: Integer
 
-    module ExecutionHistory
+    module IdPagination
       DEFAULT_MAX_PAGES: Integer
 
       def self.stream: (Integer? before, Integer max_pages) { (Integer?) -> untyped } -> Enumerator[untyped, untyped]
