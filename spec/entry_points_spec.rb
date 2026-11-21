@@ -18,7 +18,7 @@ describe 'Bitflyer entry points' do
       Bitflyer::HTTP::Public::Client.new
       Bitflyer::HTTP::Private::Client.new('key', 'secret')
       abort 'Loaded the realtime client' if defined?(Bitflyer::Realtime)
-      abort 'Loaded the WebSocket transport' if defined?(WebSocket::Client::Simple)
+      abort 'Loaded the WebSocket transport' if defined?(WebSocket::Driver)
     RUBY
   end
 

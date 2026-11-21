@@ -50,6 +50,11 @@ if neither identifier or both identifiers are non-nil.
 `send_child_order` requires `child_order_type`, `side`, and `size`. A `LIMIT` order also requires
 `price`. Missing or nil required values raise `ArgumentError` before an HTTP request is made.
 
+`send_parent_order` takes an array of condition hashes with symbol or string keys. Each condition
+requires `product_code`, `condition_type`, `side`, and `size`. `LIMIT` and `STOP_LIMIT` require
+`price`, `STOP` and `STOP_LIMIT` require `trigger_price`, and `TRAIL` requires `offset`.
+Missing or nil required values raise `ArgumentError` before an HTTP request is made.
+
 Order quantities and prices accept integers and finite floats. This also applies to the trigger price
 in parent order conditions. Pass expiration minutes and trailing offsets as integers. The client
 raises `ArgumentError` before sending an order with an unsupported value such as a `BigDecimal`.
@@ -180,6 +185,8 @@ If a WebSocket write detects a connection reset, the client reports the reset to
 
 Each realtime connection attempt has a 10-second deadline for TCP and TLS establishment. If that deadline expires, the client closes the connection and retries automatically.
 
+The client closes and retries a connection if the Socket.IO setup packet or the authentication response takes 10 seconds to arrive. Each step has its own deadline, independent of heartbeat activity.
+
 A `StandardError` raised by `disconnected` is reported to standard error. Automatic reconnection continues when enabled.
 
 If the server rejects authentication, the client closes the connection and passes a `RuntimeError` with the server response to `disconnected`. Authentication rejection stops automatic reconnection.
@@ -220,9 +227,11 @@ client.executions_btc_jpy = ->(json){ p json }
 To update a watchlist on the same connection, pass the full Socket.IO channel name
 to `subscribe` and `unsubscribe`. A second callback for the same channel replaces the
 previous callback. Unsubscribing discards pending events for that subscription and
-removes the channel from the subscriptions restored on reconnect. Server rejections of runtime subscriptions
-also reach `subscription_failed`.
-Call `subscribe` again to retry a rejected channel on the same connection.
+removes the channel from the subscriptions restored on reconnect. For runtime
+subscriptions, `subscription_failed` reports server rejections and acknowledgment
+timeouts. If an acknowledgment is still pending after 10 seconds, the next
+connection check reports the timeout. Other subscriptions stay active.
+Call `subscribe` again to retry a failed channel on the same connection.
 An acknowledged or pending subscription is reused when its callback changes.
 
 ```ruby

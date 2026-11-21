@@ -28,6 +28,7 @@ module Bitflyer
 
     class WebSocketClient
       CONNECTION_TIMEOUT: Integer
+      SESSION_RESPONSE_TIMEOUT_MS: Integer
       CALLBACK_QUEUE_LIMIT: Integer
       SUBSCRIPTION_ACK_TIMEOUT_MS: Integer
       RECONNECT_BASE_DELAY: Float
@@ -39,6 +40,7 @@ module Bitflyer
       @connection: [Transport, Thread]?
       @subscription_ack_deadline: Integer?
       @shutdown_lock: Mutex
+      @session_deadline: [Integer, :setup | :authentication] | :expired | :established | nil
       @subscription_frames: Array[[Transport?, String]]
       @subscription_writer: Mutex
 
@@ -58,7 +60,7 @@ module Bitflyer
 
       def retry_pending?: () -> bool
 
-      def queue_subscription: (Symbol) -> void
+      def queue_subscription: (Symbol, ?setup: bool) -> void
 
       def queue_subscription_frame: (String) -> void
 
@@ -71,7 +73,25 @@ module Bitflyer
 
       def close_expired_subscriptions: () -> void
 
+      def expire_runtime_subscriptions: (Transport socket) -> void
+
+      def notify_subscription_timeout: (Symbol channel) -> void
+
       def close_connections: () -> void
+
+      def accept_authentication_response: (Transport? socket) -> bool
+
+      def apply_setup: (untyped body, Transport? socket) -> bool
+
+      def awaiting_setup?: ([Integer, :setup | :authentication] | :expired | :established | nil) -> bool
+
+      def authentication_deadline: () -> [Integer, :authentication]?
+
+      def initialize_heartbeat: (untyped body) -> void
+
+      def session_expired?: (Transport socket) -> bool
+
+      def session_deadline_elapsed?: ([Integer, :setup | :authentication] deadline) -> bool
 
       def stop_lifecycle: () -> [Transport?, [Transport, Thread]?]
 

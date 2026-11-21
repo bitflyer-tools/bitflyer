@@ -3,7 +3,7 @@
 require 'spec_helper'
 
 RSpec.describe Bitflyer::Realtime::OrderBook do
-  let(:transport) { instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false, close_for_shutdown: nil) }
+  let(:transport) { instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false, reconnectable?: false, close_for_shutdown: nil) }
   let(:events) { {} }
   let(:client) { Bitflyer.realtime_client }
   let(:book) { client.order_book(product_code: 'BTC_JPY') }
