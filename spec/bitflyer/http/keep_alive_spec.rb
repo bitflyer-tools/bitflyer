@@ -3,6 +3,8 @@
 require 'spec_helper'
 require 'socket'
 require 'timeout'
+require 'stringio'
+require 'zlib'
 
 describe 'HTTPS connection reuse' do
   let(:client) { Bitflyer.http_public_client }
@@ -72,6 +74,45 @@ describe 'HTTPS connection reuse' do
     server_result
   end
 
+  context 'with a response body limit' do
+    let(:limit) { 32 * 1024 }
+
+    before { stub_const('Bitflyer::HTTP::MAX_RESPONSE_BODY_BYTES', limit) }
+
+    ['200 OK', '503 Service Unavailable'].product(%i[chunked gzip]).each do |status, encoding|
+      it "rejects an unfinished #{encoding} response with status #{status} and reconnects" do
+        serve do
+          disconnected = with_socket do |socket|
+            read_request(socket)
+            socket.write(oversized_response_prefix(status, encoding))
+            socket.gets
+          end
+          with_socket { |socket| respond(socket) }
+          disconnected
+        end
+
+        expect { client.ticker }.to raise_error(Bitflyer::HTTP::ResponseTooLargeError)
+        expect(client.ticker).to eq('status' => 'ok')
+        expect(server_result).to be_nil
+      end
+    end
+
+    it 'returns a decoded text response exactly at the byte limit' do
+      body = ("é" * (limit / 2)).b
+      compressed = Zlib.gzip(body)
+      serve do
+        with_socket do |socket|
+          read_request(socket)
+          socket.write("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: #{compressed.bytesize}\r\n\r\n")
+          socket.write(compressed)
+        end
+      end
+
+      expect(client.health).to eq(body)
+      server_result
+    end
+  end
+
   context 'with a private client' do
     let(:client) { Bitflyer.http_private_client('key', 'secret') }
 
@@ -112,6 +153,22 @@ describe 'HTTPS connection reuse' do
   def serve(&block)
     server
     @server_thread = Thread.new(&block)
+  end
+
+  def oversized_response_prefix(status, encoding)
+    body = 'a' * (limit * 2)
+    headers = "HTTP/1.1 #{status}\r\n"
+    if encoding == :chunked
+      return "#{headers}Transfer-Encoding: chunked\r\n\r\n#{(body.bytesize * 2).to_s(16)}\r\n#{body}"
+    end
+
+    buffer = StringIO.new
+    prefix = Zlib::GzipWriter.wrap(buffer) do |gzip|
+      gzip.write(body)
+      gzip.flush(Zlib::SYNC_FLUSH)
+      buffer.string.dup
+    end
+    "#{headers}Content-Encoding: gzip\r\nContent-Length: #{buffer.string.bytesize}\r\n\r\n#{prefix}"
   end
 
   def server_result

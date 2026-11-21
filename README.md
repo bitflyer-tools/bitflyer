@@ -43,6 +43,10 @@ If the response has no body, the client returns `nil`.
 HTTP responses outside the 2xx range raise `Bitflyer::HTTP::ResponseError`. The error provides
 the numeric HTTP status in `status` and the raw response body in `body`.
 
+Each HTTP response body is limited to 10 MiB (10,485,760 bytes) after automatic decompression.
+Exceeding this limit raises `Bitflyer::HTTP::ResponseTooLargeError` for any HTTP status and closes
+the connection. The next request opens a new connection.
+
 `cancel_child_order`, `cancel_parent_order`, and `parent_order` require exactly one
 order ID or order acceptance ID. They raise `ArgumentError` before sending a request
 if neither identifier or both identifiers are non-nil.

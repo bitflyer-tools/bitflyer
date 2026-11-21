@@ -10,6 +10,7 @@ require 'openssl'
 module Bitflyer
   module HTTP
     BASE_URL = 'https://api.bitflyer.jp'
+    MAX_RESPONSE_BODY_BYTES = 10 * 1024 * 1024
 
     Response = Struct.new(:body)
 
@@ -50,6 +51,12 @@ module Bitflyer
         @status = status
         @body = body
         super("bitFlyer API returned HTTP #{status}")
+      end
+    end
+
+    class ResponseTooLargeError < StandardError
+      def initialize
+        super("bitFlyer API response body exceeds #{MAX_RESPONSE_BODY_BYTES} bytes")
       end
     end
 
@@ -113,11 +120,27 @@ module Bitflyer
       def send_request(request)
         http = (@http ||= Net::HTTP.start(@uri.host.to_s, @uri.port, use_ssl: true, keep_alive_timeout: 10))
         sign_request(request, request.path, request.body)
-        # Net::HTTP reconnects idle sockets and only retries idempotent requests.
-        http.request(request)
+        http.request(request) { |response| response.body = read_response_body(response) }
       rescue StandardError
         close_session
         raise
+      end
+
+      def read_response_body(response)
+        body = +''
+        oversized = false
+        result = response.read_body do |chunk|
+          if body.bytesize + chunk.bytesize > MAX_RESPONSE_BODY_BYTES
+            oversized = true
+            close_session
+            break
+          end
+          body << chunk
+        end
+        body unless result.nil?
+      ensure
+        # Net::HTTP may try to read the chunk terminator while unwinding.
+        raise ResponseTooLargeError if oversized
       end
 
       def close_session
