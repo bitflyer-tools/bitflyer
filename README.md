@@ -197,7 +197,8 @@ Concurrent calls wait for the connection to close.
 Subscription callbacks run serially in receive order on a separate thread, so a slow callback
 does not block heartbeat processing. Each client queues up to 1,024 pending events in addition
 to the event being delivered. When the queue is full, new events are dropped.
-Shutdown discards pending events and allows any callback already running to finish.
+Disconnecting or shutting down discards pending events from that connection and allows any
+callback already running to finish.
 
 The realtime client's `websocket_client` reference and the WebSocket client's transport reference
 (`websocket_client`) are read-only. The realtime lifecycle manages connection replacement.

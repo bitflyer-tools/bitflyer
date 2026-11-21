@@ -35,7 +35,8 @@ module Bitflyer
       RECONNECT_MAX_DELAY: Float
 
       @subscription_tokens: Hash[Symbol, Object]
-      @callback_queue: Array[[Symbol, Object?, untyped]]
+      @callback_queue: Array[[Symbol, Object?, untyped, Transport?]]
+      @callback_transport: Transport?
       @callback_wakeup: Thread::ConditionVariable
       @callback_worker: Thread?
       @connection: [Transport, Thread]?
@@ -49,13 +50,15 @@ module Bitflyer
 
       def initialize_callbacks: () -> void
 
-      def enqueue_callback: (Symbol channel, Object? token, untyped message) -> void
+      def enqueue_callback: (Symbol channel, Object? token, untyped message, Transport? socket) -> void
 
       def deliver_callbacks: () -> void
 
-      def next_callback_event: () -> [Symbol, Object?, untyped]?
+      def next_callback_event: () -> [Symbol, Object?, untyped, Transport?]?
 
-      def deliver_callback: (Symbol channel, Object? token, untyped message) -> void
+      def deliver_callback: (Symbol channel, Object? token, untyped message, Transport? socket) -> void
+
+      def active_callback_transport?: (Transport? socket) -> bool
 
       def subscribed_callback: (Symbol channel, Object? token) -> (^(untyped) -> void)?
 

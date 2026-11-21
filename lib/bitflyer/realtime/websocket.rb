@@ -103,7 +103,7 @@ module Bitflyer
 
             @channel_callbacks.delete(channel_name)
             @subscription_tokens.delete(channel_name)
-            @callback_queue.delete_if { |channel, _token, _message| channel == channel_name }
+            @callback_queue.delete_if { |channel,| channel == channel_name }
             return if @board_feeds.key?(channel_name)
 
             @channel_names -= [channel_name]
@@ -315,7 +315,7 @@ module Bitflyer
         debug_log "Received event on #{channel_name}"
         channel = channel_name.to_sym
         route_messages(channel, messages, socket) do |token|
-          messages.each { |message| enqueue_callback(channel, token, message) }
+          messages.each { |message| enqueue_callback(channel, token, message, socket) }
         end
       end
 
@@ -330,18 +330,19 @@ module Bitflyer
       def initialize_callbacks
         @subscription_tokens = {}
         @callback_queue = []
+        @callback_transport = nil
         @callback_wakeup = ConditionVariable.new
         @callback_worker = nil
       end
 
-      def enqueue_callback(channel, token, message)
+      def enqueue_callback(channel, token, message, socket)
         @lifecycle_lock.synchronize do
-          return if lifecycle_inactive?
+          return unless active_callback_transport?(socket)
           return if @callback_queue.size >= CALLBACK_QUEUE_LIMIT
           return unless subscribed_callback(channel, token)
 
           @callback_worker ||= Thread.new { deliver_callbacks }
-          @callback_queue << [channel, token, message]
+          @callback_queue << [channel, token, message, socket]
           @callback_wakeup.signal
         end
       end
@@ -359,14 +360,18 @@ module Bitflyer
         end
       end
 
-      def deliver_callback(channel, token, message)
+      def deliver_callback(channel, token, message, socket)
         callback = @lifecycle_lock.synchronize do
-          subscribed_callback(channel, token) unless lifecycle_inactive?
+          subscribed_callback(channel, token) if active_callback_transport?(socket)
         end
         callback&.call(message)
       rescue StandardError => e
         puts e
         puts e.backtrace&.join("\n")
+      end
+
+      def active_callback_transport?(socket)
+        !lifecycle_inactive? && !socket.nil? && @callback_transport.equal?(socket) && !socket.closed?
       end
 
       def subscribed_callback(channel, token)
@@ -545,6 +550,8 @@ module Bitflyer
         self.last_ping_at = self.last_pong_at = nil
         @session_mutex.synchronize do
           @websocket_client = transport
+          @callback_transport = transport
+          @callback_queue.clear
           clear_readiness
         end
       end
@@ -752,6 +759,8 @@ module Bitflyer
         @session_mutex.synchronize do
           return false unless @websocket_client.equal?(socket)
 
+          @callback_transport = nil
+          @callback_queue.clear
           clear_readiness
           true
         end

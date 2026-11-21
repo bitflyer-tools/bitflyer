@@ -1025,6 +1025,84 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     expect(ready).to have_received(:call).twice
   end
 
+  it 'discards a full queue of deltas on disconnect and delivers replacement deltas in order' do
+    client = realtime_client
+    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false, close_for_shutdown: nil)
+    next_handlers = {}
+    stub_transport(next_transport, next_handlers)
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(next_transport)
+    started = Queue.new
+    resume = Queue.new
+    events = Queue.new
+    client.ready = -> { events << 'ready' }
+    client.board_btc_jpy = lambda do |delta|
+      if delta == 'running'
+        started << true
+        resume.pop
+      end
+      events << delta
+    end
+    receive_frame('0{}')
+    receive_frame('431[null]')
+    expect(events.pop(timeout: 5)).to eq('ready')
+    receive_frame('42["lightning_board_BTC_JPY","running"]')
+    expect(started.pop(timeout: 5)).to be(true)
+    receive_frame("42#{JSON.generate(['lightning_board_BTC_JPY', *Array.new(1_024, 'stale')])}")
+
+    handlers.fetch(:close).call(nil)
+    allow(transport).to receive(:reconnectable?).and_return(true)
+    client.websocket_client.reconnect
+    receive_frame('0{}', next_handlers)
+    receive_frame('431[null]', next_handlers)
+    receive_frame('42["lightning_board_BTC_JPY","first","second"]', next_handlers)
+    resume << true
+
+    expect(Array.new(4) { events.pop(timeout: 5) }).to eq(%w[ready running first second])
+  ensure
+    resume&.close
+    client&.shutdown
+  end
+
+  it 'rejects deltas routed before close but enqueued after close or replacement' do
+    client = realtime_client
+    websocket = client.websocket_client
+    next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false, close_for_shutdown: nil)
+    next_handlers = {}
+    stub_transport(next_transport, next_handlers)
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(next_transport)
+    events = Queue.new
+    resume = Queue.new
+    allow(websocket).to receive(:deliver_callbacks).and_wrap_original do |deliver|
+      resume.pop
+      deliver.call
+    end
+    client.board_btc_jpy = ->(delta) { events << delta }
+    receive_frame('0{}')
+    receive_frame('431[null]')
+    allow(websocket).to receive(:route_messages).and_wrap_original do |route, channel, messages, socket, &enqueue|
+      route.call(channel, messages, socket) do |token|
+        if socket.equal?(transport)
+          handlers.fetch(:close).call(nil)
+          enqueue.call(token)
+          allow(transport).to receive(:reconnectable?).and_return(true)
+          websocket.reconnect
+        end
+        enqueue.call(token)
+      end
+    end
+
+    receive_frame("42#{JSON.generate(['lightning_board_BTC_JPY', *Array.new(1_024, 'stale')])}")
+    receive_frame('0{}', next_handlers)
+    receive_frame('431[null]', next_handlers)
+    receive_frame('42["lightning_board_BTC_JPY","fresh"]', next_handlers)
+    resume << true
+
+    expect(events.pop(timeout: 5)).to eq('fresh')
+  ensure
+    resume&.close
+    client&.shutdown
+  end
+
   it 'ignores an acknowledgment that was being read when the socket was replaced' do
     client = realtime_client
     client.ticker_btc_jpy = ->(_message) {}
@@ -1263,7 +1341,7 @@ describe Bitflyer::Realtime::WebSocketClient, 'debug logging' do
   subject(:client) { described_class.new(host: 'wss://example.test', key: 'key', secret: 'secret', debug: true) }
 
   let(:socket) do
-    instance_double(Bitflyer::Realtime::Transport, on: nil, connect: nil, close_for_shutdown: nil)
+    instance_double(Bitflyer::Realtime::Transport, on: nil, connect: nil, closed?: false, close_for_shutdown: nil)
   end
 
   before do
