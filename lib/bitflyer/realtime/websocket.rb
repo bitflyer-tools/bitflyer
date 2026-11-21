@@ -107,7 +107,7 @@ module Bitflyer
             return if @board_feeds.key?(channel_name)
 
             @channel_names -= [channel_name]
-            @pending_subscriptions.delete_if { |_id, channel| channel == channel_name }
+            @pending_subscriptions.delete_if { |_id, (channel, _deadline)| channel == channel_name }
             @acknowledged_subscriptions.delete(channel_name)
             queue_subscription_frame("42#{['unsubscribe', channel_name].to_json}") if @session_ready
             @websocket_client
@@ -197,7 +197,7 @@ module Bitflyer
         case prefix[0]
         when '0' then setup_by_response(json: prefix.post_match, socket: socket)
         when '3' then receive_pong
-        when '41' then disconnect
+        when '41' then disconnect(socket: socket)
         when '42' then emit_message(json: prefix.post_match, socket: socket)
         when '430' then authenticated(json: prefix.post_match, socket: socket)
         when /\A43[1-9]\d*\z/
@@ -269,7 +269,7 @@ module Bitflyer
           return if !@websocket_client.equal?(socket) || @session_ready
 
           @session_ready = true
-          (@board_feeds.keys | @channel_callbacks.keys).each { |channel| queue_subscription(channel) }
+          (@board_feeds.keys | @channel_callbacks.keys).each { |channel| queue_subscription(channel, setup: true) }
           @last_setup_subscription_id = @next_subscription_id
           unless @pending_subscriptions.empty?
             @subscription_ack_deadline = monotonic_milliseconds + SUBSCRIPTION_ACK_TIMEOUT_MS
@@ -283,9 +283,10 @@ module Bitflyer
         channel, error = @session_mutex.synchronize do
           return unless @websocket_client.equal?(socket)
 
-          channel = @pending_subscriptions[id]
-          return unless channel
+          pending = @pending_subscriptions[id]
+          return unless pending
 
+          channel = pending.first
           error = JSON.parse(json).first
           @pending_subscriptions.delete(id)
           record_subscription_result(id, channel, error)
@@ -422,12 +423,14 @@ module Bitflyer
         messages.each { |message| handler.call(message) }
       end
 
-      def queue_subscription(channel)
+      def queue_subscription(channel, setup: false)
         return unless @session_ready
-        return if @acknowledged_subscriptions.key?(channel) || @pending_subscriptions.value?(channel)
+        return if @acknowledged_subscriptions.key?(channel)
+        return if @pending_subscriptions.each_value.any? { |pending| pending.first == channel }
 
         @next_subscription_id += 1
-        @pending_subscriptions[@next_subscription_id] = channel
+        deadline = monotonic_milliseconds + SUBSCRIPTION_ACK_TIMEOUT_MS unless setup
+        @pending_subscriptions[@next_subscription_id] = [channel, deadline]
         queue_subscription_frame("42#{@next_subscription_id}#{['subscribe', channel].to_json}")
       end
 
@@ -650,6 +653,25 @@ module Bitflyer
         socket&.close
       end
 
+      def expire_runtime_subscriptions(socket)
+        expired = @session_mutex.synchronize do
+          return unless @websocket_client.equal?(socket) && socket.open?
+
+          now = monotonic_milliseconds
+          pending = @pending_subscriptions.select { |_id, (_channel, deadline)| deadline && now >= deadline }
+          pending.each_key { |id| @pending_subscriptions.delete(id) }
+          pending
+        end
+        expired.each_value { |channel, _deadline| notify_subscription_timeout(channel) }
+      end
+
+      def notify_subscription_timeout(channel)
+        @subscription_failed&.call(channel, 'Timed out waiting for subscription acknowledgment')
+      rescue StandardError => e
+        puts e
+        puts e.backtrace&.join("\n")
+      end
+
       def wait_for_monitor_tick
         @lifecycle_lock.synchronize do
           return if lifecycle_inactive?
@@ -673,6 +695,7 @@ module Bitflyer
         send_ping
         wait_pong
         close_expired_subscriptions
+        expire_runtime_subscriptions(socket)
       end
 
       def advance_reconnect_delay

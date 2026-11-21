@@ -2,6 +2,9 @@ module Bitflyer
   module HTTP
     module Private
       class Client
+        PARENT_ORDER_REQUIRED_FIELDS: Array[String]
+        PARENT_ORDER_CONDITION_FIELDS: Hash[String, Array[String]]
+
         @connection: Connection
 
         def initialize: (String key, String secret) -> void
@@ -56,6 +59,9 @@ module Bitflyer
           child_order_acceptance_id: String
         ) -> untyped
 
+        # Each condition requires non-nil product_code, condition_type, side, and size.
+        # LIMIT and STOP_LIMIT require price, STOP and STOP_LIMIT require trigger_price,
+        # and TRAIL requires offset. Keys may be symbols or strings.
         # Condition sizes, prices, and trigger prices accept Integer or finite Float. Offsets accept Integer.
         def send_parent_order: (
           parameters: Array[Hash[Symbol, untyped] | Hash[String, untyped]],
@@ -136,6 +142,8 @@ module Bitflyer
         private
 
         def order_identifier: (**String?) -> Hash[Symbol, String]
+
+        def validate_parent_order_condition: (Hash[untyped, untyped] condition) -> void
 
         def validate_order_numbers: (Hash[untyped, untyped] fields) -> void
 

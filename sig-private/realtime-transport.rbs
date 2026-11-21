@@ -63,7 +63,7 @@ module Bitflyer
 
       def retry_pending?: () -> bool
 
-      def queue_subscription: (Symbol) -> void
+      def queue_subscription: (Symbol, ?setup: bool) -> void
 
       def queue_subscription_frame: (String) -> void
 
@@ -75,6 +75,10 @@ module Bitflyer
       def setup_subscriptions_pending?: () -> bool
 
       def close_expired_subscriptions: () -> void
+
+      def expire_runtime_subscriptions: (Transport socket) -> void
+
+      def notify_subscription_timeout: (Symbol channel) -> void
 
       def close_connections: () -> void
 

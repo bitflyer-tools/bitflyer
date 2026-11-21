@@ -914,6 +914,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     client = realtime_client
     client.ticker_btc_jpy = ->(_message) {}
     receive_frame('0{}')
+    now += 1_000
     client.subscribe('lightning_executions_BTC_JPY') { |_message| }
     receive_frame('431[null]')
 
@@ -924,6 +925,64 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 
     expect(ready).to have_received(:call).once
     expect(subscription_failed).to have_received(:call).with(:lightning_executions_BTC_JPY, 'rejected').once
+  end
+
+  context 'with runtime subscription deadlines' do
+    let(:client) { realtime_client }
+    let(:events) { Queue.new }
+
+    before do
+      @now = 100_000
+      allow(Process).to receive(:clock_gettime).and_call_original
+      allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond) { @now }
+      allow(transport).to receive(:open?).and_return(true)
+      allow(transport).to receive(:send).with('2') { receive_frame('3') }
+      client.executions_btc_jpy = ->(message) { events << message }
+      receive_frame('0{"pingInterval":1000,"pingTimeout":2000}')
+      receive_frame('431[null]')
+    end
+
+    after { client.shutdown }
+
+    def poll_after(milliseconds)
+      @now += milliseconds
+      client.websocket_client.send(:poll_transport)
+    end
+
+    it 'expires each missing acknowledgment on its own deadline while pongs and other events continue' do
+      client.subscribe('lightning_ticker_BTC_JPY') { |_message| }
+      5.times { poll_after(1_000) }
+      client.subscribe('lightning_ticker_SOL_JPY') { |_message| }
+      4.times { poll_after(1_000) }
+      expect(subscription_failed).not_to have_received(:call)
+
+      poll_after(1_000)
+      expect(subscription_failed).to have_received(:call)
+        .with(:lightning_ticker_BTC_JPY, 'Timed out waiting for subscription acknowledgment').once
+      expect(subscription_failed).to have_received(:call).once
+      receive_frame('432["late rejection"]')
+      receive_frame('42["lightning_executions_BTC_JPY",1]')
+      expect(events.pop(timeout: 5)).to eq(1)
+
+      5.times { poll_after(1_000) }
+      expect(subscription_failed).to have_received(:call)
+        .with(:lightning_ticker_SOL_JPY, 'Timed out waiting for subscription acknowledgment').once
+      expect(subscription_failed).to have_received(:call).twice
+      expect(transport).to have_received(:send).with('2').exactly(15).times
+      expect(ready).to have_received(:call).once
+    end
+
+    it 'clears deadlines for acknowledged and unsubscribed requests' do
+      client.subscribe('lightning_ticker_BTC_JPY') { |_message| }
+      client.subscribe('lightning_ticker_SOL_JPY') { |_message| }
+      receive_frame('432[null]')
+      receive_frame('432["duplicate rejection"]')
+      client.unsubscribe('lightning_ticker_SOL_JPY')
+      receive_frame('433["late rejection"]')
+
+      11.times { poll_after(1_000) }
+      expect(subscription_failed).not_to have_received(:call)
+    end
   end
 
   it 'sends subscription changes in order when a send is in progress' do
@@ -990,6 +1049,43 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 
     receive_frame('431[null]', next_handlers)
     expect(ready).to have_received(:call).once
+  end
+
+  it 'leaves the replacement open when reading a disconnect frame from the previous socket' do
+    websocket = realtime_client.websocket_client
+    replacement = instance_double(Bitflyer::Realtime::Transport, close: nil)
+    stub_transport(replacement, {})
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(replacement)
+    allow(transport).to receive(:close)
+
+    payload = double('buffered disconnect frame')
+    allow(payload).to receive(:data) do
+      allow(transport).to receive_messages(closed?: true, reconnectable?: true)
+      handlers.fetch(:close).call(nil)
+      websocket.reconnect
+      '41'
+    end
+    handlers.fetch(:message).call(payload)
+
+    expect(websocket.websocket_client).to equal(replacement)
+    expect(replacement).not_to have_received(:close)
+  end
+
+  it 'closes the active socket on a disconnect frame and reconnects' do
+    websocket = realtime_client.websocket_client
+    replacement = instance_double(Bitflyer::Realtime::Transport)
+    stub_transport(replacement, {})
+    allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(replacement)
+    allow(transport).to receive(:close) do
+      allow(transport).to receive_messages(closed?: true, reconnectable?: true)
+      handlers.fetch(:close).call(nil)
+    end
+
+    receive_frame('41')
+
+    expect(transport).to have_received(:close).once
+    websocket.reconnect
+    expect(websocket.websocket_client).to equal(replacement)
   end
 
   it 'becomes ready immediately when setup has no subscriptions' do
