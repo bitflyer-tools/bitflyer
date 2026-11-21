@@ -914,6 +914,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     client = realtime_client
     client.ticker_btc_jpy = ->(_message) {}
     receive_frame('0{}')
+    now += 1_000
     client.subscribe('lightning_executions_BTC_JPY') { |_message| }
     receive_frame('431[null]')
 
@@ -924,6 +925,64 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 
     expect(ready).to have_received(:call).once
     expect(subscription_failed).to have_received(:call).with(:lightning_executions_BTC_JPY, 'rejected').once
+  end
+
+  context 'with runtime subscription deadlines' do
+    let(:client) { realtime_client }
+    let(:events) { Queue.new }
+
+    before do
+      @now = 100_000
+      allow(Process).to receive(:clock_gettime).and_call_original
+      allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond) { @now }
+      allow(transport).to receive(:open?).and_return(true)
+      allow(transport).to receive(:send).with('2') { receive_frame('3') }
+      client.executions_btc_jpy = ->(message) { events << message }
+      receive_frame('0{"pingInterval":1000,"pingTimeout":2000}')
+      receive_frame('431[null]')
+    end
+
+    after { client.shutdown }
+
+    def poll_after(milliseconds)
+      @now += milliseconds
+      client.websocket_client.send(:poll_transport)
+    end
+
+    it 'expires each missing acknowledgment on its own deadline while pongs and other events continue' do
+      client.subscribe('lightning_ticker_BTC_JPY') { |_message| }
+      5.times { poll_after(1_000) }
+      client.subscribe('lightning_ticker_SOL_JPY') { |_message| }
+      4.times { poll_after(1_000) }
+      expect(subscription_failed).not_to have_received(:call)
+
+      poll_after(1_000)
+      expect(subscription_failed).to have_received(:call)
+        .with(:lightning_ticker_BTC_JPY, 'Timed out waiting for subscription acknowledgment').once
+      expect(subscription_failed).to have_received(:call).once
+      receive_frame('432["late rejection"]')
+      receive_frame('42["lightning_executions_BTC_JPY",1]')
+      expect(events.pop(timeout: 5)).to eq(1)
+
+      5.times { poll_after(1_000) }
+      expect(subscription_failed).to have_received(:call)
+        .with(:lightning_ticker_SOL_JPY, 'Timed out waiting for subscription acknowledgment').once
+      expect(subscription_failed).to have_received(:call).twice
+      expect(transport).to have_received(:send).with('2').exactly(15).times
+      expect(ready).to have_received(:call).once
+    end
+
+    it 'clears deadlines for acknowledged and unsubscribed requests' do
+      client.subscribe('lightning_ticker_BTC_JPY') { |_message| }
+      client.subscribe('lightning_ticker_SOL_JPY') { |_message| }
+      receive_frame('432[null]')
+      receive_frame('432["duplicate rejection"]')
+      client.unsubscribe('lightning_ticker_SOL_JPY')
+      receive_frame('433["late rejection"]')
+
+      11.times { poll_after(1_000) }
+      expect(subscription_failed).not_to have_received(:call)
+    end
   end
 
   it 'sends subscription changes in order when a send is in progress' do
