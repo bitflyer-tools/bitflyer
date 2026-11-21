@@ -21,6 +21,25 @@ task :validate_public_signatures do
     signatures = File.join(installed.full_gem_path, 'sig')
     sh 'rbs', '-I', signatures, '-r', 'uri', '-r', 'net-http', '-r', 'forwardable', '-r', 'openssl', 'validate'
     validate_websocket_subscription_signature(signatures)
+    validate_order_book_side_signatures(signatures)
+  end
+end
+
+def validate_order_book_side_signatures(signatures)
+  loader = RBS::EnvironmentLoader.new
+  %w[uri net-http forwardable openssl].each { |library| loader.add(library: library) }
+  loader.add(path: Pathname(signatures))
+  builder = RBS::DefinitionBuilder.new(env: RBS::Environment.from_loader(loader).resolve_type_names)
+  order_book = '::Bitflyer::Realtime::OrderBook'
+  view = builder.build_instance(RBS::TypeName.parse("#{order_book}::View"))
+
+  %i[bids asks].each do |reader|
+    type = view.methods.fetch(reader).method_types.fetch(0).type.return_type
+    abort "Expected OrderBook::View##{reader} to return a read-only interface" unless type.is_a?(RBS::Types::Interface)
+
+    methods = builder.build_interface(type.name).methods.keys
+    expected = %i[each map [] fetch first last empty? length size]
+    abort "Unexpected methods on OrderBook::View##{reader}: #{methods.sort.inspect}" unless methods.sort == expected.sort
   end
 end
 

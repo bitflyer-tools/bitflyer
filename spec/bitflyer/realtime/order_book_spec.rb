@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'spec_helper'
+require 'timeout'
 
 RSpec.describe Bitflyer::Realtime::OrderBook do
   let(:transport) { instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false, reconnectable?: false, close_for_shutdown: nil) }
@@ -56,6 +57,10 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     expect(view).to be_frozen
     expect(view.bids).to be_frozen
     expect(view.asks).to be_frozen
+    expect(view.bids[0]).to equal(view.best_bid)
+    expect(view.asks.fetch(0)).to equal(view.best_ask)
+    expect { view.bids.clear }.to raise_error(FrozenError)
+    expect { view.asks.clear }.to raise_error(FrozenError)
     expect(view.best_bid).to be_frozen
 
     board(delta, bids: [[9.0, 0], [8, 5], [0, 10]], asks: [[10, 0], [11, 2], [0, 3]])
@@ -129,10 +134,10 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     frame('431[null]')
     board(snapshot, bids: [[8, 1]])
     expect(book.top_of_book.best_bid.price).to eq(8)
-    at_disconnect = []
+    at_disconnect = Queue.new
     client.disconnected = ->(_error) { at_disconnect << [book.current, book.top_of_book] }
     events.fetch(:close).call(nil)
-    expect(at_disconnect).to eq([[nil, nil]])
+    expect(Timeout.timeout(5) { at_disconnect.pop }).to eq([nil, nil])
     board(snapshot, bids: [[9, 1]])
     expect(book.current).to be_nil
 

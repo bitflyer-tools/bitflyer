@@ -1,6 +1,7 @@
 module Bitflyer
   module HTTP
     BASE_URL: String
+    MAX_RESPONSE_BODY_BYTES: Integer
 
     module ExecutionHistory
       DEFAULT_MAX_PAGES: Integer
@@ -21,6 +22,10 @@ module Bitflyer
       attr_reader body: String?
 
       def initialize: (Integer status, String? body) -> void
+    end
+
+    class ResponseTooLargeError < StandardError
+      def initialize: () -> void
     end
 
     class Connection
@@ -49,6 +54,10 @@ module Bitflyer
       def execute: (Net::HTTPRequest request) -> Response
 
       def send_request: (Net::HTTPRequest request) -> Net::HTTPResponse
+
+      def request_with_retry: (Net::HTTP http, Net::HTTPRequest request) -> Net::HTTPResponse
+
+      def read_response_body: (Net::HTTPResponse response) -> String?
 
       def close_session: () -> void
 

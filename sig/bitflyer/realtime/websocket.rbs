@@ -13,6 +13,7 @@ module Bitflyer
       @pending_authentication_error: RuntimeError?
       @monitor: Thread?
       @session_mutex: Thread::Mutex
+      @channel_callbacks: Hash[Symbol, message_callback]
       @order_books: Hash[String, OrderBook]
       @board_feeds: Hash[Symbol, [Method, Symbol]]
       @next_subscription_id: Integer
@@ -27,8 +28,8 @@ module Bitflyer
       @last_pong_monotonic: Integer?
 
       attr_reader websocket_client: Transport?
-      attr_accessor channel_names: Array[Symbol]
-      attr_accessor channel_callbacks: Hash[Symbol, message_callback]
+      def channel_names: () -> Array[Symbol]
+      def channel_callbacks: () -> Hash[Symbol, message_callback]
       attr_accessor ping_interval: Integer?
       attr_accessor ping_timeout: Integer?
       attr_accessor last_ping_at: Integer?
@@ -61,7 +62,7 @@ module Bitflyer
 
       def handle_message: (payload: untyped, ?socket: Transport?) -> void
 
-      def handle_close: (error: untyped, ?socket: Transport?) -> void
+      def handle_close: (error: untyped, ?socket: Transport?, ?complete_close: (^() -> void)?) -> void
 
       def setup_by_response: (json: String, ?socket: Transport?) -> void
 
@@ -85,6 +86,8 @@ module Bitflyer
 
       private
 
+      def registered_channels: () -> Array[Symbol]
+
       def register_order_book: (String product_code) -> OrderBook
 
       def register_board_feed: (Symbol channel, Method handler, Symbol delta_channel) -> void
@@ -105,7 +108,8 @@ module Bitflyer
 
       def lifecycle_inactive?: () -> bool
 
-      def notify_ready: (Transport?) -> void
+      def notify_ready: (Transport?, ?async: bool) -> void
+      def prepare_ready_callback: (Transport?) -> ready_callback?
 
       def take_ready_callback: () -> ready_callback?
 
@@ -117,7 +121,9 @@ module Bitflyer
 
       def notify_authentication_failure: (RuntimeError error) -> void
 
-      def notify_disconnected: (untyped error, ?disconnected_callback? callback) -> void
+      def dispatch_disconnected: (untyped error, disconnected_callback? callback) -> void
+
+      def notify_disconnected: (untyped error, disconnected_callback callback) -> void
 
       def monotonic_milliseconds: () -> Integer
 

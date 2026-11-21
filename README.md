@@ -43,6 +43,10 @@ If the response has no body, the client returns `nil`.
 HTTP responses outside the 2xx range raise `Bitflyer::HTTP::ResponseError`. The error provides
 the numeric HTTP status in `status` and the raw response body in `body`.
 
+Each HTTP response body is limited to 10 MiB (10,485,760 bytes) after automatic decompression.
+Exceeding this limit raises `Bitflyer::HTTP::ResponseTooLargeError` for any HTTP status and closes
+the connection. The next request opens a new connection.
+
 `cancel_child_order`, `cancel_parent_order`, and `parent_order` require exactly one
 order ID or order acceptance ID. They raise `ArgumentError` before sending a request
 if neither identifier or both identifiers are non-nil.
@@ -71,8 +75,9 @@ p private_client.positions # will print your positions
 Each HTTP client can reuse its HTTPS connection after up to 10 seconds of idle time if the server
 keeps it open. Call `client.close` to release it. The next request on that client opens a new connection.
 
-`withdraw` requires non-`nil` `bank_account_id` and `amount` keywords. Pass `code` to include a
-two-factor authentication code when required.
+`withdraw` requires non-`nil` `bank_account_id` and `amount` keywords. The amount must be an integer
+or a finite float. Unsupported amounts raise `ArgumentError` before an HTTP request is sent.
+Pass `code` to include a two-factor authentication code when required.
 
 #### Crypto CFD funding rates
 
@@ -182,7 +187,7 @@ To subscribe to the private `child_order_events` and `parent_order_events`, pass
 
 #### Connection status monitoring
 
-The `ready` callback is called when the `realtime_client` is ready to receive events (after the socket connection is established, the optional authentication has succeeded, and the channels have been subscribed). If connection is lost, the `disconnected` callback is called, and reconnection is attempted automatically. When the connection is restored and the server acknowledges all subscriptions for that setup, `ready` is called again. If the server rejects a setup subscription, `subscription_failed` receives the channel name as a symbol and the server error. That setup skips `ready`.
+The `ready` callback is called when the `realtime_client` is ready to receive events (after the socket connection is established, the optional authentication has succeeded, and the channels have been subscribed). If connection is lost, the client invalidates the session and delivers `disconnected` on a separate thread. Automatic reconnection can proceed while that callback runs. When the connection is restored and the server acknowledges all subscriptions for that setup, `ready` is called again. If the server rejects a setup subscription, `subscription_failed` receives the channel name as a symbol and the server error. That setup skips `ready`.
 During an outage, retry delays increase exponentially, with jitter and a 30-second cap. When the session becomes ready, the retry delay resets.
 If setup finishes before registration, assigning `ready` delivers the pending notification synchronously, once per connection.
 If any setup subscription acknowledgment is still pending after 10 seconds, the client closes the connection and retries the registered subscriptions on a new connection.
@@ -199,10 +204,11 @@ If the rejection occurs before callback registration, assigning `disconnected` d
 
 Call `client.shutdown` when you finish using a realtime client. It stops automatic reconnection, closes the connection, and stops the monitoring thread. You can call it more than once, including from a `ready` or subscription callback.
 Concurrent calls wait for the connection to close.
-Subscription callbacks run serially in receive order on a separate thread, so a slow callback
-does not block heartbeat processing. Each client queues up to 1,024 pending events in addition
-to the event being delivered. When the queue is full, new events are dropped.
-Disconnecting or shutting down discards pending events from that connection and allows any
+Market data callbacks and `ready` and `subscription_failed` notifications from incoming frames
+run serially on a separate thread, so a slow callback does not block heartbeat processing.
+When 1,024 callbacks are pending, new market data events are dropped. Notifications
+can still be queued.
+Disconnecting or shutting down discards pending callbacks from that connection and allows any
 callback already running to finish.
 
 The realtime client's `websocket_client` reference and the WebSocket client's transport reference
@@ -240,6 +246,11 @@ timeouts. If an acknowledgment is still pending after 10 seconds, the next
 connection check reports the timeout. Other subscriptions stay active.
 Call `subscribe` again to retry a failed channel on the same connection.
 An acknowledged or pending subscription is reused when its callback changes.
+
+The WebSocket client's `channel_names` and `channel_callbacks` return frozen snapshots
+of the registered channels and their user callbacks, respectively. `channel_names`
+also includes channels managed by `order_book`. Use `subscribe` and `unsubscribe`
+to change user subscriptions.
 
 ```ruby
 client = Bitflyer.realtime_client

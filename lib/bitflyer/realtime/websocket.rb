@@ -17,7 +17,7 @@ module Bitflyer
       private_constant :CONNECTION_TIMEOUT, :SESSION_RESPONSE_TIMEOUT_MS, :CALLBACK_QUEUE_LIMIT,
                        :SUBSCRIPTION_ACK_TIMEOUT_MS, :RECONNECT_BASE_DELAY, :RECONNECT_MAX_DELAY
 
-      attr_accessor :channel_names, :channel_callbacks, :ping_interval, :ping_timeout, :subscription_failed
+      attr_accessor :ping_interval, :ping_timeout, :subscription_failed
       attr_reader :websocket_client, :ready, :disconnected, :last_ping_at, :last_pong_at
 
       def initialize(host:, key:, secret:, debug: false)
@@ -25,7 +25,6 @@ module Bitflyer
         @key = key
         @secret = secret
         @debug = debug
-        @channel_names = []
         @channel_callbacks = {}
         @order_books = {}
         @board_feeds = {}
@@ -55,6 +54,14 @@ module Bitflyer
 
       def inspect = "#<#{self.class}>"
 
+      def channel_names
+        @session_mutex.synchronize { registered_channels.freeze }
+      end
+
+      def channel_callbacks
+        @session_mutex.synchronize { @channel_callbacks.dup.freeze }
+      end
+
       def ready=(callback)
         notification = @session_mutex.synchronize do
           @ready = callback
@@ -73,14 +80,13 @@ module Bitflyer
           @pending_authentication_error = nil
           pending_error
         end
-        notify_disconnected(error, callback) if error
+        notify_disconnected(error, callback) if error && callback
         callback
       end
 
       def subscribe(channel_name:, &block)
         debug_log "Subscribe #{channel_name}"
         @session_mutex.synchronize do
-          @channel_names = (@channel_names + [channel_name]).uniq
           @subscription_tokens[channel_name] ||= Object.new
           @channel_callbacks[channel_name] = block
           queue_subscription(channel_name)
@@ -106,7 +112,6 @@ module Bitflyer
             @callback_queue.delete_if { |channel,| channel == channel_name }
             return if @board_feeds.key?(channel_name)
 
-            @channel_names -= [channel_name]
             @pending_subscriptions.delete_if { |_id, (channel, _deadline)| channel == channel_name }
             @acknowledged_subscriptions.delete(channel_name)
             queue_subscription_frame("42#{['unsubscribe', channel_name].to_json}") if @session_ready
@@ -211,14 +216,17 @@ module Bitflyer
         puts e.backtrace&.join("\n")
       end
 
-      def handle_close(error:, socket: @websocket_client)
+      def handle_close(error:, socket: @websocket_client, complete_close: nil)
         debug_log error
-        return unless @lifecycle_lock.synchronize do
+        callback = @lifecycle_lock.synchronize do
           connecting_socket = @connection&.first
-          !lifecycle_inactive? && (reset_readiness(socket) || (socket && connecting_socket.equal?(socket)))
-        end
+          next if lifecycle_inactive? || !(reset_readiness(socket) || (socket && connecting_socket.equal?(socket)))
 
-        notify_disconnected(error)
+          # Keep retries gated until the previous session has been invalidated.
+          complete_close&.call
+          @disconnected
+        end
+        dispatch_disconnected(error, callback)
       end
 
       def setup_by_response(json:, socket: @websocket_client)
@@ -270,14 +278,14 @@ module Bitflyer
           return if !@websocket_client.equal?(socket) || @session_ready
 
           @session_ready = true
-          (@board_feeds.keys | @channel_callbacks.keys).each { |channel| queue_subscription(channel, setup: true) }
+          registered_channels.each { |channel| queue_subscription(channel, setup: true) }
           @last_setup_subscription_id = @next_subscription_id
           unless @pending_subscriptions.empty?
             @subscription_ack_deadline = monotonic_milliseconds + SUBSCRIPTION_ACK_TIMEOUT_MS
           end
         end
         send_subscription_frames
-        notify_ready(socket)
+        notify_ready(socket, async: true)
       end
 
       def acknowledge_subscription(id:, json:, socket: @websocket_client)
@@ -293,8 +301,9 @@ module Bitflyer
           record_subscription_result(id, channel, error)
           [channel, error]
         end
-        @subscription_failed&.call(channel, error) if error
-        notify_ready(socket)
+        failure = @subscription_failed
+        enqueue_notification(socket) { failure.call(channel, error) } if error && failure
+        notify_ready(socket, async: true)
       end
 
       def receive_pong
@@ -327,6 +336,10 @@ module Bitflyer
 
       private
 
+      def registered_channels
+        @board_feeds.keys | @channel_callbacks.keys
+      end
+
       def initialize_callbacks
         @subscription_tokens = {}
         @callback_queue = []
@@ -341,10 +354,20 @@ module Bitflyer
           return if @callback_queue.size >= CALLBACK_QUEUE_LIMIT
           return unless subscribed_callback(channel, token)
 
-          @callback_worker ||= Thread.new { deliver_callbacks }
-          @callback_queue << [channel, token, message, socket]
-          @callback_wakeup.signal
+          push_callback([channel, token, message, socket])
         end
+      end
+
+      def enqueue_notification(socket, &notification)
+        @lifecycle_lock.synchronize do
+          push_callback([nil, nil, notification, socket]) if active_callback_transport?(socket)
+        end
+      end
+
+      def push_callback(event)
+        @callback_worker ||= Thread.new { deliver_callbacks }
+        @callback_queue << event
+        @callback_wakeup.signal
       end
 
       def deliver_callbacks
@@ -362,9 +385,11 @@ module Bitflyer
 
       def deliver_callback(channel, token, message, socket)
         callback = @lifecycle_lock.synchronize do
-          subscribed_callback(channel, token) if active_callback_transport?(socket)
+          return unless active_callback_transport?(socket)
+
+          subscribed_callback(channel, token) if channel
         end
-        callback&.call(message)
+        channel ? callback&.call(message) : message.call
       rescue StandardError => e
         puts e
         puts e.backtrace&.join("\n")
@@ -404,7 +429,6 @@ module Bitflyer
 
       def register_board_feed(channel, handler, delta_channel)
         @board_feeds[channel] = [handler, delta_channel]
-        @channel_names = (@channel_names + [channel]).uniq
         queue_subscription(channel)
       end
 
@@ -529,7 +553,9 @@ module Bitflyer
         transport.on(:message) do |payload|
           this.handle_message(payload: payload, socket: transport) if this.websocket_client.equal?(transport)
         end
-        transport.on(:close) { |error| this.handle_close(error: error, socket: transport) }
+        transport.on(:close) do |error, complete_close|
+          this.handle_close(error: error, socket: transport, complete_close: complete_close)
+        end
       end
 
       def activate_transport(transport)
@@ -720,8 +746,15 @@ module Bitflyer
         @stopped || !@authentication_error.nil?
       end
 
-      def notify_ready(socket)
-        notification = @lifecycle_lock.synchronize do
+      def notify_ready(socket, async: false)
+        notification = prepare_ready_callback(socket)
+        return unless notification
+
+        async ? enqueue_notification(socket) { notification.call } : notification.call
+      end
+
+      def prepare_ready_callback(socket)
+        @lifecycle_lock.synchronize do
           return if lifecycle_inactive?
 
           @session_mutex.synchronize do
@@ -736,7 +769,6 @@ module Bitflyer
             take_ready_callback
           end
         end
-        notification&.call
       end
 
       def setup_subscriptions_acknowledged?
@@ -805,11 +837,15 @@ module Bitflyer
           @pending_authentication_error = error unless @disconnected
           @disconnected
         end
-        notify_disconnected(error, callback)
+        dispatch_disconnected(error, callback)
       end
 
-      def notify_disconnected(error, callback = @disconnected)
-        callback&.call(error)
+      def dispatch_disconnected(error, callback)
+        Thread.new { notify_disconnected(error, callback) } if callback
+      end
+
+      def notify_disconnected(error, callback)
+        callback.call(error)
       rescue StandardError => e
         warn e.full_message(highlight: false)
       end

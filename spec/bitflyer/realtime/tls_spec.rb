@@ -51,19 +51,13 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     serve(trusted_certificate) { |socket| socket.read }
     @client = connect_client
     transport = @client.websocket_client
-    @client.disconnected = lambda do |error|
-      events << error
-      @client.reconnect
-      events << @client.websocket_client
-    end
+    @client.disconnected = ->(error) { events << [error, transport.reconnectable?] }
     start_handshake << true
 
     expect(server_result).to start_with('GET /socket.io/?transport=websocket HTTP/1.1')
     expect(transport.thread.join(5)).to be_a(Thread)
     expect(transport).to be_closed
-    expect(events.size).to eq(2)
-    expect(events.pop).to be_a(Timeout::Error)
-    expect(events.pop).to equal(transport)
+    expect(events.pop(timeout: 5)).to match([an_instance_of(Timeout::Error), true])
 
     authentication = Queue.new
     serve(trusted_certificate) do |socket|

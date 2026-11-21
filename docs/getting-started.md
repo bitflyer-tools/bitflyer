@@ -48,4 +48,5 @@ ruby market_snapshot.rb ETH_JPY
 ```
 
 See the [README usage examples](../README.md#usage) for authenticated requests
-and realtime subscriptions.
+and realtime subscriptions. See [Troubleshooting](troubleshooting.md) if a
+request or subscription fails.

@@ -104,6 +104,55 @@ describe Bitflyer::HTTP::Private::Client do
     end
   end
 
+  describe '#parent_orders' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:http) { instance_double(Net::HTTP) }
+    let(:response) { instance_double(Net::HTTPOK, code: '200', body: '[{"id":75,"parent_order_state":"ACTIVE"}]') }
+
+    before do
+      allow(Net::HTTP).to receive(:start).and_return(http)
+      allow(http).to receive(:request).and_return(response)
+      allow(Time).to receive(:now).and_return(Time.at(1_000_000))
+    end
+
+    it 'requests the default product without optional filters' do
+      client.parent_orders
+
+      expect(http).to have_received(:request).with(
+        an_instance_of(Net::HTTP::Get).and(have_attributes(path: '/v1/me/getparentorders?product_code=BTC_JPY'))
+      )
+    end
+
+    it 'sends the product, state, and pagination filters and returns the parsed orders' do
+      orders = client.parent_orders(product_code: 'ETH_JPY', count: 10, before: 100, after: 50,
+                                    parent_order_state: 'ACTIVE')
+
+      expect(orders).to eq([{ 'id' => 75, 'parent_order_state' => 'ACTIVE' }])
+      expect(http).to have_received(:request) do |request|
+        uri = URI.parse(request.path)
+        expect(request).to be_an_instance_of(Net::HTTP::Get)
+        expect(uri.path).to eq('/v1/me/getparentorders')
+        expect(URI.decode_www_form(uri.query).to_h).to eq(
+          'product_code' => 'ETH_JPY', 'count' => '10', 'before' => '100', 'after' => '50',
+          'parent_order_state' => 'ACTIVE'
+        )
+      end
+    end
+
+    context 'when the API rejects the request' do
+      let(:body) { '{"error":"Unauthorized"}' }
+      let(:response) { instance_double(Net::HTTPUnauthorized, code: '401', body: body) }
+
+      it 'raises a response error with the status and raw body' do
+        expect do
+          client.parent_orders
+        end.to raise_error(Bitflyer::HTTP::ResponseError, 'bitFlyer API returned HTTP 401') { |error|
+          expect(error).to have_attributes(status: 401, body: body)
+        }
+      end
+    end
+  end
+
   describe 'single-order requests' do
     let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
     let(:connection) { instance_double(Bitflyer::HTTP::Connection) }
@@ -148,36 +197,53 @@ describe Bitflyer::HTTP::Private::Client do
 
   describe '#withdraw' do
     let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
-    let(:connection) { instance_double(Bitflyer::HTTP::Connection) }
     let(:fields) { { bank_account_id: 1234, amount: 12_000 } }
-
-    before do
-      allow(Bitflyer::HTTP::Connection).to receive(:new).with('test_key', 'test_secret').and_return(connection)
-    end
+    let(:http) { instance_double(Net::HTTP) }
+    let(:response) { instance_double(Net::HTTPOK, code: '200', body: '{"message_id":"withdrawal-id"}') }
 
     %i[bank_account_id amount].each do |field|
       it "rejects a missing #{field} before posting" do
-        expect(connection).not_to receive(:post)
+        expect(Net::HTTP).not_to receive(:start)
         expect { client.withdraw(**fields.except(field)) }.to raise_error(ArgumentError, /missing keyword: :#{field}/)
       end
 
       it "rejects a nil #{field} before posting" do
-        expect(connection).not_to receive(:post)
+        expect(Net::HTTP).not_to receive(:start)
         expect { client.withdraw(**fields.merge(field => nil)) }.to raise_error(ArgumentError, "#{field} is required")
       end
     end
 
-    it 'posts the required fields with the default currency' do
-      response = { 'message_id' => 'withdrawal-id' }
-      expect(connection).to receive(:post).with('/v1/me/withdraw', fields.merge(currency_code: 'JPY'))
-                                         .and_return(Bitflyer::HTTP::Response.new(response))
+    [BigDecimal('12000'), Rational(12_000, 1), Complex(12_000, 0), '12000',
+     Float::INFINITY, -Float::INFINITY, Float::NAN].each do |amount|
+      it "rejects amount #{amount.inspect} before making an HTTP request" do
+        expect(Net::HTTP).not_to receive(:start)
+        expect { client.withdraw(**fields.merge(amount: amount)) }
+          .to raise_error(ArgumentError, 'amount must be an Integer or a finite Float')
+      end
+    end
 
-      expect(client.withdraw(**fields)).to eq(response)
+    [12_000, 12_000.5].each do |amount|
+      it "sends #{amount.inspect} as a JSON number with the default currency" do
+        allow(Net::HTTP).to receive(:start).and_return(http)
+        expect(http).to receive(:request) do |request|
+          expect(request).to be_a(Net::HTTP::Post)
+          expect(request.path).to eq('/v1/me/withdraw')
+          expect(JSON.parse(request.body)).to match(
+            'currency_code' => 'JPY', 'bank_account_id' => 1234, 'amount' => eql(amount)
+          )
+          response
+        end
+
+        expect(client.withdraw(**fields.merge(amount: amount))).to eq('message_id' => 'withdrawal-id')
+      end
     end
 
     it 'includes the supplied two-factor authentication code' do
-      expect(connection).to receive(:post).with('/v1/me/withdraw', fields.merge(currency_code: 'JPY', code: '012345'))
-                                         .and_return(Bitflyer::HTTP::Response.new({}))
+      allow(Net::HTTP).to receive(:start).and_return(http)
+      expect(http).to receive(:request) do |request|
+        expect(JSON.parse(request.body)).to include('code' => '012345')
+        response
+      end
 
       client.withdraw(**fields, code: '012345')
     end
