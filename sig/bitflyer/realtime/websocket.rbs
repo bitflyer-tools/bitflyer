@@ -13,6 +13,7 @@ module Bitflyer
       @pending_authentication_error: RuntimeError?
       @monitor: Thread?
       @session_mutex: Thread::Mutex
+      @channel_callbacks: Hash[Symbol, message_callback]
       @order_books: Hash[String, OrderBook]
       @board_feeds: Hash[Symbol, [Method, Symbol]]
       @next_subscription_id: Integer
@@ -27,8 +28,8 @@ module Bitflyer
       @last_pong_monotonic: Integer?
 
       attr_reader websocket_client: Transport?
-      attr_accessor channel_names: Array[Symbol]
-      attr_accessor channel_callbacks: Hash[Symbol, message_callback]
+      def channel_names: () -> Array[Symbol]
+      def channel_callbacks: () -> Hash[Symbol, message_callback]
       attr_accessor ping_interval: Integer?
       attr_accessor ping_timeout: Integer?
       attr_accessor last_ping_at: Integer?
@@ -84,6 +85,8 @@ module Bitflyer
       def debug_log: (untyped message) -> void
 
       private
+
+      def registered_channels: () -> Array[Symbol]
 
       def register_order_book: (String product_code) -> OrderBook
 
