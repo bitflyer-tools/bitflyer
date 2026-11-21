@@ -6,7 +6,7 @@ module Bitflyer
       @driver: WebSocket::Driver?
       @driver_lock: Mutex
       @close_lock: Mutex
-      @handlers: Hash[Symbol, ^(untyped) -> void]
+      @handlers: Hash[Symbol, ^(untyped, ?^() -> void) -> void]
       @events: Array[[Symbol, untyped]]
 
       def reconnectable?: () -> bool

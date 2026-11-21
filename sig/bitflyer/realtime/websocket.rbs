@@ -62,7 +62,7 @@ module Bitflyer
 
       def handle_message: (payload: untyped, ?socket: Transport?) -> void
 
-      def handle_close: (error: untyped, ?socket: Transport?) -> void
+      def handle_close: (error: untyped, ?socket: Transport?, ?complete_close: (^() -> void)?) -> void
 
       def setup_by_response: (json: String, ?socket: Transport?) -> void
 
@@ -121,7 +121,9 @@ module Bitflyer
 
       def notify_authentication_failure: (RuntimeError error) -> void
 
-      def notify_disconnected: (untyped error, ?disconnected_callback? callback) -> void
+      def dispatch_disconnected: (untyped error, disconnected_callback? callback) -> void
+
+      def notify_disconnected: (untyped error, disconnected_callback callback) -> void
 
       def monotonic_milliseconds: () -> Integer
 

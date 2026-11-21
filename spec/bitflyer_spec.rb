@@ -597,9 +597,9 @@ describe Bitflyer do
     it 'reports authentication rejection and closes the rejected session' do
       client = @client = Bitflyer.realtime_client('key', 'secret')
       ready = spy('ready callback')
-      disconnected = spy('disconnected callback')
+      disconnected = Queue.new
       client.ready = ready
-      client.disconnected = disconnected
+      client.disconnected = ->(error) { disconnected << error }
 
       allow(socket).to receive(:close) do
         allow(socket).to receive(:reconnectable?).and_return(true)
@@ -613,8 +613,8 @@ describe Bitflyer do
       client.websocket_client.reconnect
 
       expect(socket).to have_received(:close).once
-      expect(disconnected).to have_received(:call)
-        .with(an_object_having_attributes(message: 'Authentication failed: [{"message":"Invalid API key"}]')).once
+      expect(disconnected.pop(timeout: 5)).to have_attributes(message: 'Authentication failed: [{"message":"Invalid API key"}]')
+      expect(disconnected).to be_empty
       expect(ready).not_to have_received(:call)
       expect(client.websocket_client.last_pong_at).to eq(0)
       expect(socket).to have_received(:connect).once
@@ -635,21 +635,19 @@ describe Bitflyer do
 
     it 'reports authentication rejection once when closing the socket fails' do
       client = @client = Bitflyer.realtime_client('key', 'secret')
-      disconnected = spy('disconnected callback')
-      client.disconnected = disconnected
+      disconnected = Queue.new
+      client.disconnected = ->(error) { disconnected << error }
       reset = Errno::ECONNRESET.new
       allow(socket).to receive(:close).and_raise(reset)
 
       receive_frame('0{}')
       receive_frame('430[{"message":"Invalid API key"}]')
       message = 'Authentication failed: [{"message":"Invalid API key"}]'
-      expect(disconnected).to have_received(:call).once.with(
-        be_an_instance_of(RuntimeError).and(have_attributes(message: message))
-      )
+      expect(disconnected.pop(timeout: 5)).to be_an_instance_of(RuntimeError).and(have_attributes(message: message))
 
       allow(socket).to receive(:close)
       handlers.fetch(:close).call(reset)
-      expect(disconnected).to have_received(:call).once
+      expect(disconnected).to be_empty
       expect(socket).to have_received(:connect).once
     end
 

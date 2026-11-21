@@ -154,7 +154,7 @@ module Bitflyer
           @socket&.close
           @socket
         end
-        @handlers[:close]&.call(error) if socket && notify
+        @handlers[:close]&.call(error, -> { @close_state = :closed }) if socket && notify
       ensure
         @close_state = :closed if closing
       end

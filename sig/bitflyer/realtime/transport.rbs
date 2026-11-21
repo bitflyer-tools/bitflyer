@@ -10,7 +10,7 @@ module Bitflyer
 
       def connect: (String url) -> void
 
-      def on: (Symbol event) { (untyped) -> void } -> void
+      def on: (Symbol event) { (untyped, ?^() -> void) -> void } -> void
 
       def closed?: () -> bool
 

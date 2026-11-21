@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'spec_helper'
+require 'timeout'
 
 RSpec.describe Bitflyer::Realtime::OrderBook do
   let(:transport) { instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false, reconnectable?: false, close_for_shutdown: nil) }
@@ -105,10 +106,10 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     frame('0{}')
     frame('431[null]')
     board(snapshot, bids: [[8, 1]])
-    at_disconnect = []
+    at_disconnect = Queue.new
     client.disconnected = ->(_error) { at_disconnect << book.current }
     events.fetch(:close).call(nil)
-    expect(at_disconnect).to eq([nil])
+    expect(Timeout.timeout(5) { at_disconnect.pop }).to be_nil
     board(snapshot, bids: [[9, 1]])
     expect(book.current).to be_nil
 
