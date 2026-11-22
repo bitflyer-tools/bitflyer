@@ -11,7 +11,8 @@ module Bitflyer
           'STOP_LIMIT' => %w[price trigger_price].freeze,
           'TRAIL' => %w[offset].freeze
         }.freeze
-        private_constant :PARENT_ORDER_REQUIRED_FIELDS, :PARENT_ORDER_CONDITION_FIELDS
+        PARENT_ORDER_CONDITION_COUNTS = { 'SIMPLE' => 1, 'IFD' => 2, 'OCO' => 2, 'IFDOCO' => 3 }.freeze
+        private_constant :PARENT_ORDER_REQUIRED_FIELDS, :PARENT_ORDER_CONDITION_FIELDS, :PARENT_ORDER_CONDITION_COUNTS
 
         def initialize(key, secret)
           @connection = Connection.new(key, secret)
@@ -118,6 +119,7 @@ module Bitflyer
         def send_parent_order(parameters:, order_method: nil, minute_to_expire: nil, time_in_force: 'GTC')
           raise ArgumentError, 'parameters must be an array' unless parameters.is_a?(Array)
 
+          validate_parent_order_condition_count(order_method, parameters.length)
           body = {
             order_method: order_method,
             minute_to_expire: minute_to_expire,
@@ -264,6 +266,14 @@ module Bitflyer
           return supplied if supplied.size == 1
 
           raise ArgumentError, "Provide exactly one of #{identifiers.keys.join(' or ')}"
+        end
+
+        def validate_parent_order_condition_count(order_method, count)
+          method_name = order_method.nil? ? 'SIMPLE' : order_method.to_s
+          expected_count = PARENT_ORDER_CONDITION_COUNTS[method_name]
+          return if expected_count.nil? || count == expected_count
+
+          raise ArgumentError, "Expected #{expected_count} parent order conditions for #{method_name}, got #{count}"
         end
 
         def normalize_parent_order_condition(condition)

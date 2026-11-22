@@ -360,6 +360,39 @@ describe Bitflyer::HTTP::Private::Client do
       expect { client.send_parent_order(parameters: condition) }.to raise_error(ArgumentError, 'parameters must be an array')
     end
 
+    { nil => 1, 'SIMPLE' => 1, 'IFD' => 2, 'OCO' => 2, 'IFDOCO' => 3 }.each do |method, count|
+      context "with #{method || 'omitted'} order_method" do
+        let(:method_argument) { method ? { order_method: method } : {} }
+
+        [count - 1, count + 1].each do |incorrect_count|
+          it "rejects #{incorrect_count} conditions before making an HTTP request" do
+            expect(Net::HTTP).not_to receive(:start)
+            expect { client.send_parent_order(parameters: Array.new(incorrect_count, condition), **method_argument) }
+              .to raise_error(
+                ArgumentError, "Expected #{count} parent order conditions for #{method || 'SIMPLE'}, got #{incorrect_count}"
+              )
+          end
+        end
+
+        it 'sends the required conditions in input order' do
+          parameters = Array.new(count) { |index| condition.merge(size: index + 1) }
+          http = instance_double(Net::HTTP)
+          response = instance_double(Net::HTTPOK, code: '200', body: '{}')
+          allow(Net::HTTP).to receive(:start).and_return(http)
+          expect(http).to receive(:request) do |request|
+            expect(request.path).to eq('/v1/me/sendparentorder')
+            expect(JSON.parse(request.body)).to eq(
+              { time_in_force: 'GTC', parameters: parameters.map { |entry| entry.transform_keys(&:to_s) } }
+                .merge(method_argument).transform_keys(&:to_s)
+            )
+            response
+          end
+
+          client.send_parent_order(parameters: parameters, **method_argument)
+        end
+      end
+    end
+
     it 'rejects a BigDecimal quantity in a string-keyed condition before making an HTTP request' do
       expect(Net::HTTP).not_to receive(:start)
       parameters = [condition.transform_keys(&:to_s).merge('size' => BigDecimal('0.01'))]
@@ -380,7 +413,7 @@ describe Bitflyer::HTTP::Private::Client do
           expect(Net::HTTP).not_to receive(:start)
           incomplete = condition.merge(condition_type: type, **extra_fields).reject { |key, _| key == field }
 
-          expect { client.send_parent_order(parameters: [condition, incomplete]) }
+          expect { client.send_parent_order(parameters: [condition, incomplete], order_method: 'IFD') }
             .to raise_error(ArgumentError, "#{field} is required in a parent order condition")
         end
       end
