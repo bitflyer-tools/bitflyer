@@ -75,6 +75,66 @@ describe Bitflyer::HTTP::Private::Client do
     end
   end
 
+  describe '#each_balance_history' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:http) { instance_double(Net::HTTP) }
+    let(:path) { '/v1/me/getbalancehistory' }
+
+    before do
+      allow(Net::HTTP).to receive(:start).and_return(http)
+    end
+
+    it 'fetches on demand, preserves response order, and advances the cursor using the lowest ID' do
+      filters = '?currency_code=BTC&count=2'
+      first_request = have_attributes(path: "#{path}#{filters}&before=100&after=50")
+      second_request = have_attributes(path: "#{path}#{filters}&before=90&after=50")
+      allow(http).to receive(:request).with(first_request)
+                                      .and_return(instance_double(Net::HTTPOK, code: '200', body: '[{"id":90},{"id":95}]'))
+      allow(http).to receive(:request).with(second_request)
+                                      .and_return(instance_double(Net::HTTPOK, code: '200', body: '[{"id":80}]'))
+
+      history = client.each_balance_history(currency_code: 'BTC', count: 2, before: 100, after: 50, max_pages: 2)
+
+      expect(history).to be_an(Enumerator)
+      expect(http).not_to have_received(:request)
+      expect(history.next).to eq('id' => 90)
+      expect(history.next).to eq('id' => 95)
+      expect(http).not_to have_received(:request).with(second_request)
+      expect(history.next).to eq('id' => 80)
+      expect { history.next }.to raise_error(StopIteration)
+      expect(http).to have_received(:request).with(first_request).once
+      expect(http).to have_received(:request).with(second_request).once
+    end
+
+    it 'yields to a block and stops when the API returns an empty page' do
+      expect(http).to receive(:request).with(have_attributes(path: path)).ordered
+                                       .and_return(instance_double(Net::HTTPOK, code: '200', body: '[{"id":90}]'))
+      expect(http).to receive(:request).with(have_attributes(path: "#{path}?before=90")).ordered
+                                       .and_return(instance_double(Net::HTTPOK, code: '200', body: '[]'))
+
+      entries = []
+      result = client.each_balance_history { |entry| entries << entry }
+
+      expect(result).to be_nil
+      expect(entries).to eq([{ 'id' => 90 }])
+    end
+
+    it 'does not make a request when the budget is zero' do
+      expect(Net::HTTP).not_to receive(:start)
+
+      expect(client.each_balance_history(max_pages: 0).to_a).to be_empty
+    end
+
+    it 'propagates HTTP errors' do
+      expect(http).to receive(:request).with(have_attributes(path: path))
+                                       .and_return(instance_double(Net::HTTPForbidden, code: '403', body: 'Forbidden'))
+
+      expect { client.each_balance_history.to_a }.to raise_error(Bitflyer::HTTP::ResponseError) do |error|
+        expect(error).to have_attributes(status: 403, body: 'Forbidden')
+      end
+    end
+  end
+
   describe '#child_orders' do
     let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
     let(:connection) { instance_double(Bitflyer::HTTP::Connection) }
