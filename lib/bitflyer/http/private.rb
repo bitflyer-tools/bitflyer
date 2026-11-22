@@ -116,12 +116,15 @@ module Bitflyer
           body = {
             order_method: order_method,
             minute_to_expire: minute_to_expire,
-            time_in_force: time_in_force,
-            parameters: parameters
+            time_in_force: time_in_force
           }.delete_if { |_, v| v.nil? }
           validate_order_numbers(body)
-          parameters.each { |condition| validate_parent_order_condition(condition) }
-          @connection.post('/v1/me/sendparentorder', body).body
+          normalized_parameters = parameters.map do |condition|
+            fields = normalize_parent_order_condition(condition)
+            validate_parent_order_condition(fields)
+            fields
+          end
+          @connection.post('/v1/me/sendparentorder', body.merge(parameters: normalized_parameters)).body
         end
 
         def cancel_parent_order(product_code: 'BTC_JPY', parent_order_id: nil, parent_order_acceptance_id: nil)
@@ -245,16 +248,26 @@ module Bitflyer
           raise ArgumentError, "Provide exactly one of #{identifiers.keys.join(' or ')}"
         end
 
-        def validate_parent_order_condition(condition)
+        def normalize_parent_order_condition(condition)
           raise ArgumentError, 'each parent order condition must be a hash' unless condition.is_a?(Hash)
 
-          fields = condition.transform_keys(&:to_s)
+          # @type var normalized: Hash[String, untyped]
+          normalized = {}
+          condition.each_with_object(normalized) do |(key, value), fields|
+            field = key.to_s
+            raise ArgumentError, "duplicate parent order condition key: #{field}" if fields.key?(field)
+
+            fields[field] = value
+          end
+        end
+
+        def validate_parent_order_condition(fields)
           condition_type = fields['condition_type'].to_s
           required = PARENT_ORDER_REQUIRED_FIELDS + PARENT_ORDER_CONDITION_FIELDS.fetch(condition_type, [])
           required.each do |field|
             raise ArgumentError, "#{field} is required in a parent order condition" if fields.fetch(field, nil).nil?
           end
-          validate_order_numbers(condition)
+          validate_order_numbers(fields)
         end
 
         def validate_order_numbers(fields)

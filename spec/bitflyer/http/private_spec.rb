@@ -339,23 +339,32 @@ describe Bitflyer::HTTP::Private::Client do
         .to raise_error(ArgumentError, 'each parent order condition must be a hash')
     end
 
-    it 'serializes symbol-keyed and string-keyed order conditions as a JSON array' do
+    it 'rejects duplicate condition keys before making an HTTP request' do
+      expect(Net::HTTP).not_to receive(:start)
+      duplicate = condition.merge(condition_type: 'LIMIT', 'condition_type' => 'MARKET')
+
+      expect { client.send_parent_order(parameters: [duplicate]) }
+        .to raise_error(ArgumentError, 'duplicate parent order condition key: condition_type')
+    end
+
+    it 'serializes symbol-keyed, string-keyed, and mixed-keyed conditions as a JSON array' do
       http = instance_double(Net::HTTP)
       response = instance_double(Net::HTTPOK, code: '200', body: '{"parent_order_acceptance_id":"123"}')
       stop_limit = condition.merge(condition_type: 'STOP_LIMIT', price: 28_800, trigger_price: 29_000)
       trail = condition.transform_keys(&:to_s).merge('condition_type' => 'TRAIL', 'offset' => 100)
+      mixed = { product_code: 'BTC_JPY', 'condition_type' => 'LIMIT', side: 'BUY', 'size' => 1, price: 28_000 }.freeze
       allow(Net::HTTP).to receive(:start).and_return(http)
       expect(http).to receive(:request) do |request|
         expect(request.path).to eq('/v1/me/sendparentorder')
-        expect(JSON.parse(request.body)).to eq(
-          'order_method' => 'OCO',
+        expect(request.body).to eq(JSON.generate(
+          'order_method' => 'IFDOCO',
           'time_in_force' => 'GTC',
-          'parameters' => [stop_limit.transform_keys(&:to_s), trail]
-        )
+          'parameters' => [stop_limit.transform_keys(&:to_s), trail, mixed.transform_keys(&:to_s)]
+        ))
         response
       end
 
-      expect(client.send_parent_order(parameters: [stop_limit, trail], order_method: 'OCO'))
+      expect(client.send_parent_order(parameters: [stop_limit, trail, mixed], order_method: 'IFDOCO'))
         .to eq('parent_order_acceptance_id' => '123')
     end
   end
