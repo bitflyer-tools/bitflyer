@@ -2,6 +2,7 @@
 <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
 [![All Contributors](https://img.shields.io/badge/all_contributors-4-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
+[![CI](https://github.com/bitflyer-tools/bitflyer/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/bitflyer-tools/bitflyer/actions/workflows/test.yml)
 [![Gem Version](https://badge.fury.io/rb/bitflyer.svg)](https://badge.fury.io/rb/bitflyer)
 [![Code Climate](https://codeclimate.com/github/bitflyer-tools/bitflyer/badges/gpa.svg)](https://codeclimate.com/github/bitflyer-tools/bitflyer)
 [![Libraries.io dependency status for GitHub repo](https://img.shields.io/librariesio/github/bitflyer-tools/bitflyer.svg)](https://libraries.io/github/bitflyer-tools/bitflyer)
