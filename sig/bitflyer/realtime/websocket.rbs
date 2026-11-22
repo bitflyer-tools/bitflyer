@@ -76,7 +76,7 @@ module Bitflyer
 
       def acknowledge_subscription: (id: Integer, json: String, ?socket: Transport?) -> void
 
-      def receive_pong: () -> void
+      def receive_pong: (?socket: Transport?) -> void
 
       def disconnect: (?socket: Transport?) -> void
 
