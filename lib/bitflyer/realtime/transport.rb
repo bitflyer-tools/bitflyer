@@ -10,6 +10,7 @@ module Bitflyer
   module Realtime
     class Transport
       HANDSHAKE_TIMEOUT = 10
+      READ_SIZE = 16 * 1024
       WRITE_TIMEOUT = 10
 
       attr_reader :url, :thread
@@ -109,7 +110,7 @@ module Bitflyer
         return unless socket
 
         read_handshake(socket)
-        parse(socket.readpartial(4096)) until closed?
+        parse(socket.readpartial(READ_SIZE)) until closed?
       rescue EOFError
         nil
       rescue IOError, SystemCallError, OpenSSL::SSL::SSLError, Timeout::Error => e
@@ -124,7 +125,7 @@ module Bitflyer
           remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
           raise Timeout::Error, 'WebSocket upgrade timed out' unless remaining.positive?
 
-          parse(Timeout.timeout(remaining) { socket.readpartial(4096) })
+          parse(Timeout.timeout(remaining) { socket.readpartial(READ_SIZE) })
         end
       end
 
