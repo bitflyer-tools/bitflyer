@@ -112,7 +112,7 @@ module Bitflyer
             @callback_queue.delete_if { |channel,| channel == channel_name }
             return if @board_feeds.key?(channel_name)
 
-            @pending_subscriptions.delete_if { |_id, (channel, _deadline)| channel == channel_name }
+            remove_pending_subscription(channel_name)
             @acknowledged_subscriptions.delete(channel_name)
             queue_subscription_frame("42#{['unsubscribe', channel_name].to_json}") if @session_ready
             @websocket_client
@@ -297,7 +297,7 @@ module Bitflyer
 
           channel = pending.first
           error = JSON.parse(json).first
-          @pending_subscriptions.delete(id)
+          remove_pending_subscription(channel)
           record_subscription_result(id, channel, error)
           [channel, error]
         end
@@ -460,12 +460,18 @@ module Bitflyer
       def queue_subscription(channel, setup: false)
         return unless @session_ready
         return if @acknowledged_subscriptions.key?(channel)
-        return if @pending_subscriptions.each_value.any? { |pending| pending.first == channel }
+        return if @pending_subscription_ids.key?(channel)
 
         @next_subscription_id += 1
         deadline = monotonic_milliseconds + SUBSCRIPTION_ACK_TIMEOUT_MS unless setup
         @pending_subscriptions[@next_subscription_id] = [channel, deadline]
+        @pending_subscription_ids[channel] = @next_subscription_id
         queue_subscription_frame("42#{@next_subscription_id}#{['subscribe', channel].to_json}")
+      end
+
+      def remove_pending_subscription(channel)
+        id = @pending_subscription_ids.delete(channel)
+        @pending_subscriptions.delete(id) if id
       end
 
       def queue_subscription_frame(frame)
@@ -685,6 +691,7 @@ module Bitflyer
           @subscription_ack_deadline = nil
           @subscription_rejected = true
           @pending_subscriptions.clear
+          @pending_subscription_ids.clear
           @websocket_client
         end
         debug_log 'Timed out waiting for setup subscription acknowledgments'
@@ -697,7 +704,7 @@ module Bitflyer
 
           now = monotonic_milliseconds
           pending = @pending_subscriptions.select { |_id, (_channel, deadline)| deadline && now >= deadline }
-          pending.each_key { |id| @pending_subscriptions.delete(id) }
+          pending.each_value { |channel, _deadline| remove_pending_subscription(channel) }
           pending
         end
         expired.each_value do |channel, _deadline|
@@ -806,6 +813,7 @@ module Bitflyer
         @subscription_frames = []
         @next_subscription_id = @last_setup_subscription_id = 0
         @pending_subscriptions = {}
+        @pending_subscription_ids = {}
         @acknowledged_subscriptions = {}
         @subscription_ack_deadline = nil
         @subscription_rejected = false
