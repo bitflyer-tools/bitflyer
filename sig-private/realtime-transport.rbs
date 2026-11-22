@@ -74,6 +74,8 @@ module Bitflyer
 
       def queue_subscription: (Symbol, ?setup: bool) -> void
 
+      def remove_pending_subscription: (Symbol) -> void
+
       def queue_subscription_frame: (String) -> void
 
       def send_subscription_frames: () -> void
