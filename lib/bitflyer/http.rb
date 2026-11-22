@@ -6,11 +6,14 @@ require 'net/http'
 require 'uri'
 require 'json'
 require 'openssl'
+require 'timeout'
 
 module Bitflyer
   module HTTP
     BASE_URL = 'https://api.bitflyer.jp'
     MAX_RESPONSE_BODY_BYTES = 10 * 1024 * 1024
+    REQUEST_TIMEOUT = 30
+    private_constant :REQUEST_TIMEOUT
 
     Response = Struct.new(:body)
 
@@ -59,6 +62,8 @@ module Bitflyer
         super("bitFlyer API response body exceeds #{MAX_RESPONSE_BODY_BYTES} bytes")
       end
     end
+
+    class RequestTimeoutError < Timeout::Error; end
 
     class Connection
       def initialize(key, secret)
@@ -118,11 +123,13 @@ module Bitflyer
       end
 
       def send_request(request)
-        http = (@http ||= Net::HTTP.start(
-          @uri.host.to_s, @uri.port, use_ssl: true, keep_alive_timeout: 10, max_retries: 0, ignore_eof: false
-        ))
-        sign_request(request, request.path, request.body)
-        request_with_retry(http, request)
+        Timeout.timeout(REQUEST_TIMEOUT, RequestTimeoutError, 'bitFlyer API request deadline exceeded') do
+          http = (@http ||= Net::HTTP.start(
+            @uri.host.to_s, @uri.port, use_ssl: true, keep_alive_timeout: 10, max_retries: 0, ignore_eof: false
+          ))
+          sign_request(request, request.path, request.body)
+          request_with_retry(http, request)
+        end
       rescue StandardError
         close_session
         raise
@@ -133,7 +140,7 @@ module Bitflyer
         retry_get = request.method == 'GET'
         begin
           http.request(request) { |response| response.body = read_response_body(response) }
-        rescue Net::OpenTimeout
+        rescue Net::OpenTimeout, RequestTimeoutError
           raise
         rescue Timeout::Error, IOError, Errno::ECONNRESET, Errno::ECONNABORTED,
                Errno::EPIPE, Errno::ETIMEDOUT, OpenSSL::SSL::SSLError

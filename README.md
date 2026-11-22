@@ -43,6 +43,10 @@ If the response has no body, the client returns `nil`.
 If the connection closes before the declared body length is received, the client retries a GET
 once and raises `EOFError` if the retry is also incomplete. A POST raises `EOFError` without retrying.
 
+Each HTTP request has a 30-second deadline covering connection establishment, the full response,
+and any GET retry. When the deadline expires, the client closes the connection and raises
+`Bitflyer::HTTP::RequestTimeoutError` (a subclass of `Timeout::Error`). The next request opens a new connection.
+
 HTTP responses outside the 2xx range raise `Bitflyer::HTTP::ResponseError`. The error provides
 the numeric HTTP status in `status` and the raw response body in `body`.
 

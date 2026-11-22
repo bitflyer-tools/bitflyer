@@ -2,6 +2,7 @@ module Bitflyer
   module HTTP
     BASE_URL: String
     MAX_RESPONSE_BODY_BYTES: Integer
+    REQUEST_TIMEOUT: Integer
 
     module IdPagination
       DEFAULT_MAX_PAGES: Integer
@@ -26,6 +27,9 @@ module Bitflyer
 
     class ResponseTooLargeError < StandardError
       def initialize: () -> void
+    end
+
+    class RequestTimeoutError < Timeout::Error
     end
 
     class Connection
