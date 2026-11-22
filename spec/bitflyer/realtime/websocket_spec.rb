@@ -1225,6 +1225,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
   end
 
   it 'discards a full queue of deltas on disconnect and delivers replacement deltas in order' do
+    stub_const("#{described_class}::CALLBACK_PAYLOAD_LIMIT", 1_024 * '"stale"'.bytesize)
     client = realtime_client
     next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false, close_for_shutdown: nil)
     next_handlers = {}
@@ -1249,6 +1250,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     receive_frame("42#{JSON.generate(['lightning_board_BTC_JPY', *Array.new(1_024, 'stale')])}")
 
     handlers.fetch(:close).call(nil)
+    expect(client.websocket_client.instance_variable_get(:@pending_callback_bytes)).to eq(0)
     allow(transport).to receive(:reconnectable?).and_return(true)
     client.websocket_client.reconnect
     receive_frame('0{}', next_handlers)
@@ -1491,6 +1493,42 @@ describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
     receive_frame('41')
 
     expect(socket).to have_received(:close).once
+  end
+
+  it 'caps pending payload bytes and frees them on dequeue, unsubscribe, and shutdown' do
+    stub_const("#{described_class}::CALLBACK_PAYLOAD_LIMIT", 8)
+    started = Queue.new
+    resume = Queue.new
+    receive_frame('0{}')
+    client.subscribe(channel_name: :lightning_ticker_BTC_JPY) do |message|
+      started << message
+      resume.pop
+    end
+    client.subscribe(channel_name: :lightning_ticker_ETH_JPY) { |message| started << message }
+    receive_frame('42["lightning_ticker_BTC_JPY","first"]')
+    expect(started.pop(timeout: 5)).to eq('first')
+
+    # Three multibyte characters and their JSON quotes fill the budget.
+    receive_frame('42["lightning_ticker_BTC_JPY","ééé","x"]')
+    allow(Time).to receive(:now).and_return(Time.at(123))
+    receive_frame('3')
+    expect(client.last_pong_at).to eq(123)
+    resume << true
+    expect(started.pop(timeout: 5)).to eq('ééé')
+
+    receive_frame('42["lightning_ticker_ETH_JPY","stale!"]')
+    expect(client.instance_variable_get(:@pending_callback_bytes)).to eq(8)
+    client.unsubscribe(channel_name: :lightning_ticker_ETH_JPY)
+    receive_frame('42["lightning_ticker_BTC_JPY","oversize","third"]')
+    resume << true
+    expect(started.pop(timeout: 5)).to eq('third')
+
+    receive_frame('42["lightning_ticker_BTC_JPY","stale"]')
+    client.shutdown
+    expect(client.instance_variable_get(:@pending_callback_bytes)).to eq(0)
+    expect(client.instance_variable_get(:@callback_queue)).to be_empty
+  ensure
+    resume&.close
   end
 
   it 'frees callback capacity on unsubscribe and preserves the order of other queued events' do

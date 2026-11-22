@@ -11,11 +11,13 @@ module Bitflyer
       CONNECTION_TIMEOUT = 10
       SESSION_RESPONSE_TIMEOUT_MS = 10_000
       CALLBACK_QUEUE_LIMIT = 1_024
+      CALLBACK_PAYLOAD_LIMIT = 8 * 1024 * 1024
       SUBSCRIPTION_ACK_TIMEOUT_MS = 10_000
       RECONNECT_BASE_DELAY = 1.0
       RECONNECT_MAX_DELAY = 30.0
       private_constant :CONNECTION_TIMEOUT, :SESSION_RESPONSE_TIMEOUT_MS, :CALLBACK_QUEUE_LIMIT,
-                       :SUBSCRIPTION_ACK_TIMEOUT_MS, :RECONNECT_BASE_DELAY, :RECONNECT_MAX_DELAY
+                       :CALLBACK_PAYLOAD_LIMIT, :SUBSCRIPTION_ACK_TIMEOUT_MS, :RECONNECT_BASE_DELAY,
+                       :RECONNECT_MAX_DELAY
 
       attr_accessor :ping_interval, :ping_timeout, :subscription_failed
       attr_reader :websocket_client, :ready, :disconnected, :last_ping_at, :last_pong_at
@@ -109,7 +111,7 @@ module Bitflyer
 
             @channel_callbacks.delete(channel_name)
             @subscription_tokens.delete(channel_name)
-            @callback_queue.delete_if { |channel,| channel == channel_name }
+            discard_channel_callbacks(channel_name)
             return if @board_feeds.key?(channel_name)
 
             @pending_subscriptions.delete_if { |_id, (channel, _deadline)| channel == channel_name }
@@ -346,43 +348,50 @@ module Bitflyer
       def initialize_callbacks
         @subscription_tokens = {}
         @callback_queue = []
+        @pending_callback_bytes = 0
         @callback_transport = nil
         @callback_wakeup = ConditionVariable.new
         @callback_worker = nil
       end
 
       def enqueue_callback(channel, token, message, socket)
+        bytes = JSON.generate(message, allow_nan: true).bytesize
         @lifecycle_lock.synchronize do
           return unless active_callback_transport?(socket)
           return if @callback_queue.size >= CALLBACK_QUEUE_LIMIT
+          return if @pending_callback_bytes + bytes > CALLBACK_PAYLOAD_LIMIT
           return unless subscribed_callback(channel, token)
 
-          push_callback([channel, token, message, socket])
+          push_callback([bytes, channel, token, message, socket])
         end
       end
 
       def enqueue_notification(socket, &notification)
         @lifecycle_lock.synchronize do
-          push_callback([nil, nil, notification, socket]) if active_callback_transport?(socket)
+          push_callback([0, nil, nil, notification, socket]) if active_callback_transport?(socket)
         end
       end
 
       def push_callback(event)
         @callback_worker ||= Thread.new { deliver_callbacks }
+        @pending_callback_bytes += event.first
         @callback_queue << event
         @callback_wakeup.signal
       end
 
       def deliver_callbacks
         while (event = next_callback_event)
-          deliver_callback(*event)
+          _bytes, channel, token, message, socket = event
+          deliver_callback(channel, token, message, socket)
         end
       end
 
       def next_callback_event
         @lifecycle_lock.synchronize do
           @callback_wakeup.wait(@lifecycle_lock) while @callback_queue.empty? && !lifecycle_inactive?
-          @callback_queue.shift
+          event = @callback_queue.shift
+          @pending_callback_bytes -= event.first if event
+          event
         end
       end
 
@@ -408,8 +417,22 @@ module Bitflyer
         end
       end
 
-      def stop_callbacks
+      def discard_channel_callbacks(channel_name)
+        @callback_queue.delete_if do |bytes, channel,|
+          next false unless channel == channel_name
+
+          @pending_callback_bytes -= bytes
+          true
+        end
+      end
+
+      def clear_callback_queue
         @callback_queue.clear
+        @pending_callback_bytes = 0
+      end
+
+      def stop_callbacks
+        clear_callback_queue
         @callback_wakeup.signal
       end
 
@@ -580,7 +603,7 @@ module Bitflyer
         @session_mutex.synchronize do
           @websocket_client = transport
           @callback_transport = transport
-          @callback_queue.clear
+          clear_callback_queue
           clear_readiness
         end
       end
@@ -795,7 +818,7 @@ module Bitflyer
           return false unless @websocket_client.equal?(socket)
 
           @callback_transport = nil
-          @callback_queue.clear
+          clear_callback_queue
           clear_readiness
           true
         end

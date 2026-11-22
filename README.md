@@ -251,8 +251,10 @@ Call `client.shutdown` when you finish using a realtime client. It stops automat
 Concurrent calls wait for the connection to close.
 Market data callbacks and `ready` and `subscription_failed` notifications from incoming frames
 run serially on a separate thread, so a slow callback does not block heartbeat processing.
-When 1,024 callbacks are pending, new market data events are dropped. Notifications
-can still be queued.
+New market data events are dropped if 1,024 callbacks are pending or if adding the
+event would exceed the 8 MiB (8,388,608 byte) pending market data payload budget.
+The budget counts each pending message's compact JSON byte length. Dequeuing or
+discarding an event frees its budget. Connection status notifications can still be queued.
 Disconnecting or shutting down discards pending callbacks from that connection and allows any
 callback already running to finish.
 
