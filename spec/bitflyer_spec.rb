@@ -433,8 +433,15 @@ describe Bitflyer do
       end
     end
 
-    %i[heartbeat authentication live_subscription subscription_replay].each do |write|
-      it "reconnects when a #{write} write detects a reset before the reader" do
+    [
+      [:heartbeat, :reset],
+      [:authentication, :reset],
+      [:live_subscription, :reset],
+      [:subscription_replay, :reset],
+      [:heartbeat, :timeout],
+      [:live_subscription, :timeout]
+    ].each do |write, failure|
+      it "reconnects after a #{write} write #{failure}" do
         allow(Bitflyer::Realtime::Transport).to receive(:new).and_call_original
         TCPServer.open('127.0.0.1', 0) do |server|
           use_tcp_peer(server)
@@ -448,18 +455,30 @@ describe Bitflyer do
           @client.ready = -> { ready << true }
           @client.disconnected = ->(error) { disconnected << error }
           reset = Errno::ECONNRESET.new
+          replay = %i[live_subscription subscription_replay].include?(write) || failure == :timeout
 
           peer = replacement_peer = nil
           Timeout.timeout(5) do
             peer = server.accept
             driver = send_greeting(peer)
             if %i[heartbeat live_subscription].include?(write)
+              @client.ticker_btc_jpy = callback if write == :heartbeat && replay
               driver.text('0{}')
+              if write == :heartbeat && replay
+                expect(read_realtime_frame(peer, driver)).to eq('421["subscribe","lightning_ticker_BTC_JPY"]')
+                driver.text('431[null]')
+              end
               ready.pop
             end
 
             raw_socket = transport.instance_variable_get(:@socket)
-            allow(raw_socket).to receive(:write).and_raise(reset)
+            if failure == :timeout
+              stub_const('Bitflyer::Realtime::Transport::WRITE_TIMEOUT', 0.1)
+              stalled = Queue.new
+              allow(raw_socket).to receive(:write) { stalled.pop }
+            else
+              allow(raw_socket).to receive(:write).and_raise(reset)
+            end
             case write
             when :heartbeat
               @client.ping_interval = 0
@@ -470,7 +489,8 @@ describe Bitflyer do
               driver.text('0{}')
             end
 
-            expect(disconnected.pop).to equal(reset)
+            error = disconnected.pop
+            expect(error).to(failure == :timeout ? be_an_instance_of(Timeout::Error) : equal(reset))
             expect(ready).to be_empty
             expect(transport).to be_closed
             expect(transport.thread.join(1)).to eq(transport.thread)
@@ -481,14 +501,14 @@ describe Bitflyer do
               expect(read_realtime_frame(replacement_peer, driver)).to start_with('420["auth",')
               driver.text('430[null]')
             end
-            if %i[live_subscription subscription_replay].include?(write)
+            if replay
               expect(read_realtime_frame(replacement_peer, driver)).to eq('421["subscribe","lightning_ticker_BTC_JPY"]')
               expect(ready).to be_empty
               driver.text('431[null]')
             end
             ready.pop
             expect(disconnected).to be_empty
-            if %i[live_subscription subscription_replay].include?(write)
+            if replay
               driver.text('42["lightning_ticker_BTC_JPY",{"price":1}]')
               expect(messages.pop).to eq('price' => 1)
             end
