@@ -87,7 +87,7 @@ module Bitflyer
 
       def expire_runtime_subscriptions: (Transport socket) -> void
 
-      def notify_subscription_timeout: (Symbol channel) -> void
+      def notify_subscription_failure: (Transport? socket, Symbol channel, untyped error) -> void
 
       def close_connections: () -> void
 

@@ -1090,19 +1090,53 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
       expect(subscription_failed).not_to have_received(:call)
 
       poll_after(1_000)
-      expect(subscription_failed).to have_received(:call)
-        .with(:lightning_ticker_BTC_JPY, 'Timed out waiting for subscription acknowledgment').once
+      expect(failure_notifications.pop(timeout: 5))
+        .to eq([:lightning_ticker_BTC_JPY, 'Timed out waiting for subscription acknowledgment'])
       expect(subscription_failed).to have_received(:call).once
       receive_frame('432["late rejection"]')
       receive_frame('42["lightning_executions_BTC_JPY",1]')
       expect(events.pop(timeout: 5)).to eq(1)
 
       5.times { poll_after(1_000) }
-      expect(subscription_failed).to have_received(:call)
-        .with(:lightning_ticker_SOL_JPY, 'Timed out waiting for subscription acknowledgment').once
+      expect(failure_notifications.pop(timeout: 5))
+        .to eq([:lightning_ticker_SOL_JPY, 'Timed out waiting for subscription acknowledgment'])
       expect(subscription_failed).to have_received(:call).twice
       expect(transport).to have_received(:send).with('2').exactly(15).times
       expect(ready).to have_received(:call).once
+    end
+
+    it 'continues polling and reconnects while a timeout handler blocks, discarding queued failures on close' do
+      replacement = instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false, close_for_shutdown: nil)
+      replacement_handlers = {}
+      stub_transport(replacement, replacement_handlers)
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(replacement)
+      release = Queue.new
+      client.subscription_failed = lambda do |channel, _error|
+        failure_notifications << channel
+        release.pop
+      end
+      client.subscribe('lightning_ticker_BTC_JPY') { |_message| }
+      client.subscribe('lightning_ticker_SOL_JPY') { |_message| }
+
+      poll = Thread.new { poll_after(10_000) }
+      expect(failure_notifications.pop(timeout: 5)).to eq(:lightning_ticker_BTC_JPY)
+      expect(poll.join(5)).to eq(poll)
+      poll_after(1_000)
+      expect(transport).to have_received(:send).with('2').twice
+
+      handlers.fetch(:close).call(nil)
+      allow(transport).to receive(:reconnectable?).and_return(true)
+      client.websocket_client.reconnect
+      receive_frame('0{}', replacement_handlers)
+      %w[431 432 433].each { |id| receive_frame("#{id}[null]", replacement_handlers) }
+      receive_frame('42["lightning_executions_BTC_JPY",2]', replacement_handlers)
+      release.close
+
+      expect(events.pop(timeout: 5)).to eq(2)
+      expect(failure_notifications).to be_empty
+    ensure
+      release&.close
+      poll&.join(5)
     end
 
     it 'clears deadlines for acknowledged and unsubscribed requests' do
@@ -1114,6 +1148,8 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
       receive_frame('433["late rejection"]')
 
       11.times { poll_after(1_000) }
+      receive_frame('42["lightning_executions_BTC_JPY",1]')
+      expect(events.pop(timeout: 5)).to eq(1)
       expect(subscription_failed).not_to have_received(:call)
     end
   end

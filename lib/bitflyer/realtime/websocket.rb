@@ -301,8 +301,7 @@ module Bitflyer
           record_subscription_result(id, channel, error)
           [channel, error]
         end
-        failure = @subscription_failed
-        enqueue_notification(socket) { failure.call(channel, error) } if error && failure
+        notify_subscription_failure(socket, channel, error) if error
         notify_ready(socket, async: true)
       end
 
@@ -697,14 +696,14 @@ module Bitflyer
           pending.each_key { |id| @pending_subscriptions.delete(id) }
           pending
         end
-        expired.each_value { |channel, _deadline| notify_subscription_timeout(channel) }
+        expired.each_value do |channel, _deadline|
+          notify_subscription_failure(socket, channel, 'Timed out waiting for subscription acknowledgment')
+        end
       end
 
-      def notify_subscription_timeout(channel)
-        @subscription_failed&.call(channel, 'Timed out waiting for subscription acknowledgment')
-      rescue StandardError => e
-        puts e
-        puts e.backtrace&.join("\n")
+      def notify_subscription_failure(socket, channel, error)
+        failure = @subscription_failed
+        enqueue_notification(socket) { failure.call(channel, error) } if failure
       end
 
       def wait_for_monitor_tick
