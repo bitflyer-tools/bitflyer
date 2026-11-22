@@ -85,16 +85,20 @@ describe 'HTTPS connection reuse' do
     expect(server_result).to eq(['GET /v1/gethealth HTTP/1.1'] * 2)
   end
 
-  it 'stops after one retry when the response body is interrupted again' do
-    serve do
-      interrupted_requests = Array.new(2) { with_socket { |socket| respond_incompletely(socket) } }
-      next_request = with_socket { |socket| respond(socket) }
-      interrupted_requests + [next_request]
-    end
+  %w[chunked Content-Length].each do |framing|
+    it "stops after one retry when a #{framing} response body is interrupted again" do
+      serve do
+        interrupted_requests = Array.new(2) do
+          with_socket { |socket| respond_incompletely(socket, framing) }
+        end
+        next_request = with_socket { |socket| respond(socket) }
+        interrupted_requests + [next_request]
+      end
 
-    expect { client.health }.to raise_error(EOFError)
-    expect(client.ticker).to eq('status' => 'ok')
-    expect(server_result).to eq(['GET /v1/gethealth HTTP/1.1'] * 2 + ['GET /v1/ticker?product_code=BTC_JPY HTTP/1.1'])
+      expect { client.health }.to raise_error(EOFError)
+      expect(client.ticker).to eq('status' => 'ok')
+      expect(server_result).to eq(['GET /v1/gethealth HTTP/1.1'] * 2 + ['GET /v1/ticker?product_code=BTC_JPY HTTP/1.1'])
+    end
   end
 
   context 'with a response body limit' do
@@ -139,12 +143,13 @@ describe 'HTTPS connection reuse' do
   context 'with a private client' do
     let(:client) { Bitflyer.http_private_client('key', 'secret') }
 
-    ['before responding', 'during the response body'].each do |interruption|
+    [nil, 'chunked', 'Content-Length'].each do |framing|
+      interruption = framing ? "during a #{framing} response body" : 'before responding'
       it "does not replay a POST if the server closes #{interruption}" do
         serve do
           post_request = with_socket do |socket|
             respond(socket)
-            interruption == 'before responding' ? read_request(socket) : respond_incompletely(socket)
+            framing ? respond_incompletely(socket, framing) : read_request(socket)
           end
           next_request = with_socket { |socket| respond(socket) }
           [post_request, next_request]
@@ -225,9 +230,14 @@ describe 'HTTPS connection reuse' do
     request_line
   end
 
-  def respond_incompletely(socket)
+  def respond_incompletely(socket, framing = 'chunked')
     request_line = read_request(socket)
-    socket.write("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\npart\r\n")
+    payload = if framing == 'chunked'
+                "Transfer-Encoding: chunked\r\n\r\n4\r\npart\r\n"
+              else
+                "Content-Length: 100\r\n\r\npart"
+              end
+    socket.write("HTTP/1.1 200 OK\r\n#{payload}")
     request_line
   end
 end

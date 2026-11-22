@@ -119,7 +119,7 @@ module Bitflyer
 
       def send_request(request)
         http = (@http ||= Net::HTTP.start(
-          @uri.host.to_s, @uri.port, use_ssl: true, keep_alive_timeout: 10, max_retries: 0
+          @uri.host.to_s, @uri.port, use_ssl: true, keep_alive_timeout: 10, max_retries: 0, ignore_eof: false
         ))
         sign_request(request, request.path, request.body)
         request_with_retry(http, request)
