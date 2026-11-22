@@ -64,10 +64,10 @@ module Bitflyer
 
         # Each condition requires non-nil product_code, condition_type, side, and size.
         # LIMIT and STOP_LIMIT require price, STOP and STOP_LIMIT require trigger_price,
-        # and TRAIL requires offset. Keys may be symbols or strings.
+        # and TRAIL requires offset. Symbol and string keys may be mixed, but must be unique after string conversion.
         # Condition sizes, prices, and trigger prices accept Integer or finite Float. Offsets accept Integer.
         def send_parent_order: (
-          parameters: Array[Hash[Symbol, untyped] | Hash[String, untyped]],
+          parameters: Array[Hash[Symbol | String, untyped]],
           ?order_method: String?,
           ?minute_to_expire: Integer?,
           ?time_in_force: String
@@ -161,7 +161,9 @@ module Bitflyer
 
         def order_identifier: (**String?) -> Hash[Symbol, String]
 
-        def validate_parent_order_condition: (Hash[untyped, untyped] condition) -> void
+        def normalize_parent_order_condition: (Hash[Symbol | String, untyped] condition) -> Hash[String, untyped]
+
+        def validate_parent_order_condition: (Hash[String, untyped] fields) -> void
 
         def validate_order_numbers: (Hash[untyped, untyped] fields) -> void
 

@@ -60,7 +60,8 @@ if neither identifier or both identifiers are non-nil.
 `send_parent_order` takes an array of condition hashes with symbol or string keys. Each condition
 requires `product_code`, `condition_type`, `side`, and `size`. `LIMIT` and `STOP_LIMIT` require
 `price`, `STOP` and `STOP_LIMIT` require `trigger_price`, and `TRAIL` requires `offset`.
-Missing or nil required values raise `ArgumentError` before an HTTP request is made.
+Symbol and string keys may be mixed. Missing or nil required values and keys that collide after
+conversion to strings raise `ArgumentError` before an HTTP request is made.
 
 Order quantities and prices accept integers and finite floats. This also applies to the trigger price
 in parent order conditions. Pass expiration minutes and trailing offsets as integers. The client
