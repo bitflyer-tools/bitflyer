@@ -58,6 +58,7 @@ module Bitflyer
         def withdraw(bank_account_id:, amount:, currency_code: 'JPY', code: nil)
           raise ArgumentError, 'bank_account_id is required' if bank_account_id.nil?
           raise ArgumentError, 'amount is required' if amount.nil?
+          raise ArgumentError, 'currency_code is required' if currency_code.nil?
           raise ArgumentError, 'amount must be an Integer or a finite Float' unless json_number?(amount)
 
           body = {

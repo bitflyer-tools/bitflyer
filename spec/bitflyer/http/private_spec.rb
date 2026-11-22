@@ -206,7 +206,9 @@ describe Bitflyer::HTTP::Private::Client do
         expect(Net::HTTP).not_to receive(:start)
         expect { client.withdraw(**fields.except(field)) }.to raise_error(ArgumentError, /missing keyword: :#{field}/)
       end
+    end
 
+    %i[bank_account_id amount currency_code].each do |field|
       it "rejects a nil #{field} before posting" do
         expect(Net::HTTP).not_to receive(:start)
         expect { client.withdraw(**fields.merge(field => nil)) }.to raise_error(ArgumentError, "#{field} is required")

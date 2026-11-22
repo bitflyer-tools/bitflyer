@@ -77,6 +77,7 @@ keeps it open. Call `client.close` to release it. The next request on that clien
 
 `withdraw` requires non-`nil` `bank_account_id` and `amount` keywords. The amount must be an integer
 or a finite float. Unsupported amounts raise `ArgumentError` before an HTTP request is sent.
+Omit `currency_code` to send `JPY`. Passing `currency_code: nil` raises `ArgumentError` before sending the request.
 Pass `code` to include a two-factor authentication code when required.
 
 #### Crypto CFD funding rates
