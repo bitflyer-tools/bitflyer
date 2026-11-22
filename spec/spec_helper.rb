@@ -5,6 +5,7 @@ if ENV['COVERAGE'] == 'true'
   SimpleCov.start do
     merging false
     cover 'lib/**/*.rb'
+    minimum_coverage line: 98
     history_limit 0
     formatter CoverageSummaryFormatter
   end
