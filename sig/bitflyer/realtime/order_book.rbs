@@ -1,0 +1,72 @@
+module Bitflyer
+  module Realtime
+    class OrderBook
+      type number = Integer | Float
+
+      class Level
+        attr_reader price: number
+        attr_reader size: number
+
+        def initialize: (price: number, size: number) -> void
+      end
+
+      class TopOfBook
+        attr_reader best_bid: Level?
+        attr_reader best_ask: Level?
+
+        def initialize: (best_bid: Level?, best_ask: Level?) -> void
+        def spread: () -> number?
+      end
+
+      interface _Side
+        def each: () -> Enumerator[Level, _Side]
+                | () { (Level) -> void } -> _Side
+        def map: [T] () { (Level) -> T } -> Array[T]
+               | () -> Enumerator[Level, Array[untyped]]
+        def []: (int index) -> Level?
+              | (int start, int length) -> Array[Level]?
+              | (Range[Integer?] range) -> Array[Level]?
+        def fetch: (int index) -> Level
+                  | [T] (int index, T default) -> (Level | T)
+                  | [T] (int index) { (int index) -> T } -> (Level | T)
+        def first: () -> Level?
+                 | (int count) -> Array[Level]
+        def last: () -> Level?
+                | (int count) -> Array[Level]
+        def empty?: () -> bool
+        def length: () -> Integer
+        def size: () -> Integer
+      end
+
+      class View < TopOfBook
+        attr_reader bids: _Side
+        attr_reader asks: _Side
+
+        def initialize: (bids: Array[Level], asks: Array[Level]) -> void
+      end
+
+      @lock: Mutex
+      @bids: Hash[Rational, Level]
+      @asks: Hash[Rational, Level]
+      @current: View?
+      @top_of_book: TopOfBook?
+      @ready: bool
+
+      def initialize: () -> void
+      def current: () -> View?
+      def top_of_book: () -> TopOfBook?
+      def ready?: () -> bool
+
+      def replace: (untyped message) -> void
+      def update: (untyped message) -> void
+      def invalidate: () -> void
+
+      private
+
+      def reset: () -> void
+      def merge: (untyped message) -> void
+      def merge_side: (Hash[Rational, Level] side, untyped levels) -> void
+      def sorted_levels: (Hash[Rational, Level] side) -> Array[Level]
+    end
+  end
+end

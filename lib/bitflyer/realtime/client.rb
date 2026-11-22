@@ -32,6 +32,10 @@ module Bitflyer
         @websocket_client.subscribe(channel_name: channel_name.to_sym, &)
       end
 
+      def order_book(product_code:)
+        @websocket_client.order_book(product_code:)
+      end
+
       def unsubscribe(channel_name)
         @websocket_client.unsubscribe(channel_name: channel_name.to_sym)
       end

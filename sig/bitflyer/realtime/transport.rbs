@@ -3,6 +3,7 @@ module Bitflyer
     class Transport
       HANDSHAKE_TIMEOUT: Integer
       READ_SIZE: Integer
+      WRITE_TIMEOUT: Integer
 
       attr_reader url: String?
       attr_reader thread: Thread?
@@ -11,13 +12,13 @@ module Bitflyer
 
       def connect: (String url) -> void
 
-      def on: (Symbol event) { (untyped) -> void } -> void
+      def on: (Symbol event) { (untyped, ?^() -> void) -> void } -> void
 
       def closed?: () -> bool
 
       def open?: () -> bool
 
-      def send: (String data) -> bool?
+      def send: (String data) -> bool
 
       def close: () -> void
 

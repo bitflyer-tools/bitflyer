@@ -4,6 +4,15 @@ module Bitflyer
   module HTTP
     module Private
       class Client # rubocop:disable Metrics/ClassLength
+        PARENT_ORDER_REQUIRED_FIELDS = %w[product_code condition_type side size].freeze
+        PARENT_ORDER_CONDITION_FIELDS = {
+          'LIMIT' => %w[price].freeze,
+          'STOP' => %w[trigger_price].freeze,
+          'STOP_LIMIT' => %w[price trigger_price].freeze,
+          'TRAIL' => %w[offset].freeze
+        }.freeze
+        private_constant :PARENT_ORDER_REQUIRED_FIELDS, :PARENT_ORDER_CONDITION_FIELDS
+
         def initialize(key, secret)
           @connection = Connection.new(key, secret)
         end
@@ -26,6 +35,10 @@ module Bitflyer
           @connection.get('/v1/me/getcollateral').body
         end
 
+        def collateral_history(count: nil, before: nil, after: nil)
+          @connection.get('/v1/me/getcollateralhistory', count: count, before: before, after: after).body
+        end
+
         def addresses
           @connection.get('/v1/me/getaddresses').body
         end
@@ -46,7 +59,12 @@ module Bitflyer
           @connection.get('/v1/me/getdeposits', count: count, before: before, after: after).body
         end
 
-        def withdraw(currency_code: 'JPY', bank_account_id: nil, amount: nil, code: nil)
+        def withdraw(bank_account_id:, amount:, currency_code: 'JPY', code: nil)
+          raise ArgumentError, 'bank_account_id is required' if bank_account_id.nil?
+          raise ArgumentError, 'amount is required' if amount.nil?
+          raise ArgumentError, 'currency_code is required' if currency_code.nil?
+          raise ArgumentError, 'amount must be an Integer or a finite Float' unless json_number?(amount)
+
           body = {
             currency_code: currency_code,
             bank_account_id: bank_account_id,
@@ -63,14 +81,19 @@ module Bitflyer
         end
 
         def send_child_order(
+          child_order_type:,
+          side:,
+          size:,
           product_code: 'BTC_JPY',
-          child_order_type: nil,
-          side: nil,
           price: nil,
-          size: nil,
           minute_to_expire: nil,
           time_in_force: 'GTC'
         )
+          raise ArgumentError, 'child_order_type is required' if child_order_type.nil?
+          raise ArgumentError, 'side is required' if side.nil?
+          raise ArgumentError, 'size is required' if size.nil?
+          raise ArgumentError, 'price is required for LIMIT orders' if child_order_type == 'LIMIT' && price.nil?
+
           body = {
             product_code: product_code,
             child_order_type: child_order_type,
@@ -85,11 +108,10 @@ module Bitflyer
         end
 
         def cancel_child_order(product_code: 'BTC_JPY', child_order_id: nil, child_order_acceptance_id: nil)
-          body = {
-            product_code: product_code,
-            child_order_id: child_order_id,
-            child_order_acceptance_id: child_order_acceptance_id
-          }.delete_if { |_, v| v.nil? }
+          identifier = order_identifier(
+            child_order_id: child_order_id, child_order_acceptance_id: child_order_acceptance_id
+          )
+          body = { product_code: product_code }.compact.merge(identifier)
           @connection.post('/v1/me/cancelchildorder', body).body
         end
 
@@ -99,20 +121,22 @@ module Bitflyer
           body = {
             order_method: order_method,
             minute_to_expire: minute_to_expire,
-            time_in_force: time_in_force,
-            parameters: parameters
+            time_in_force: time_in_force
           }.delete_if { |_, v| v.nil? }
           validate_order_numbers(body)
-          parameters.each { |condition| validate_order_numbers(condition) if condition.is_a?(Hash) }
-          @connection.post('/v1/me/sendparentorder', body).body
+          normalized_parameters = parameters.map do |condition|
+            fields = normalize_parent_order_condition(condition)
+            validate_parent_order_condition(fields)
+            fields
+          end
+          @connection.post('/v1/me/sendparentorder', body.merge(parameters: normalized_parameters)).body
         end
 
         def cancel_parent_order(product_code: 'BTC_JPY', parent_order_id: nil, parent_order_acceptance_id: nil)
-          body = {
-            product_code: product_code,
-            parent_order_id: parent_order_id,
-            parent_order_acceptance_id: parent_order_acceptance_id
-          }.delete_if { |_, v| v.nil? }
+          identifier = order_identifier(
+            parent_order_id: parent_order_id, parent_order_acceptance_id: parent_order_acceptance_id
+          )
+          body = { product_code: product_code }.compact.merge(identifier)
           @connection.post('/v1/me/cancelparentorder', body).body
         end
 
@@ -155,10 +179,9 @@ module Bitflyer
         end
 
         def parent_order(parent_order_id: nil, parent_order_acceptance_id: nil)
-          query = {
-            parent_order_id: parent_order_id,
-            parent_order_acceptance_id: parent_order_acceptance_id
-          }.delete_if { |_, v| v.nil? }
+          query = order_identifier(
+            parent_order_id: parent_order_id, parent_order_acceptance_id: parent_order_acceptance_id
+          )
           @connection.get('/v1/me/getparentorder', query).body
         end
 
@@ -188,10 +211,10 @@ module Bitflyer
           after: nil,
           child_order_id: nil,
           child_order_acceptance_id: nil,
-          max_pages: ExecutionHistory::DEFAULT_MAX_PAGES,
+          max_pages: IdPagination::DEFAULT_MAX_PAGES,
           &block
         )
-          stream = ExecutionHistory.stream(before, max_pages) do |cursor|
+          stream = IdPagination.stream(before, max_pages) do |cursor|
             executions(
               product_code: product_code, count: count, before: cursor, after: after,
               child_order_id: child_order_id, child_order_acceptance_id: child_order_acceptance_id
@@ -213,6 +236,19 @@ module Bitflyer
           @connection.get('/v1/me/getbalancehistory', query).body
         end
 
+        def each_balance_history(
+          currency_code: nil, count: nil, before: nil, after: nil, max_pages: IdPagination::DEFAULT_MAX_PAGES,
+          &block
+        )
+          stream = IdPagination.stream(before, max_pages) do |cursor|
+            balance_history(currency_code: currency_code, count: count, before: cursor, after: after)
+          end
+          return stream unless block
+
+          stream.each(&block)
+          nil
+        end
+
         def positions(product_code: 'FX_BTC_JPY')
           @connection.get('/v1/me/getpositions', product_code: product_code).body
         end
@@ -222,6 +258,35 @@ module Bitflyer
         end
 
         private
+
+        def order_identifier(**identifiers)
+          supplied = identifiers.compact
+          return supplied if supplied.size == 1
+
+          raise ArgumentError, "Provide exactly one of #{identifiers.keys.join(' or ')}"
+        end
+
+        def normalize_parent_order_condition(condition)
+          raise ArgumentError, 'each parent order condition must be a hash' unless condition.is_a?(Hash)
+
+          # @type var normalized: Hash[String, untyped]
+          normalized = {}
+          condition.each_with_object(normalized) do |(key, value), fields|
+            field = key.to_s
+            raise ArgumentError, "duplicate parent order condition key: #{field}" if fields.key?(field)
+
+            fields[field] = value
+          end
+        end
+
+        def validate_parent_order_condition(fields)
+          condition_type = fields['condition_type'].to_s
+          required = PARENT_ORDER_REQUIRED_FIELDS + PARENT_ORDER_CONDITION_FIELDS.fetch(condition_type, [])
+          required.each do |field|
+            raise ArgumentError, "#{field} is required in a parent order condition" if fields.fetch(field, nil).nil?
+          end
+          validate_order_numbers(fields)
+        end
 
         def validate_order_numbers(fields)
           fields.each do |field, value|

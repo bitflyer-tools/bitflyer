@@ -4,6 +4,55 @@ require 'spec_helper'
 require 'bigdecimal'
 
 describe Bitflyer::HTTP::Private::Client do
+  describe '#send_child_order' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:order) { { child_order_type: 'MARKET', side: 'BUY', size: 0.1 } }
+
+    %i[child_order_type side size].each do |field|
+      it "rejects an omitted #{field} before making an HTTP request" do
+        expect(Net::HTTP).not_to receive(:start)
+        expect { client.send_child_order(**order.reject { |key, _| key == field }) }
+          .to raise_error(ArgumentError, "missing keyword: :#{field}")
+      end
+
+      it "rejects a nil #{field} before making an HTTP request" do
+        expect(Net::HTTP).not_to receive(:start)
+        expect { client.send_child_order(**order.merge(field => nil)) }
+          .to raise_error(ArgumentError, "#{field} is required")
+      end
+    end
+
+    [{}, { price: nil }].each do |price_option|
+      it "rejects a limit order with #{price_option.empty? ? 'an omitted' : 'a nil'} price before making an HTTP request" do
+        expect(Net::HTTP).not_to receive(:start)
+        expect { client.send_child_order(**order.merge(child_order_type: 'LIMIT', **price_option)) }
+          .to raise_error(ArgumentError, 'price is required for LIMIT orders')
+      end
+    end
+
+    {
+      'MARKET' => {},
+      'LIMIT' => { price: 30_000 }
+    }.each do |order_type, price_option|
+      it "posts a complete #{order_type} order" do
+        http = instance_double(Net::HTTP)
+        response = instance_double(Net::HTTPOK, code: '200', body: '{"child_order_acceptance_id":"123"}')
+        allow(Net::HTTP).to receive(:start).and_return(http)
+        params = order.merge(child_order_type: order_type, **price_option)
+        expect(http).to receive(:request) do |request|
+          expect(request).to be_an_instance_of(Net::HTTP::Post)
+          expect(request.path).to eq('/v1/me/sendchildorder')
+          expect(JSON.parse(request.body)).to eq(
+            params.merge(product_code: 'BTC_JPY', time_in_force: 'GTC').transform_keys(&:to_s)
+          )
+          response
+        end
+
+        expect(client.send_child_order(**params)).to eq('child_order_acceptance_id' => '123')
+      end
+    end
+  end
+
   describe '#each_execution' do
     it 'yields fills to a block and forwards order filters on every page' do
       connection = instance_double(Bitflyer::HTTP::Connection)
@@ -23,6 +72,66 @@ describe Bitflyer::HTTP::Private::Client do
       client.each_execution(**filters, before: 50) { |execution| fills << execution }
 
       expect(fills).to eq([fill])
+    end
+  end
+
+  describe '#each_balance_history' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:http) { instance_double(Net::HTTP) }
+    let(:path) { '/v1/me/getbalancehistory' }
+
+    before do
+      allow(Net::HTTP).to receive(:start).and_return(http)
+    end
+
+    it 'fetches on demand, preserves response order, and advances the cursor using the lowest ID' do
+      filters = '?currency_code=BTC&count=2'
+      first_request = have_attributes(path: "#{path}#{filters}&before=100&after=50")
+      second_request = have_attributes(path: "#{path}#{filters}&before=90&after=50")
+      allow(http).to receive(:request).with(first_request)
+                                      .and_return(instance_double(Net::HTTPOK, code: '200', body: '[{"id":90},{"id":95}]'))
+      allow(http).to receive(:request).with(second_request)
+                                      .and_return(instance_double(Net::HTTPOK, code: '200', body: '[{"id":80}]'))
+
+      history = client.each_balance_history(currency_code: 'BTC', count: 2, before: 100, after: 50, max_pages: 2)
+
+      expect(history).to be_an(Enumerator)
+      expect(http).not_to have_received(:request)
+      expect(history.next).to eq('id' => 90)
+      expect(history.next).to eq('id' => 95)
+      expect(http).not_to have_received(:request).with(second_request)
+      expect(history.next).to eq('id' => 80)
+      expect { history.next }.to raise_error(StopIteration)
+      expect(http).to have_received(:request).with(first_request).once
+      expect(http).to have_received(:request).with(second_request).once
+    end
+
+    it 'yields to a block and stops when the API returns an empty page' do
+      expect(http).to receive(:request).with(have_attributes(path: path)).ordered
+                                       .and_return(instance_double(Net::HTTPOK, code: '200', body: '[{"id":90}]'))
+      expect(http).to receive(:request).with(have_attributes(path: "#{path}?before=90")).ordered
+                                       .and_return(instance_double(Net::HTTPOK, code: '200', body: '[]'))
+
+      entries = []
+      result = client.each_balance_history { |entry| entries << entry }
+
+      expect(result).to be_nil
+      expect(entries).to eq([{ 'id' => 90 }])
+    end
+
+    it 'does not make a request when the budget is zero' do
+      expect(Net::HTTP).not_to receive(:start)
+
+      expect(client.each_balance_history(max_pages: 0).to_a).to be_empty
+    end
+
+    it 'propagates HTTP errors' do
+      expect(http).to receive(:request).with(have_attributes(path: path))
+                                       .and_return(instance_double(Net::HTTPForbidden, code: '403', body: 'Forbidden'))
+
+      expect { client.each_balance_history.to_a }.to raise_error(Bitflyer::HTTP::ResponseError) do |error|
+        expect(error).to have_attributes(status: 403, body: 'Forbidden')
+      end
     end
   end
 
@@ -52,6 +161,153 @@ describe Bitflyer::HTTP::Private::Client do
     it 'preserves the default query without ID filters' do
       client.child_orders
       expect(connection).to have_received(:get).with('/v1/me/getchildorders', { product_code: 'BTC_JPY' })
+    end
+  end
+
+  describe '#parent_orders' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:http) { instance_double(Net::HTTP) }
+    let(:response) { instance_double(Net::HTTPOK, code: '200', body: '[{"id":75,"parent_order_state":"ACTIVE"}]') }
+
+    before do
+      allow(Net::HTTP).to receive(:start).and_return(http)
+      allow(http).to receive(:request).and_return(response)
+      allow(Time).to receive(:now).and_return(Time.at(1_000_000))
+    end
+
+    it 'requests the default product without optional filters' do
+      client.parent_orders
+
+      expect(http).to have_received(:request).with(
+        an_instance_of(Net::HTTP::Get).and(have_attributes(path: '/v1/me/getparentorders?product_code=BTC_JPY'))
+      )
+    end
+
+    it 'sends the product, state, and pagination filters and returns the parsed orders' do
+      orders = client.parent_orders(product_code: 'ETH_JPY', count: 10, before: 100, after: 50,
+                                    parent_order_state: 'ACTIVE')
+
+      expect(orders).to eq([{ 'id' => 75, 'parent_order_state' => 'ACTIVE' }])
+      expect(http).to have_received(:request) do |request|
+        uri = URI.parse(request.path)
+        expect(request).to be_an_instance_of(Net::HTTP::Get)
+        expect(uri.path).to eq('/v1/me/getparentorders')
+        expect(URI.decode_www_form(uri.query).to_h).to eq(
+          'product_code' => 'ETH_JPY', 'count' => '10', 'before' => '100', 'after' => '50',
+          'parent_order_state' => 'ACTIVE'
+        )
+      end
+    end
+
+    context 'when the API rejects the request' do
+      let(:body) { '{"error":"Unauthorized"}' }
+      let(:response) { instance_double(Net::HTTPUnauthorized, code: '401', body: body) }
+
+      it 'raises a response error with the status and raw body' do
+        expect do
+          client.parent_orders
+        end.to raise_error(Bitflyer::HTTP::ResponseError, 'bitFlyer API returned HTTP 401') { |error|
+          expect(error).to have_attributes(status: 401, body: body)
+        }
+      end
+    end
+  end
+
+  describe 'single-order requests' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:connection) { instance_double(Bitflyer::HTTP::Connection) }
+
+    before do
+      allow(Bitflyer::HTTP::Connection).to receive(:new).with('test_key', 'test_secret').and_return(connection)
+    end
+
+    {
+      cancel_child_order: [:post, '/v1/me/cancelchildorder', :child_order_id, :child_order_acceptance_id],
+      cancel_parent_order: [:post, '/v1/me/cancelparentorder', :parent_order_id, :parent_order_acceptance_id],
+      parent_order: [:get, '/v1/me/getparentorder', :parent_order_id, :parent_order_acceptance_id]
+    }.each do |method, (verb, path, order_id, acceptance_id)|
+      describe "##{method}" do
+        it 'rejects missing identifiers before dispatch' do
+          expect(connection).not_to receive(verb)
+          expect { client.public_send(method) }.to raise_error(ArgumentError, /exactly one/)
+          expect { client.public_send(method, order_id => nil, acceptance_id => nil) }
+            .to raise_error(ArgumentError, /exactly one/)
+        end
+
+        it 'rejects two identifiers before dispatch' do
+          expect(connection).not_to receive(verb)
+          expect { client.public_send(method, order_id => 'order-id', acceptance_id => 'acceptance-id') }
+            .to raise_error(ArgumentError, /exactly one/)
+        end
+
+        [[order_id, acceptance_id], [acceptance_id, order_id]].each do |identifier, other_identifier|
+          it "forwards only #{identifier} when supplied" do
+            parameters = { identifier => 'identifier' }
+            parameters[:product_code] = 'BTC_JPY' if verb == :post
+            expect(connection).to receive(verb).with(path, parameters).twice
+                                               .and_return(Bitflyer::HTTP::Response.new({}))
+
+            expect(client.public_send(method, identifier => 'identifier')).to eq({})
+            expect(client.public_send(method, identifier => 'identifier', other_identifier => nil)).to eq({})
+          end
+        end
+      end
+    end
+  end
+
+  describe '#withdraw' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:fields) { { bank_account_id: 1234, amount: 12_000 } }
+    let(:http) { instance_double(Net::HTTP) }
+    let(:response) { instance_double(Net::HTTPOK, code: '200', body: '{"message_id":"withdrawal-id"}') }
+
+    %i[bank_account_id amount].each do |field|
+      it "rejects a missing #{field} before posting" do
+        expect(Net::HTTP).not_to receive(:start)
+        expect { client.withdraw(**fields.except(field)) }.to raise_error(ArgumentError, /missing keyword: :#{field}/)
+      end
+    end
+
+    %i[bank_account_id amount currency_code].each do |field|
+      it "rejects a nil #{field} before posting" do
+        expect(Net::HTTP).not_to receive(:start)
+        expect { client.withdraw(**fields.merge(field => nil)) }.to raise_error(ArgumentError, "#{field} is required")
+      end
+    end
+
+    [BigDecimal('12000'), Rational(12_000, 1), Complex(12_000, 0), '12000',
+     Float::INFINITY, -Float::INFINITY, Float::NAN].each do |amount|
+      it "rejects amount #{amount.inspect} before making an HTTP request" do
+        expect(Net::HTTP).not_to receive(:start)
+        expect { client.withdraw(**fields.merge(amount: amount)) }
+          .to raise_error(ArgumentError, 'amount must be an Integer or a finite Float')
+      end
+    end
+
+    [12_000, 12_000.5].each do |amount|
+      it "sends #{amount.inspect} as a JSON number with the default currency" do
+        allow(Net::HTTP).to receive(:start).and_return(http)
+        expect(http).to receive(:request) do |request|
+          expect(request).to be_a(Net::HTTP::Post)
+          expect(request.path).to eq('/v1/me/withdraw')
+          expect(JSON.parse(request.body)).to match(
+            'currency_code' => 'JPY', 'bank_account_id' => 1234, 'amount' => eql(amount)
+          )
+          response
+        end
+
+        expect(client.withdraw(**fields.merge(amount: amount))).to eq('message_id' => 'withdrawal-id')
+      end
+    end
+
+    it 'includes the supplied two-factor authentication code' do
+      allow(Net::HTTP).to receive(:start).and_return(http)
+      expect(http).to receive(:request) do |request|
+        expect(JSON.parse(request.body)).to include('code' => '012345')
+        response
+      end
+
+      client.withdraw(**fields, code: '012345')
     end
   end
 
@@ -111,20 +367,67 @@ describe Bitflyer::HTTP::Private::Client do
         .to raise_error(ArgumentError, 'size must be an Integer or a finite Float')
     end
 
-    it 'serializes the order conditions as a JSON array' do
+    {
+      'MARKET' => {},
+      'LIMIT' => { price: 30_000 },
+      'STOP' => { trigger_price: 29_000 },
+      'STOP_LIMIT' => { price: 28_800, trigger_price: 29_000 },
+      'TRAIL' => { offset: 100 }
+    }.each do |type, extra_fields|
+      required_fields = type == 'MARKET' ? %i[product_code condition_type side size] : extra_fields.keys
+      required_fields.each do |field|
+        it "rejects a #{type} condition missing #{field} before making an HTTP request" do
+          expect(Net::HTTP).not_to receive(:start)
+          incomplete = condition.merge(condition_type: type, **extra_fields).reject { |key, _| key == field }
+
+          expect { client.send_parent_order(parameters: [condition, incomplete]) }
+            .to raise_error(ArgumentError, "#{field} is required in a parent order condition")
+        end
+      end
+    end
+
+    it 'rejects a nil required field in a string-keyed condition before making an HTTP request' do
+      expect(Net::HTTP).not_to receive(:start)
+      incomplete = condition.transform_keys(&:to_s).merge('condition_type' => 'LIMIT', 'price' => nil)
+
+      expect { client.send_parent_order(parameters: [incomplete]) }
+        .to raise_error(ArgumentError, 'price is required in a parent order condition')
+    end
+
+    it 'rejects a non-hash condition before making an HTTP request' do
+      expect(Net::HTTP).not_to receive(:start)
+
+      expect { client.send_parent_order(parameters: [nil]) }
+        .to raise_error(ArgumentError, 'each parent order condition must be a hash')
+    end
+
+    it 'rejects duplicate condition keys before making an HTTP request' do
+      expect(Net::HTTP).not_to receive(:start)
+      duplicate = condition.merge(condition_type: 'LIMIT', 'condition_type' => 'MARKET')
+
+      expect { client.send_parent_order(parameters: [duplicate]) }
+        .to raise_error(ArgumentError, 'duplicate parent order condition key: condition_type')
+    end
+
+    it 'serializes symbol-keyed, string-keyed, and mixed-keyed conditions as a JSON array' do
       http = instance_double(Net::HTTP)
       response = instance_double(Net::HTTPOK, code: '200', body: '{"parent_order_acceptance_id":"123"}')
+      stop_limit = condition.merge(condition_type: 'STOP_LIMIT', price: 28_800, trigger_price: 29_000)
+      trail = condition.transform_keys(&:to_s).merge('condition_type' => 'TRAIL', 'offset' => 100)
+      mixed = { product_code: 'BTC_JPY', 'condition_type' => 'LIMIT', side: 'BUY', 'size' => 1, price: 28_000 }.freeze
       allow(Net::HTTP).to receive(:start).and_return(http)
       expect(http).to receive(:request) do |request|
         expect(request.path).to eq('/v1/me/sendparentorder')
-        expect(JSON.parse(request.body)).to eq(
+        expect(request.body).to eq(JSON.generate(
+          'order_method' => 'IFDOCO',
           'time_in_force' => 'GTC',
-          'parameters' => [condition.transform_keys(&:to_s)]
-        )
+          'parameters' => [stop_limit.transform_keys(&:to_s), trail, mixed.transform_keys(&:to_s)]
+        ))
         response
       end
 
-      expect(client.send_parent_order(parameters: [condition])).to eq('parent_order_acceptance_id' => '123')
+      expect(client.send_parent_order(parameters: [stop_limit, trail, mixed], order_method: 'IFDOCO'))
+        .to eq('parent_order_acceptance_id' => '123')
     end
   end
 
@@ -145,11 +448,33 @@ describe Bitflyer::HTTP::Private::Client do
       )
     end
 
+    it 'signs the collateral history query and returns the parsed records' do
+      path = '/v1/me/getcollateralhistory?count=10&before=100&after=50'
+      records = [
+        { 'id' => 75, 'currency_code' => 'JPY', 'change' => -6, 'amount' => 994,
+          'reason_code' => 'CLEARING_COLL', 'date' => '2024-04-15T02:37:41.327' }
+      ]
+      allow(response).to receive(:body).and_return(JSON.generate(records))
+      expect(http).to receive(:request) do |request|
+        expect(request).to be_an_instance_of(Net::HTTP::Get)
+        expect(request.path).to eq(path)
+        expect(request['ACCESS-KEY']).to eq('test_key')
+        timestamp = request['ACCESS-TIMESTAMP']
+        expect(timestamp).to match(/\A\d+\z/)
+        signature = OpenSSL::HMAC.hexdigest('SHA256', 'test_secret', "#{timestamp}GET#{path}")
+        expect(request['ACCESS-SIGN']).to eq(signature)
+        response
+      end
+
+      expect(client.collateral_history(count: 10, before: 100, after: 50)).to eq(records)
+    end
+
     {
       coin_ins: '/v1/me/getcoinins',
       coin_outs: '/v1/me/getcoinouts',
       deposits: '/v1/me/getdeposits',
-      withdrawals: '/v1/me/getwithdrawals'
+      withdrawals: '/v1/me/getwithdrawals',
+      collateral_history: '/v1/me/getcollateralhistory'
     }.each do |method, path|
       describe "##{method}" do
         it 'requests the default page without a query string' do

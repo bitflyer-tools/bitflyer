@@ -3,6 +3,8 @@
 require 'spec_helper'
 require 'socket'
 require 'timeout'
+require 'stringio'
+require 'zlib'
 
 describe 'HTTPS connection reuse' do
   let(:client) { Bitflyer.http_public_client }
@@ -72,24 +74,93 @@ describe 'HTTPS connection reuse' do
     server_result
   end
 
+  it 'retries a GET after the server closes during the response body' do
+    serve do
+      interrupted_request = with_socket { |socket| respond_incompletely(socket) }
+      retried_request = with_socket { |socket| respond(socket) }
+      [interrupted_request, retried_request]
+    end
+
+    expect(client.health).to eq('status' => 'ok')
+    expect(server_result).to eq(['GET /v1/gethealth HTTP/1.1'] * 2)
+  end
+
+  %w[chunked Content-Length].each do |framing|
+    it "stops after one retry when a #{framing} response body is interrupted again" do
+      serve do
+        interrupted_requests = Array.new(2) do
+          with_socket { |socket| respond_incompletely(socket, framing) }
+        end
+        next_request = with_socket { |socket| respond(socket) }
+        interrupted_requests + [next_request]
+      end
+
+      expect { client.health }.to raise_error(EOFError)
+      expect(client.ticker).to eq('status' => 'ok')
+      expect(server_result).to eq(['GET /v1/gethealth HTTP/1.1'] * 2 + ['GET /v1/ticker?product_code=BTC_JPY HTTP/1.1'])
+    end
+  end
+
+  context 'with a response body limit' do
+    let(:limit) { 32 * 1024 }
+
+    before { stub_const('Bitflyer::HTTP::MAX_RESPONSE_BODY_BYTES', limit) }
+
+    ['200 OK', '503 Service Unavailable'].product(%i[chunked gzip]).each do |status, encoding|
+      it "rejects an unfinished #{encoding} response with status #{status} and reconnects" do
+        serve do
+          disconnected = with_socket do |socket|
+            read_request(socket)
+            socket.write(oversized_response_prefix(status, encoding))
+            socket.gets
+          end
+          with_socket { |socket| respond(socket) }
+          disconnected
+        end
+
+        expect { client.ticker }.to raise_error(Bitflyer::HTTP::ResponseTooLargeError)
+        expect(client.ticker).to eq('status' => 'ok')
+        expect(server_result).to be_nil
+      end
+    end
+
+    it 'returns a decoded text response exactly at the byte limit' do
+      body = ("é" * (limit / 2)).b
+      compressed = Zlib.gzip(body)
+      serve do
+        with_socket do |socket|
+          read_request(socket)
+          socket.write("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: #{compressed.bytesize}\r\n\r\n")
+          socket.write(compressed)
+        end
+      end
+
+      expect(client.health).to eq(body)
+      server_result
+    end
+  end
+
   context 'with a private client' do
     let(:client) { Bitflyer.http_private_client('key', 'secret') }
 
-    it 'does not replay a POST if the server closes before responding' do
-      serve do
-        post_request = with_socket do |socket|
-          respond(socket)
-          read_request(socket)
+    [nil, 'chunked', 'Content-Length'].each do |framing|
+      interruption = framing ? "during a #{framing} response body" : 'before responding'
+      it "does not replay a POST if the server closes #{interruption}" do
+        serve do
+          post_request = with_socket do |socket|
+            respond(socket)
+            framing ? respond_incompletely(socket, framing) : read_request(socket)
+          end
+          next_request = with_socket { |socket| respond(socket) }
+          [post_request, next_request]
         end
-        next_request = with_socket { |socket| respond(socket) }
-        [post_request, next_request]
-      end
 
-      expect(client.balance).to eq('status' => 'ok')
-      expect { client.cancel_all_child_orders }.to raise_error(EOFError)
-      expect(client.balance).to eq('status' => 'ok')
-      expect(server_result).to eq(['POST /v1/me/cancelallchildorders HTTP/1.1',
-                                   'GET /v1/me/getbalance HTTP/1.1'])
+        expect(client.balance).to eq('status' => 'ok')
+        expect { client.cancel_all_child_orders }.to raise_error(EOFError)
+        expect(client.balance).to eq('status' => 'ok')
+        expect(server_result).to eq(['POST /v1/me/cancelallchildorders HTTP/1.1',
+                                     'GET /v1/me/getbalance HTTP/1.1'])
+      end
     end
   end
 
@@ -112,6 +183,22 @@ describe 'HTTPS connection reuse' do
   def serve(&block)
     server
     @server_thread = Thread.new(&block)
+  end
+
+  def oversized_response_prefix(status, encoding)
+    body = 'a' * (limit * 2)
+    headers = "HTTP/1.1 #{status}\r\n"
+    if encoding == :chunked
+      return "#{headers}Transfer-Encoding: chunked\r\n\r\n#{(body.bytesize * 2).to_s(16)}\r\n#{body}"
+    end
+
+    buffer = StringIO.new
+    prefix = Zlib::GzipWriter.wrap(buffer) do |gzip|
+      gzip.write(body)
+      gzip.flush(Zlib::SYNC_FLUSH)
+      buffer.string.dup
+    end
+    "#{headers}Content-Encoding: gzip\r\nContent-Length: #{buffer.string.bytesize}\r\n\r\n#{prefix}"
   end
 
   def server_result
@@ -140,6 +227,17 @@ describe 'HTTPS connection reuse' do
     request_line = read_request(socket)
     body = '{"status":"ok"}'
     socket.write("HTTP/1.1 200 OK\r\nContent-Length: #{body.bytesize}\r\n\r\n#{body}")
+    request_line
+  end
+
+  def respond_incompletely(socket, framing = 'chunked')
+    request_line = read_request(socket)
+    payload = if framing == 'chunked'
+                "Transfer-Encoding: chunked\r\n\r\n4\r\npart\r\n"
+              else
+                "Content-Length: 100\r\n\r\npart"
+              end
+    socket.write("HTTP/1.1 200 OK\r\n#{payload}")
     request_line
   end
 end

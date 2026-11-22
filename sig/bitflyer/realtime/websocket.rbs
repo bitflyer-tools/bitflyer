@@ -8,12 +8,18 @@ module Bitflyer
       @lifecycle_lock: Mutex
       @monitor_wakeup: Thread::ConditionVariable
       @stopped: bool
+      @reconnect_delay: Float?
       @authentication_error: RuntimeError?
+      @pending_authentication_error: RuntimeError?
       @monitor: Thread?
       @session_mutex: Thread::Mutex
+      @channel_callbacks: Hash[Symbol, message_callback]
+      @order_books: Hash[String, OrderBook]
+      @board_feeds: Hash[Symbol, [Method, Symbol]]
       @next_subscription_id: Integer
       @last_setup_subscription_id: Integer
-      @pending_subscriptions: Hash[Integer, Symbol]
+      @pending_subscriptions: Hash[Integer, [Symbol, Integer?]]
+      @acknowledged_subscriptions: Hash[Symbol, bool]
       @subscription_rejected: bool
       @awaiting_authentication: bool
       @session_ready: bool
@@ -22,8 +28,8 @@ module Bitflyer
       @last_pong_monotonic: Integer?
 
       attr_reader websocket_client: Transport?
-      attr_accessor channel_names: Array[Symbol]
-      attr_accessor channel_callbacks: Hash[Symbol, message_callback]
+      def channel_names: () -> Array[Symbol]
+      def channel_callbacks: () -> Hash[Symbol, message_callback]
       attr_accessor ping_interval: Integer?
       attr_accessor ping_timeout: Integer?
       attr_accessor last_ping_at: Integer?
@@ -40,6 +46,8 @@ module Bitflyer
 
       def subscribe: (channel_name: Symbol) { (untyped message) -> void } -> void
 
+      def order_book: (product_code: String) -> OrderBook
+
       def unsubscribe: (channel_name: Symbol) -> void
 
       def connect: () -> void
@@ -54,37 +62,54 @@ module Bitflyer
 
       def handle_message: (payload: untyped, ?socket: Transport?) -> void
 
-      def handle_close: (error: untyped, ?socket: Transport?) -> void
+      def handle_close: (error: untyped, ?socket: Transport?, ?complete_close: (^() -> void)?) -> void
 
-      def setup_by_response: (json: String) -> void
+      def setup_by_response: (json: String, ?socket: Transport?) -> void
 
-      def authenticate: () -> void
+      def authenticate: (?socket: Transport?) -> void
 
-      def authenticated: (json: String) -> void
+      def authenticated: (json: String, ?socket: Transport?) -> void
 
       def authentication_succeeded?: (String json) -> bool
 
-      def subscribe_channels: () -> void
+      def subscribe_channels: (?socket: Transport?) -> void
 
       def acknowledge_subscription: (id: Integer, json: String, ?socket: Transport?) -> void
 
       def receive_pong: () -> void
 
-      def disconnect: () -> void
+      def disconnect: (?socket: Transport?) -> void
 
-      def emit_message: (json: String) -> void
+      def emit_message: (json: String, ?socket: Transport?) -> void
 
       def debug_log: (untyped message) -> void
 
       private
 
+      def registered_channels: () -> Array[Symbol]
+
+      def register_order_book: (String product_code) -> OrderBook
+
+      def register_board_feed: (Symbol channel, Method handler, Symbol delta_channel) -> void
+      def record_subscription_result: (Integer id, Symbol channel, untyped error) -> void
+      def route_board_messages: (Symbol channel, Array[untyped] messages) -> void
+
+      def route_messages: (Symbol channel, Array[untyped] messages, Transport? socket) { (Object? token) -> void } -> void
+
       def start_monitoring: () -> Thread
 
-      def wait_for_monitor_tick: () -> bool
+      def wait_for_monitor_tick: () -> (:retry | :poll)?
+
+      def poll_transport: () -> void
+
+      def advance_reconnect_delay: () -> void
+
+      def jittered_reconnect_delay: () -> Float
 
       def lifecycle_inactive?: () -> bool
 
-      def notify_ready: (Transport?) -> void
+      def notify_ready: (Transport?, ?async: bool) -> void
+      def prepare_ready_callback: (Transport?) -> ready_callback?
 
       def take_ready_callback: () -> ready_callback?
 
@@ -92,9 +117,13 @@ module Bitflyer
 
       def clear_readiness: () -> void
 
-      def reject_authentication: (String json) -> void
+      def reject_authentication: (String json, ?socket: Transport?) -> void
 
-      def notify_disconnected: (untyped error) -> void
+      def notify_authentication_failure: (RuntimeError error) -> void
+
+      def dispatch_disconnected: (untyped error, disconnected_callback? callback) -> void
+
+      def notify_disconnected: (untyped error, disconnected_callback callback) -> void
 
       def monotonic_milliseconds: () -> Integer
 

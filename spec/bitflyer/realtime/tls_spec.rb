@@ -40,14 +40,66 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     connect_to_trusted_server
   end
 
-  it 'closes the connection when the TLS peer stalls the WebSocket upgrade' do
+  it 'reports a stalled WebSocket upgrade once before retrying the TLS connection' do
     stub_const('Bitflyer::Realtime::Transport::HANDSHAKE_TIMEOUT', 0.2)
+    start_handshake = Queue.new
+    allow_any_instance_of(Bitflyer::Realtime::Transport).to receive(:read_handshake).and_wrap_original do |read, socket|
+      start_handshake.pop
+      read.call(socket)
+    end
+    events = Queue.new
     serve(trusted_certificate) { |socket| socket.read }
     @client = connect_client
+    transport = @client.websocket_client
+    @client.disconnected = ->(error) { events << [error, transport.reconnectable?] }
+    start_handshake << true
 
     expect(server_result).to start_with('GET /socket.io/?transport=websocket HTTP/1.1')
-    expect(@client.websocket_client.thread.join(5)).to be_a(Thread)
-    expect(@client.websocket_client).to be_closed
+    expect(transport.thread.join(5)).to be_a(Thread)
+    expect(transport).to be_closed
+    expect(events.pop(timeout: 5)).to match([an_instance_of(Timeout::Error), true])
+
+    authentication = Queue.new
+    serve(trusted_certificate) do |socket|
+      authentication << receive_authentication(socket)
+      socket.read
+    end
+    start_handshake << true
+    allow(@client).to receive(:start_monitoring).and_call_original
+    @client.instance_variable_set(:@monitor, @client.__send__(:start_monitoring))
+    expect(Timeout.timeout(5) { authentication.pop }).to start_with('420["auth",{"api_key":"test-api-key"')
+    expect(@client.websocket_client).not_to equal(transport)
+    expect(events).to be_empty
+  ensure
+    start_handshake << true
+  end
+
+  it 'processes timely pongs across monitor ticks while a ticker callback is blocked' do
+    release = Queue.new
+    started = Queue.new
+    pongs = Queue.new
+    allow_any_instance_of(described_class).to receive(:start_monitoring).and_call_original
+    serve(trusted_certificate) { |socket| answer_heartbeats(socket) }
+    @client = described_class.new(host: host, key: nil, secret: nil)
+    allow(@client).to receive(:receive_pong).and_wrap_original do |receive_pong|
+      receive_pong.call
+      pongs << true
+    end
+    @client.subscribe(channel_name: :lightning_ticker_BTC_JPY) do |event|
+      started << Thread.current
+      release.pop if event['ltp'] == 100
+    end
+
+    worker = started.pop(timeout: 5)
+    expect(worker).to be_a(Thread)
+    2.times { expect(pongs.pop(timeout: 5)).to be(true) }
+    expect(@client.websocket_client).to be_open
+    Timeout.timeout(5) { @client.shutdown }
+    release << true
+    expect(worker.join(5)).to eq(worker)
+    expect(started).to be_empty
+  ensure
+    release << true
   end
 
   {
@@ -119,6 +171,23 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     driver.on(:message) { |event| authentication = event.data }
     driver.parse(socket.readpartial(4096)) until authentication
     authentication
+  end
+
+  def answer_heartbeats(socket)
+    driver = WebSocket::Driver.server(socket)
+    driver.on(:connect) do
+      driver.start
+      driver.text('0{"pingInterval":100,"pingTimeout":1500}')
+    end
+    driver.on(:message) do |event|
+      case event.data
+      when /"subscribe"/ then driver.text('42["lightning_ticker_BTC_JPY",{"ltp":100},{"ltp":101}]')
+      when '2' then driver.text('3')
+      end
+    end
+    loop { driver.parse(socket.readpartial(4096)) }
+  rescue EOFError, Errno::ECONNRESET
+    nil
   end
 
   def certificate(hostname, serial, public_key, issuer: nil)

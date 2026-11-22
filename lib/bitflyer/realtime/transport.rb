@@ -11,6 +11,7 @@ module Bitflyer
     class Transport
       HANDSHAKE_TIMEOUT = 10
       READ_SIZE = 16 * 1024
+      WRITE_TIMEOUT = 10
 
       attr_reader :url, :thread
 
@@ -18,7 +19,7 @@ module Bitflyer
         @driver_lock = Mutex.new
         @close_lock = Mutex.new
         @handlers = {}
-        @closed = false
+        @close_state = nil
       end
 
       def on(event, &handler)
@@ -42,19 +43,24 @@ module Bitflyer
       end
 
       def closed?
-        @socket.nil? || @closed
+        @socket.nil? || !@close_state.nil?
+      end
+
+      def reconnectable?
+        @close_state == :closed
       end
 
       def send(data)
-        @driver_lock.synchronize { @driver&.text(data) if open? }
-      rescue IOError, SystemCallError, OpenSSL::SSL::SSLError => e
+        sent = @driver_lock.synchronize { @driver&.text(data) if open? }
+        sent == true && !closed?
+      rescue IOError, SystemCallError, OpenSSL::SSL::SSLError, Timeout::Error => e
         terminate(e)
         false
       end
 
       def close
         @driver_lock.synchronize { @driver&.close if open? }
-      rescue IOError, SystemCallError, OpenSSL::SSL::SSLError
+      rescue IOError, SystemCallError, OpenSSL::SSL::SSLError, Timeout::Error
         nil
       ensure
         terminate
@@ -68,7 +74,7 @@ module Bitflyer
         socket = @socket
         raise IOError, 'WebSocket is closed' if closed? || !socket
 
-        socket.write(data)
+        Timeout.timeout(WRITE_TIMEOUT) { socket.write(data) }
       end
 
       private
@@ -141,14 +147,18 @@ module Bitflyer
       end
 
       def terminate(error = nil, notify: true)
+        closing = false
         socket = @close_lock.synchronize do
-          return if @closed
+          return if @close_state
 
-          @closed = true
+          closing = true
+          @close_state = :closing
           @socket&.close
           @socket
         end
-        @handlers[:close]&.call(error) if socket && notify
+        @handlers[:close]&.call(error, -> { @close_state = :closed }) if socket && notify
+      ensure
+        @close_state = :closed if closing
       end
     end
   end
