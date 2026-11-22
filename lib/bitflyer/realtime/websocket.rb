@@ -11,11 +11,13 @@ module Bitflyer
       CONNECTION_TIMEOUT = 10
       SESSION_RESPONSE_TIMEOUT_MS = 10_000
       CALLBACK_QUEUE_LIMIT = 1_024
+      FAILURE_NOTIFICATION_QUEUE_LIMIT = 1_024
       SUBSCRIPTION_ACK_TIMEOUT_MS = 10_000
       RECONNECT_BASE_DELAY = 1.0
       RECONNECT_MAX_DELAY = 30.0
       private_constant :CONNECTION_TIMEOUT, :SESSION_RESPONSE_TIMEOUT_MS, :CALLBACK_QUEUE_LIMIT,
-                       :SUBSCRIPTION_ACK_TIMEOUT_MS, :RECONNECT_BASE_DELAY, :RECONNECT_MAX_DELAY
+                       :FAILURE_NOTIFICATION_QUEUE_LIMIT, :SUBSCRIPTION_ACK_TIMEOUT_MS,
+                       :RECONNECT_BASE_DELAY, :RECONNECT_MAX_DELAY
 
       attr_accessor :ping_interval, :ping_timeout, :subscription_failed
       attr_reader :websocket_client, :ready, :disconnected, :last_ping_at, :last_pong_at
@@ -109,7 +111,7 @@ module Bitflyer
 
             @channel_callbacks.delete(channel_name)
             @subscription_tokens.delete(channel_name)
-            @callback_queue.delete_if { |channel,| channel == channel_name }
+            discard_channel_callbacks(channel_name)
             return if @board_feeds.key?(channel_name)
 
             @pending_subscriptions.delete_if { |_id, (channel, _deadline)| channel == channel_name }
@@ -346,6 +348,7 @@ module Bitflyer
       def initialize_callbacks
         @subscription_tokens = {}
         @callback_queue = []
+        @pending_callback_counts = Hash.new(0)
         @callback_transport = nil
         @callback_wakeup = ConditionVariable.new
         @callback_worker = nil
@@ -354,22 +357,26 @@ module Bitflyer
       def enqueue_callback(channel, token, message, socket)
         @lifecycle_lock.synchronize do
           return unless active_callback_transport?(socket)
-          return if @callback_queue.size >= CALLBACK_QUEUE_LIMIT
+          return if @pending_callback_counts[:market_data] >= CALLBACK_QUEUE_LIMIT
           return unless subscribed_callback(channel, token)
 
-          push_callback([channel, token, message, socket])
+          push_callback(:market_data, [channel, token, message, socket])
         end
       end
 
-      def enqueue_notification(socket, &notification)
+      def enqueue_notification(socket, kind, &notification)
         @lifecycle_lock.synchronize do
-          push_callback([nil, nil, notification, socket]) if active_callback_transport?(socket)
+          return unless active_callback_transport?(socket)
+          return if kind == :subscription_failed && @pending_callback_counts[kind] >= FAILURE_NOTIFICATION_QUEUE_LIMIT
+
+          push_callback(kind, [nil, nil, notification, socket])
         end
       end
 
-      def push_callback(event)
+      def push_callback(kind, event)
         @callback_worker ||= Thread.new { deliver_callbacks }
-        @callback_queue << event
+        @callback_queue << [kind, event]
+        @pending_callback_counts[kind] += 1
         @callback_wakeup.signal
       end
 
@@ -382,7 +389,12 @@ module Bitflyer
       def next_callback_event
         @lifecycle_lock.synchronize do
           @callback_wakeup.wait(@lifecycle_lock) while @callback_queue.empty? && !lifecycle_inactive?
-          @callback_queue.shift
+          entry = @callback_queue.shift
+          next unless entry
+
+          kind, event = entry
+          @pending_callback_counts[kind] -= 1
+          event
         end
       end
 
@@ -408,8 +420,19 @@ module Bitflyer
         end
       end
 
-      def stop_callbacks
+      def discard_channel_callbacks(channel)
+        previous_size = @callback_queue.size
+        @callback_queue.delete_if { |kind, event| kind == :market_data && event.first == channel }
+        @pending_callback_counts[:market_data] -= previous_size - @callback_queue.size
+      end
+
+      def clear_callback_queue
         @callback_queue.clear
+        @pending_callback_counts.clear
+      end
+
+      def stop_callbacks
+        clear_callback_queue
         @callback_wakeup.signal
       end
 
@@ -580,7 +603,7 @@ module Bitflyer
         @session_mutex.synchronize do
           @websocket_client = transport
           @callback_transport = transport
-          @callback_queue.clear
+          clear_callback_queue
           clear_readiness
         end
       end
@@ -707,7 +730,7 @@ module Bitflyer
 
       def notify_subscription_failure(socket, channel, error)
         failure = @subscription_failed
-        enqueue_notification(socket) { failure.call(channel, error) } if failure
+        enqueue_notification(socket, :subscription_failed) { failure.call(channel, error) } if failure
       end
 
       def wait_for_monitor_tick
@@ -753,7 +776,7 @@ module Bitflyer
         notification = prepare_ready_callback(socket)
         return unless notification
 
-        async ? enqueue_notification(socket) { notification.call } : notification.call
+        async ? enqueue_notification(socket, :ready) { notification.call } : notification.call
       end
 
       def prepare_ready_callback(socket)
@@ -795,7 +818,7 @@ module Bitflyer
           return false unless @websocket_client.equal?(socket)
 
           @callback_transport = nil
-          @callback_queue.clear
+          clear_callback_queue
           clear_readiness
           true
         end

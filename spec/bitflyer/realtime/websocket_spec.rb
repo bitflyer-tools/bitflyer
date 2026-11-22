@@ -1373,6 +1373,52 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     expect(ready).to have_received(:call).once
   end
 
+  it 'bounds pending failures independently of market data while processing acknowledgments and pongs' do
+    client = realtime_client
+    websocket = client.websocket_client
+    resume = Queue.new
+    failures = Queue.new
+    ticks = Queue.new
+    client.subscription_failed = lambda do |_channel, error|
+      failures << error
+      resume.pop if error == 'first'
+    end
+    receive_frame('0{}')
+    client.ticker_btc_jpy = ->(message) { ticks << message }
+    receive_frame('431[null]')
+    client.executions_btc_jpy = ->(_message) {}
+    receive_frame('432["first"]')
+    expect(failures.pop(timeout: 5)).to eq('first')
+
+    limit = described_class.const_get(:FAILURE_NOTIFICATION_QUEUE_LIMIT)
+    market_limit = described_class.const_get(:CALLBACK_QUEUE_LIMIT)
+    websocket.last_pong_at = 0
+    reader = Thread.new do
+      (limit + 2).times do |index|
+        client.executions_btc_jpy = ->(_message) {}
+        receive_frame("43#{index + 3}#{[index].to_json}")
+      end
+      receive_frame('3')
+      receive_frame("42#{['lightning_ticker_BTC_JPY', *(0..market_limit)].to_json}")
+    end
+    expect(reader.join(5)).to eq(reader)
+    expect(transport).to have_received(:send).with("42#{limit + 4}#{%w[subscribe lightning_executions_BTC_JPY].to_json}")
+    expect(websocket.last_pong_at).to be_positive
+
+    resume.close
+    delivered = Array.new(market_limit) { ticks.pop(timeout: 5) || break }
+    expect(delivered).to eq((0...market_limit).to_a)
+    expect(Array.new(failures.size) { failures.pop }).to eq((0...limit).to_a)
+
+    client.executions_btc_jpy = ->(_message) {}
+    receive_frame("43#{limit + 5}#{['after drain'].to_json}")
+    expect(failures.pop(timeout: 5)).to eq('after drain')
+    expect(ticks).to be_empty
+  ensure
+    resume&.close
+    reader&.join(5)
+  end
+
   { ready: '431[null]', subscription_failed: '431["denied"]' }.each do |notification, acknowledgment|
     it "processes a pong while the #{notification} callback is blocked" do
       client = realtime_client
