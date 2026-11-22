@@ -19,6 +19,8 @@ module Bitflyer
 
         def collateral: () -> untyped
 
+        def collateral_history: (?count: Integer?, ?before: Integer?, ?after: Integer?) -> untyped
+
         def addresses: () -> untyped
 
         def coin_ins: (?count: Integer?, ?before: Integer?, ?after: Integer?) -> untyped

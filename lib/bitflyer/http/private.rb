@@ -35,6 +35,10 @@ module Bitflyer
           @connection.get('/v1/me/getcollateral').body
         end
 
+        def collateral_history(count: nil, before: nil, after: nil)
+          @connection.get('/v1/me/getcollateralhistory', count: count, before: before, after: after).body
+        end
+
         def addresses
           @connection.get('/v1/me/getaddresses').body
         end
