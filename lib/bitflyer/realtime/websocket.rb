@@ -202,7 +202,7 @@ module Bitflyer
 
         case code
         when '0' then setup_by_response(json: prefix.post_match, socket: socket)
-        when '3' then receive_pong
+        when '3' then receive_pong(socket: socket)
         when '41' then disconnect(socket: socket)
         when '42' then emit_message(json: prefix.post_match, socket: socket)
         when '430' then authenticated(json: prefix.post_match, socket: socket)
@@ -305,10 +305,14 @@ module Bitflyer
         notify_ready(socket, async: true)
       end
 
-      def receive_pong
+      def receive_pong(socket: @websocket_client)
+        @lifecycle_lock.synchronize do
+          return if lifecycle_inactive? || !socket || !@websocket_client.equal?(socket)
+
+          @last_pong_monotonic = monotonic_milliseconds
+          @last_pong_at = Time.now.to_i
+        end
         debug_log 'Received pong'
-        @last_pong_monotonic = monotonic_milliseconds
-        @last_pong_at = Time.now.to_i
       end
 
       def disconnect(socket: @websocket_client)

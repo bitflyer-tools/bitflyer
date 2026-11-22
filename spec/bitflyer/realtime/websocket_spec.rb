@@ -703,6 +703,32 @@ describe Bitflyer::Realtime::WebSocketClient, 'when replacing a socket' do
     expect(replacement_socket).to receive(:close)
     client.wait_pong
   end
+
+  it 'keeps the replacement heartbeat deadline when an old pong is already being dispatched' do
+    allow(Time).to receive(:now) { Time.at(@heartbeat_time / 1_000) }
+    allow(replacement_socket).to receive(:close)
+    client = described_class.new(host: 'wss://example.test', key: nil, secret: nil)
+    setup = Struct.new(:data).new('0{"pingInterval":1000,"pingTimeout":1000}')
+    payload = double('pong frame')
+    allow(payload).to receive(:data) do
+      allow(original_socket).to receive(:reconnectable?).and_return(true)
+      client.reconnect
+      message_handlers.fetch(replacement_socket).call(setup)
+      @heartbeat_time += 1_000
+      '3'
+    end
+
+    message_handlers.fetch(original_socket).call(payload)
+
+    expect(client.last_pong_at).to eq(10)
+    @heartbeat_time += 999
+    client.wait_pong
+    expect(replacement_socket).not_to have_received(:close)
+
+    @heartbeat_time += 1
+    client.wait_pong
+    expect(replacement_socket).to have_received(:close).once
+  end
 end
 
 RSpec.describe Bitflyer::Realtime::WebSocketClient do
@@ -754,7 +780,9 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 
   it 'restarts the pong deadline when a pong is received' do
     @heartbeat_time += 1_500
-    client.receive_pong
+    @wall_time += 1
+    client.handle_message(payload: Struct.new(:data).new('3'), socket: socket)
+    expect(client.last_pong_at).to eq(1_001)
 
     @heartbeat_time += 2_249
     client.wait_pong
