@@ -10,6 +10,7 @@ module Bitflyer
   module Realtime
     class Transport
       HANDSHAKE_TIMEOUT = 10
+      WRITE_TIMEOUT = 10
 
       attr_reader :url, :thread
 
@@ -51,14 +52,14 @@ module Bitflyer
       def send(data)
         sent = @driver_lock.synchronize { @driver&.text(data) if open? }
         sent == true && !closed?
-      rescue IOError, SystemCallError, OpenSSL::SSL::SSLError => e
+      rescue IOError, SystemCallError, OpenSSL::SSL::SSLError, Timeout::Error => e
         terminate(e)
         false
       end
 
       def close
         @driver_lock.synchronize { @driver&.close if open? }
-      rescue IOError, SystemCallError, OpenSSL::SSL::SSLError
+      rescue IOError, SystemCallError, OpenSSL::SSL::SSLError, Timeout::Error
         nil
       ensure
         terminate
@@ -72,7 +73,7 @@ module Bitflyer
         socket = @socket
         raise IOError, 'WebSocket is closed' if closed? || !socket
 
-        socket.write(data)
+        Timeout.timeout(WRITE_TIMEOUT) { socket.write(data) }
       end
 
       private

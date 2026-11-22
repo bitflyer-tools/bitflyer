@@ -2,6 +2,7 @@ module Bitflyer
   module Realtime
     class Transport
       HANDSHAKE_TIMEOUT: Integer
+      WRITE_TIMEOUT: Integer
 
       attr_reader url: String?
       attr_reader thread: Thread?
