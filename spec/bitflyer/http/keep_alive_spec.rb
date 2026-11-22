@@ -101,6 +101,53 @@ describe 'HTTPS connection reuse' do
     end
   end
 
+  context 'with a request deadline' do
+    before { stub_const('Bitflyer::HTTP::REQUEST_TIMEOUT', 0.75) }
+
+    it 'closes a response that keeps making read progress and allows a fresh connection' do
+      serve do
+        chunks_sent = with_socket do |socket|
+          read_request(socket)
+          socket.write("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+          30.times do |index|
+            break index if IO.select([socket], nil, nil, 0.05) && socket.gets.nil?
+
+            socket.write("1\r\na\r\n")
+          end
+        end
+        with_socket { |socket| respond(socket) }
+        chunks_sent
+      end
+
+      expect { client.health }.to raise_error(Bitflyer::HTTP::RequestTimeoutError)
+      expect(client.ticker).to eq('status' => 'ok')
+      expect(server_result).to be_between(2, 29)
+    end
+
+    it 'uses the original deadline after retrying an interrupted GET' do
+      serve do
+        first_request = with_socket do |socket|
+          request_line = respond_incompletely(socket)
+          sleep 0.45
+          request_line
+        end
+        retry_request = with_socket do |socket|
+          request_line = read_request(socket)
+          if IO.select([socket], nil, nil, 0.45)
+            socket.gets
+          else
+            socket.write("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+          end
+          request_line
+        end
+        [first_request, retry_request]
+      end
+
+      expect { client.health }.to raise_error(Bitflyer::HTTP::RequestTimeoutError)
+      expect(server_result).to eq(['GET /v1/gethealth HTTP/1.1'] * 2)
+    end
+  end
+
   context 'with a response body limit' do
     let(:limit) { 32 * 1024 }
 
