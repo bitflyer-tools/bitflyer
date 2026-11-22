@@ -128,6 +128,44 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     expect(book.current.best_bid.price).to eq(102)
   end
 
+  {
+    'an overflowing price' => '{"price":1e309,"size":1}',
+    'an overflowing size' => '{"price":100,"size":1e309}',
+    'a negative price' => '{"price":-100,"size":1}',
+    'a negative size' => '{"price":100,"size":-1}',
+    'a negative size at a zero price' => '{"price":0,"size":-1}',
+    'a string price' => '{"price":"100","size":1}',
+    'a null size' => '{"price":100,"size":null}'
+  }.each do |description, invalid_level|
+    it "rejects #{description} in snapshots and deltas and recovers on a valid snapshot" do
+      book
+      frame('0{}')
+      frame('431[null]')
+
+      [snapshot, delta].each do |channel|
+        board(snapshot, bids: [[99, 1.5]])
+        expect(book.current.best_bid.size).to eq(1.5)
+        expect(book.top_of_book.best_bid.price).to eq(99)
+        invalid_board = %({"bids":[{"price":101,"size":2}],"asks":[#{invalid_level}]})
+
+        expect { frame(%(42["#{channel}",#{invalid_board}])) }
+          .to output(/price and size must be finite non-negative numbers/).to_stdout
+        expect(book).not_to be_ready
+        expect(book.current).to be_nil
+        expect(book.top_of_book).to be_nil
+
+        board(delta, bids: [[102, 2]])
+        expect(book).not_to be_ready
+      end
+
+      board(snapshot, bids: [[103.5, 0.5]])
+      expect(book).to be_ready
+      expect(book.current.bids.map(&:price)).to eq([103.5])
+      board(delta, bids: [[103.5, 0.0], [0, 1]])
+      expect(book.current.bids).to be_empty
+    end
+  end
+
   it 'invalidates before notifying disconnect and waits for a new snapshot on the replacement connection' do
     book
     frame('0{}')

@@ -116,11 +116,18 @@ module Bitflyer
         levels.each do |level|
           price = level.fetch('price')
           size = level.fetch('size')
+          raise ArgumentError, 'Order book price and size must be finite non-negative numbers' unless
+            valid_level_number?(price) && valid_level_number?(size)
+
           next if price.zero?
 
           key = price.to_r
           size.zero? ? side.delete(key) : side[key] = Level.new(price: price, size: size)
         end
+      end
+
+      def valid_level_number?(value)
+        (value.is_a?(Integer) || (value.is_a?(Float) && value.finite?)) && value >= 0
       end
 
       def sorted_levels(side)

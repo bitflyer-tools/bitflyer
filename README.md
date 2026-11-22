@@ -223,6 +223,9 @@ Both methods return `nil` before the first snapshot, after shutdown, and while w
 for a fresh snapshot after a disconnect or a delta that fails to apply. The book ignores
 deltas while waiting for a fresh snapshot. Views already read stay unchanged as new messages arrive.
 
+Updates with a non-finite or negative price or size invalidate the book until a valid
+snapshot arrives. Zero-price levels are ignored, and a zero size removes the level at its price.
+
 See the [snapshot](https://bf-lightning-api.readme.io/docs/realtime-board-snapshot) and
 [delta](https://bf-lightning-api.readme.io/docs/realtime-board) channel documentation.
 
