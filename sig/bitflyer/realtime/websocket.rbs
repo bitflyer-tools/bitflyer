@@ -18,6 +18,7 @@ module Bitflyer
       @board_feeds: Hash[Symbol, [Method, Symbol]]
       @next_subscription_id: Integer
       @last_setup_subscription_id: Integer
+      @pending_subscription_ids: Hash[Symbol, Integer]
       @pending_subscriptions: Hash[Integer, [Symbol, Integer?]]
       @acknowledged_subscriptions: Hash[Symbol, bool]
       @subscription_rejected: bool

@@ -2,6 +2,7 @@
 <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
 [![All Contributors](https://img.shields.io/badge/all_contributors-4-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
+[![CI](https://github.com/bitflyer-tools/bitflyer/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/bitflyer-tools/bitflyer/actions/workflows/test.yml)
 [![Gem Version](https://badge.fury.io/rb/bitflyer.svg)](https://badge.fury.io/rb/bitflyer)
 [![Code Climate](https://codeclimate.com/github/bitflyer-tools/bitflyer/badges/gpa.svg)](https://codeclimate.com/github/bitflyer-tools/bitflyer)
 [![Libraries.io dependency status for GitHub repo](https://img.shields.io/librariesio/github/bitflyer-tools/bitflyer.svg)](https://libraries.io/github/bitflyer-tools/bitflyer)
@@ -43,6 +44,10 @@ If the response has no body, the client returns `nil`.
 If the connection closes before the declared body length is received, the client retries a GET
 once and raises `EOFError` if the retry is also incomplete. A POST raises `EOFError` without retrying.
 
+Each HTTP request has a 30-second deadline covering connection establishment, the full response,
+and any GET retry. When the deadline expires, the client closes the connection and raises
+`Bitflyer::HTTP::RequestTimeoutError` (a subclass of `Timeout::Error`). The next request opens a new connection.
+
 HTTP responses outside the 2xx range raise `Bitflyer::HTTP::ResponseError`. The error provides
 the numeric HTTP status in `status` and the raw response body in `body`.
 
@@ -57,8 +62,10 @@ if neither identifier or both identifiers are non-nil.
 `send_child_order` requires `child_order_type`, `side`, and `size`. A `LIMIT` order also requires
 `price`. Missing or nil required values raise `ArgumentError` before an HTTP request is made.
 
-`send_parent_order` takes an array of condition hashes with symbol or string keys. Each condition
-requires `product_code`, `condition_type`, `side`, and `size`. `LIMIT` and `STOP_LIMIT` require
+`send_parent_order` takes an array of condition hashes with symbol or string keys.
+Provide one condition for `SIMPLE` (the default), two for `IFD` or `OCO`, and three for `IFDOCO`.
+An incorrect condition count raises `ArgumentError` before an HTTP request is made.
+Each condition requires `product_code`, `condition_type`, `side`, and `size`. `LIMIT` and `STOP_LIMIT` require
 `price`, `STOP` and `STOP_LIMIT` require `trigger_price`, and `TRAIL` requires `offset`.
 Symbol and string keys may be mixed. Missing or nil required values and keys that collide after
 conversion to strings raise `ArgumentError` before an HTTP request is made.
@@ -221,7 +228,11 @@ both exist, and `nil` otherwise.
 and `asks` (lowest price first), along with the same best-level and spread accessors.
 Both methods return `nil` before the first snapshot, after shutdown, and while waiting
 for a fresh snapshot after a disconnect or a delta that fails to apply. The book ignores
-deltas while waiting for a fresh snapshot. Views already read stay unchanged as new messages arrive.
+deltas while waiting for a fresh snapshot. Raw board callbacks still receive decoded messages
+in arrival order when a book update fails. Views already read stay unchanged as new messages arrive.
+
+Updates with a non-finite or negative price or size invalidate the book until a valid
+snapshot arrives. Zero-price levels are ignored, and a zero size removes the level at its price.
 
 See the [snapshot](https://bf-lightning-api.readme.io/docs/realtime-board-snapshot) and
 [delta](https://bf-lightning-api.readme.io/docs/realtime-board) channel documentation.
@@ -251,10 +262,13 @@ Call `client.shutdown` when you finish using a realtime client. It stops automat
 Concurrent calls wait for the connection to close.
 Market data callbacks and `ready` and `subscription_failed` notifications from incoming frames
 run serially on a separate thread, so a slow callback does not block heartbeat processing.
-New market data events are dropped if 1,024 callbacks are pending or if adding the
-event would exceed the 8 MiB (8,388,608 byte) pending market data payload budget.
-The budget counts each pending message's compact JSON byte length. Dequeuing or
-discarding an event frees its budget. Connection status notifications can still be queued.
+The queue holds up to 1,024 pending market data callbacks and, independently, up to
+1,024 pending `subscription_failed` notifications. Market data also has an 8 MiB
+(8,388,608 byte) pending payload budget, measured as the sum of the messages' compact JSON
+byte lengths. New entries are dropped when their count limit is reached or, for market
+data, when adding the message would exceed the byte budget. Dequeuing or discarding an
+entry frees its capacity. The limits exclude the running callback.
+Pending entries run in the order they were queued, including `ready` notifications.
 Disconnecting or shutting down discards pending callbacks from that connection and allows any
 callback already running to finish.
 

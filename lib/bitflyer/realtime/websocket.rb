@@ -12,12 +12,13 @@ module Bitflyer
       SESSION_RESPONSE_TIMEOUT_MS = 10_000
       CALLBACK_QUEUE_LIMIT = 1_024
       CALLBACK_PAYLOAD_LIMIT = 8 * 1024 * 1024
+      FAILURE_NOTIFICATION_QUEUE_LIMIT = 1_024
       SUBSCRIPTION_ACK_TIMEOUT_MS = 10_000
       RECONNECT_BASE_DELAY = 1.0
       RECONNECT_MAX_DELAY = 30.0
       private_constant :CONNECTION_TIMEOUT, :SESSION_RESPONSE_TIMEOUT_MS, :CALLBACK_QUEUE_LIMIT,
-                       :CALLBACK_PAYLOAD_LIMIT, :SUBSCRIPTION_ACK_TIMEOUT_MS, :RECONNECT_BASE_DELAY,
-                       :RECONNECT_MAX_DELAY
+                       :CALLBACK_PAYLOAD_LIMIT, :FAILURE_NOTIFICATION_QUEUE_LIMIT, :SUBSCRIPTION_ACK_TIMEOUT_MS,
+                       :RECONNECT_BASE_DELAY, :RECONNECT_MAX_DELAY
 
       attr_accessor :ping_interval, :ping_timeout, :subscription_failed
       attr_reader :websocket_client, :ready, :disconnected, :last_ping_at, :last_pong_at
@@ -114,7 +115,7 @@ module Bitflyer
             discard_channel_callbacks(channel_name)
             return if @board_feeds.key?(channel_name)
 
-            @pending_subscriptions.delete_if { |_id, (channel, _deadline)| channel == channel_name }
+            remove_pending_subscription(channel_name)
             @acknowledged_subscriptions.delete(channel_name)
             queue_subscription_frame("42#{['unsubscribe', channel_name].to_json}") if @session_ready
             @websocket_client
@@ -299,7 +300,7 @@ module Bitflyer
 
           channel = pending.first
           error = JSON.parse(json).first
-          @pending_subscriptions.delete(id)
+          remove_pending_subscription(channel)
           record_subscription_result(id, channel, error)
           [channel, error]
         end
@@ -349,6 +350,7 @@ module Bitflyer
         @subscription_tokens = {}
         @callback_queue = []
         @pending_callback_bytes = 0
+        @pending_callback_counts = Hash.new(0)
         @callback_transport = nil
         @callback_wakeup = ConditionVariable.new
         @callback_worker = nil
@@ -358,24 +360,28 @@ module Bitflyer
         bytes = JSON.generate(message, allow_nan: true).bytesize
         @lifecycle_lock.synchronize do
           return unless active_callback_transport?(socket)
-          return if @callback_queue.size >= CALLBACK_QUEUE_LIMIT
+          return if @pending_callback_counts[:market_data] >= CALLBACK_QUEUE_LIMIT
           return if @pending_callback_bytes + bytes > CALLBACK_PAYLOAD_LIMIT
           return unless subscribed_callback(channel, token)
 
-          push_callback([bytes, channel, token, message, socket])
+          push_callback(:market_data, [bytes, channel, token, message, socket])
         end
       end
 
-      def enqueue_notification(socket, &notification)
+      def enqueue_notification(socket, kind, &notification)
         @lifecycle_lock.synchronize do
-          push_callback([0, nil, nil, notification, socket]) if active_callback_transport?(socket)
+          return unless active_callback_transport?(socket)
+          return if kind == :subscription_failed && @pending_callback_counts[kind] >= FAILURE_NOTIFICATION_QUEUE_LIMIT
+
+          push_callback(kind, [0, nil, nil, notification, socket])
         end
       end
 
-      def push_callback(event)
+      def push_callback(kind, event)
         @callback_worker ||= Thread.new { deliver_callbacks }
+        @callback_queue << [kind, event]
+        @pending_callback_counts[kind] += 1
         @pending_callback_bytes += event.first
-        @callback_queue << event
         @callback_wakeup.signal
       end
 
@@ -389,8 +395,12 @@ module Bitflyer
       def next_callback_event
         @lifecycle_lock.synchronize do
           @callback_wakeup.wait(@lifecycle_lock) while @callback_queue.empty? && !lifecycle_inactive?
-          event = @callback_queue.shift
-          @pending_callback_bytes -= event.first if event
+          entry = @callback_queue.shift
+          next unless entry
+
+          kind, event = entry
+          @pending_callback_counts[kind] -= 1
+          @pending_callback_bytes -= event.first
           event
         end
       end
@@ -418,16 +428,18 @@ module Bitflyer
       end
 
       def discard_channel_callbacks(channel_name)
-        @callback_queue.delete_if do |bytes, channel,|
-          next false unless channel == channel_name
+        @callback_queue.delete_if do |kind, event|
+          next false unless kind == :market_data && event[1] == channel_name
 
-          @pending_callback_bytes -= bytes
+          @pending_callback_counts[kind] -= 1
+          @pending_callback_bytes -= event.first
           true
         end
       end
 
       def clear_callback_queue
         @callback_queue.clear
+        @pending_callback_counts.clear
         @pending_callback_bytes = 0
       end
 
@@ -477,18 +489,29 @@ module Bitflyer
         handler, delta_channel = feed
         return unless @acknowledged_subscriptions.key?(delta_channel)
 
-        messages.each { |message| handler.call(message) }
+        messages.each do |message|
+          handler.call(message)
+        rescue StandardError => e
+          puts e
+          puts e.backtrace&.join("\n")
+        end
       end
 
       def queue_subscription(channel, setup: false)
         return unless @session_ready
         return if @acknowledged_subscriptions.key?(channel)
-        return if @pending_subscriptions.each_value.any? { |pending| pending.first == channel }
+        return if @pending_subscription_ids.key?(channel)
 
         @next_subscription_id += 1
         deadline = monotonic_milliseconds + SUBSCRIPTION_ACK_TIMEOUT_MS unless setup
         @pending_subscriptions[@next_subscription_id] = [channel, deadline]
+        @pending_subscription_ids[channel] = @next_subscription_id
         queue_subscription_frame("42#{@next_subscription_id}#{['subscribe', channel].to_json}")
+      end
+
+      def remove_pending_subscription(channel)
+        id = @pending_subscription_ids.delete(channel)
+        @pending_subscriptions.delete(id) if id
       end
 
       def queue_subscription_frame(frame)
@@ -708,6 +731,7 @@ module Bitflyer
           @subscription_ack_deadline = nil
           @subscription_rejected = true
           @pending_subscriptions.clear
+          @pending_subscription_ids.clear
           @websocket_client
         end
         debug_log 'Timed out waiting for setup subscription acknowledgments'
@@ -720,7 +744,7 @@ module Bitflyer
 
           now = monotonic_milliseconds
           pending = @pending_subscriptions.select { |_id, (_channel, deadline)| deadline && now >= deadline }
-          pending.each_key { |id| @pending_subscriptions.delete(id) }
+          pending.each_value { |channel, _deadline| remove_pending_subscription(channel) }
           pending
         end
         expired.each_value do |channel, _deadline|
@@ -730,7 +754,7 @@ module Bitflyer
 
       def notify_subscription_failure(socket, channel, error)
         failure = @subscription_failed
-        enqueue_notification(socket) { failure.call(channel, error) } if failure
+        enqueue_notification(socket, :subscription_failed) { failure.call(channel, error) } if failure
       end
 
       def wait_for_monitor_tick
@@ -776,7 +800,7 @@ module Bitflyer
         notification = prepare_ready_callback(socket)
         return unless notification
 
-        async ? enqueue_notification(socket) { notification.call } : notification.call
+        async ? enqueue_notification(socket, :ready) { notification.call } : notification.call
       end
 
       def prepare_ready_callback(socket)
@@ -829,6 +853,7 @@ module Bitflyer
         @subscription_frames = []
         @next_subscription_id = @last_setup_subscription_id = 0
         @pending_subscriptions = {}
+        @pending_subscription_ids = {}
         @acknowledged_subscriptions = {}
         @subscription_ack_deadline = nil
         @subscription_rejected = false
