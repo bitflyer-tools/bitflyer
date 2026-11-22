@@ -66,6 +66,7 @@ module Bitflyer
       def reset: () -> void
       def merge: (untyped message) -> void
       def merge_side: (Hash[Rational, Level] side, untyped levels) -> void
+      def valid_level_number?: (untyped value) -> bool
       def sorted_levels: (Hash[Rational, Level] side) -> Array[Level]
     end
   end
