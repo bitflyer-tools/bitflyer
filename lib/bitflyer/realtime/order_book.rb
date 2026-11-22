@@ -13,17 +13,14 @@ module Bitflyer
         end
       end
 
-      class View
-        attr_reader :bids, :asks
+      class TopOfBook
+        attr_reader :best_bid, :best_ask
 
-        def initialize(bids:, asks:)
-          @bids = bids.freeze
-          @asks = asks.freeze
+        def initialize(best_bid:, best_ask:)
+          @best_bid = best_bid
+          @best_ask = best_ask
           freeze
         end
-
-        def best_bid = bids.first
-        def best_ask = asks.first
 
         def spread
           bid = best_bid
@@ -33,6 +30,16 @@ module Bitflyer
           # @type var ask_price: untyped
           ask_price = ask.price
           ask_price - bid.price
+        end
+      end
+
+      class View < TopOfBook
+        attr_reader :bids, :asks
+
+        def initialize(bids:, asks:)
+          @bids = bids.freeze
+          @asks = asks.freeze
+          super(best_bid: bids.first, best_ask: asks.first)
         end
       end
 
@@ -46,6 +53,17 @@ module Bitflyer
           next unless @ready
 
           @current ||= View.new(bids: sorted_levels(@bids).reverse, asks: sorted_levels(@asks))
+        end
+      end
+
+      def top_of_book
+        @lock.synchronize do
+          next unless @ready
+
+          @top_of_book ||= TopOfBook.new(
+            best_bid: @bids.each_value.max_by(&:price),
+            best_ask: @asks.each_value.min_by(&:price)
+          )
         end
       end
 
@@ -83,11 +101,13 @@ module Bitflyer
         @bids = {}
         @asks = {}
         @current = nil
+        @top_of_book = nil
         @ready = false
       end
 
       def merge(message)
         @current = nil
+        @top_of_book = nil
         merge_side(@bids, message.fetch('bids'))
         merge_side(@asks, message.fetch('asks'))
       end

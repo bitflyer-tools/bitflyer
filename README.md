@@ -197,8 +197,8 @@ book = client.order_book(product_code: 'BTC_JPY')
 
 begin
   loop do
-    if (depth = book.current)
-      p [depth.best_bid&.price, depth.best_ask&.price, depth.spread]
+    if (top = book.top_of_book)
+      p [top.best_bid&.price, top.best_ask&.price, top.spread]
     else
       puts 'Waiting for an order book snapshot'
     end
@@ -211,12 +211,16 @@ end
 
 `book.ready?` reports whether the book has received a snapshot after the server acknowledged
 the delta subscription on the current connection.
-`book.current` returns `nil` before the first snapshot, after shutdown, and while waiting
+`book.top_of_book` returns an immutable view of the best bid and ask from the same book state
+without copying or sorting the full depth. Each best level has a `price` and `size`, and is
+`nil` when its side is empty. `spread` is the best ask price minus the best bid price when
+both exist, and `nil` otherwise.
+
+`book.current` returns an immutable full-depth view with frozen `bids` (highest price first)
+and `asks` (lowest price first), along with the same best-level and spread accessors.
+Both methods return `nil` before the first snapshot, after shutdown, and while waiting
 for a fresh snapshot after a disconnect or a delta that fails to apply. The book ignores
-deltas while waiting for a fresh snapshot. Each view contains frozen `bids` (highest price first)
-and `asks` (lowest price first), with `price` and `size` on each level. Views already read
-stay unchanged as new messages arrive. `best_bid` and `best_ask` return the first level on
-their side, and `spread` is the best ask price minus the best bid price when both exist.
+deltas while waiting for a fresh snapshot. Views already read stay unchanged as new messages arrive.
 
 See the [snapshot](https://bf-lightning-api.readme.io/docs/realtime-board-snapshot) and
 [delta](https://bf-lightning-api.readme.io/docs/realtime-board) channel documentation.
