@@ -252,8 +252,10 @@ Call `client.shutdown` when you finish using a realtime client. It stops automat
 Concurrent calls wait for the connection to close.
 Market data callbacks and `ready` and `subscription_failed` notifications from incoming frames
 run serially on a separate thread, so a slow callback does not block heartbeat processing.
-When 1,024 callbacks are pending, new market data events are dropped. Notifications
-can still be queued.
+The queue holds up to 1,024 pending market data callbacks and, independently, up to
+1,024 pending `subscription_failed` notifications. When either limit is reached, new entries
+of that kind are dropped until space is available. The limits exclude the running callback.
+Pending entries run in the order they were queued, including `ready` notifications.
 Disconnecting or shutting down discards pending callbacks from that connection and allows any
 callback already running to finish.
 
