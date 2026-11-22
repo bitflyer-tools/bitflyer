@@ -100,10 +100,13 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     expect(top.spread).to be_nil
   end
 
-  it 'invalidates after a malformed delta and waits for a valid snapshot' do
+  it 'delivers raw deltas in order while an invalidated book waits for a valid snapshot' do
     book
+    raw = Queue.new
+    client.subscribe(delta) { |message| raw << message }
     frame('0{}')
     frame('431[null]')
+    frame('432[null]')
     board(snapshot, bids: [[100, 1]], asks: [[110, 1]])
     expect(book).to be_ready
 
@@ -115,6 +118,8 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     board(delta, bids: [[106, 1]])
     expect(book).not_to be_ready
     expect(book.current).to be_nil
+    expect(raw.pop(timeout: 5)).to eq(JSON.parse(malformed.to_json))
+    expect(raw.pop(timeout: 5)).to eq('bids' => [{ 'price' => 106, 'size' => 1 }], 'asks' => [])
 
     expect { frame("42#{[snapshot, malformed].to_json}") }.to output(/key not found: "price"/).to_stdout
     expect(book.current).to be_nil
@@ -126,6 +131,7 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
 
     board(delta, bids: [[102, 2]])
     expect(book.current.best_bid.price).to eq(102)
+    expect(raw.pop(timeout: 5)).to eq('bids' => [{ 'price' => 102, 'size' => 2 }], 'asks' => [])
   end
 
   it 'invalidates before notifying disconnect and waits for a new snapshot on the replacement connection' do

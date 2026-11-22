@@ -450,7 +450,12 @@ module Bitflyer
         handler, delta_channel = feed
         return unless @acknowledged_subscriptions.key?(delta_channel)
 
-        messages.each { |message| handler.call(message) }
+        messages.each do |message|
+          handler.call(message)
+        rescue StandardError => e
+          puts e
+          puts e.backtrace&.join("\n")
+        end
       end
 
       def queue_subscription(channel, setup: false)

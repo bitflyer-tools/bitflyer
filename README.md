@@ -221,7 +221,8 @@ both exist, and `nil` otherwise.
 and `asks` (lowest price first), along with the same best-level and spread accessors.
 Both methods return `nil` before the first snapshot, after shutdown, and while waiting
 for a fresh snapshot after a disconnect or a delta that fails to apply. The book ignores
-deltas while waiting for a fresh snapshot. Views already read stay unchanged as new messages arrive.
+deltas while waiting for a fresh snapshot. Raw board callbacks still receive decoded messages
+in arrival order when a book update fails. Views already read stay unchanged as new messages arrive.
 
 See the [snapshot](https://bf-lightning-api.readme.io/docs/realtime-board-snapshot) and
 [delta](https://bf-lightning-api.readme.io/docs/realtime-board) channel documentation.
