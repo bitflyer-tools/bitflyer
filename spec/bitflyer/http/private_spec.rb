@@ -360,6 +360,36 @@ describe Bitflyer::HTTP::Private::Client do
       expect { client.send_parent_order(parameters: condition) }.to raise_error(ArgumentError, 'parameters must be an array')
     end
 
+    { nil => 1, 'SIMPLE' => 1, 'IFD' => 2, 'OCO' => 2, 'IFDOCO' => 3 }.each do |method, count|
+      description = method || 'the default order method'
+      order_options = method ? { order_method: method } : {}
+
+      [count - 1, count + 1].each do |invalid_count|
+        it "rejects #{invalid_count} conditions for #{description} before making an HTTP request" do
+          expect(Net::HTTP).not_to receive(:start)
+
+          expect { client.send_parent_order(parameters: Array.new(invalid_count, condition), **order_options) }
+            .to raise_error(ArgumentError, "#{method || 'SIMPLE'} requires exactly #{count} in parameters (got #{invalid_count})")
+        end
+      end
+
+      it "sends all #{count} conditions in input order for #{description}" do
+        http = instance_double(Net::HTTP)
+        response = instance_double(Net::HTTPOK, code: '200', body: '{}')
+        parameters = Array.new(count) { |index| condition.merge(size: count - index) }
+        allow(Net::HTTP).to receive(:start).and_return(http)
+        expect(http).to receive(:request) do |request|
+          expect(request).to be_a(Net::HTTP::Post)
+          expect(request.path).to eq('/v1/me/sendparentorder')
+          expect(JSON.parse(request.body, symbolize_names: true))
+            .to eq({ time_in_force: 'GTC', parameters: parameters }.merge(order_options))
+          response
+        end
+
+        client.send_parent_order(parameters: parameters, **order_options)
+      end
+    end
+
     it 'rejects a BigDecimal quantity in a string-keyed condition before making an HTTP request' do
       expect(Net::HTTP).not_to receive(:start)
       parameters = [condition.transform_keys(&:to_s).merge('size' => BigDecimal('0.01'))]
@@ -380,7 +410,7 @@ describe Bitflyer::HTTP::Private::Client do
           expect(Net::HTTP).not_to receive(:start)
           incomplete = condition.merge(condition_type: type, **extra_fields).reject { |key, _| key == field }
 
-          expect { client.send_parent_order(parameters: [condition, incomplete]) }
+          expect { client.send_parent_order(parameters: [condition, incomplete], order_method: 'IFD') }
             .to raise_error(ArgumentError, "#{field} is required in a parent order condition")
         end
       end

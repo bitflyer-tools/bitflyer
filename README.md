@@ -57,8 +57,10 @@ if neither identifier or both identifiers are non-nil.
 `send_child_order` requires `child_order_type`, `side`, and `size`. A `LIMIT` order also requires
 `price`. Missing or nil required values raise `ArgumentError` before an HTTP request is made.
 
-`send_parent_order` takes an array of condition hashes with symbol or string keys. Each condition
-requires `product_code`, `condition_type`, `side`, and `size`. `LIMIT` and `STOP_LIMIT` require
+`send_parent_order` takes an array of condition hashes with symbol or string keys.
+Provide one condition for `SIMPLE` (the default), two for `IFD` or `OCO`, and three for `IFDOCO`.
+An incorrect condition count raises `ArgumentError` before an HTTP request is made.
+Each condition requires `product_code`, `condition_type`, `side`, and `size`. `LIMIT` and `STOP_LIMIT` require
 `price`, `STOP` and `STOP_LIMIT` require `trigger_price`, and `TRAIL` requires `offset`.
 Symbol and string keys may be mixed. Missing or nil required values and keys that collide after
 conversion to strings raise `ArgumentError` before an HTTP request is made.
