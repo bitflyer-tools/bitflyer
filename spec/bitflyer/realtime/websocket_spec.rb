@@ -973,6 +973,25 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     expect(ready).to have_received(:call).once
   end
 
+  it 'handles runtime acknowledgments without scanning pending IDs before or after ready registration' do
+    client = @client = Bitflyer.realtime_client
+    client.ticker_btc_jpy = ->(_message) {}
+    receive_frame('0{}')
+    receive_frame('431[null]')
+
+    10.times { |index| client.subscribe("runtime_#{index}") { |_message| } }
+    pending = client.websocket_client.instance_variable_get(:@pending_subscriptions)
+    expect(pending).not_to receive(:each_key)
+
+    (2..6).each { |id| receive_frame("43#{id}[null]") }
+    client.ready = ready
+    expect(ready).to have_received(:call).once
+
+    (7..11).each { |id| receive_frame("43#{id}[null]") }
+    expect(pending).to be_empty
+    expect(ready).to have_received(:call).once
+  end
+
   it 'replaces a pending subscription callback without sending another request' do
     client = realtime_client
     original_callback = spy('original callback')

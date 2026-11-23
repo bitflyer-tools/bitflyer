@@ -282,7 +282,8 @@ module Bitflyer
           @session_ready = true
           registered_channels.each { |channel| queue_subscription(channel, setup: true) }
           @last_setup_subscription_id = @next_subscription_id
-          unless @pending_subscriptions.empty?
+          @pending_setup_subscription_count = @pending_subscriptions.size
+          if setup_subscriptions_pending?
             @subscription_ack_deadline = monotonic_milliseconds + SUBSCRIPTION_ACK_TIMEOUT_MS
           end
         end
@@ -499,7 +500,10 @@ module Bitflyer
 
       def remove_pending_subscription(channel)
         id = @pending_subscription_ids.delete(channel)
-        @pending_subscriptions.delete(id) if id
+        return unless id
+
+        @pending_subscriptions.delete(id)
+        @pending_setup_subscription_count -= 1 if id <= @last_setup_subscription_id
       end
 
       def queue_subscription_frame(frame)
@@ -718,6 +722,7 @@ module Bitflyer
 
           @subscription_ack_deadline = nil
           @subscription_rejected = true
+          @pending_setup_subscription_count = 0
           @pending_subscriptions.clear
           @pending_subscription_ids.clear
           @websocket_client
@@ -814,7 +819,7 @@ module Bitflyer
       end
 
       def setup_subscriptions_pending?
-        @pending_subscriptions.each_key.any? { |id| id <= @last_setup_subscription_id }
+        @pending_setup_subscription_count.positive?
       end
 
       def take_ready_callback
@@ -840,6 +845,7 @@ module Bitflyer
         @order_books.each_value(&:invalidate)
         @subscription_frames = []
         @next_subscription_id = @last_setup_subscription_id = 0
+        @pending_setup_subscription_count = 0
         @pending_subscriptions = {}
         @pending_subscription_ids = {}
         @acknowledged_subscriptions = {}
