@@ -97,8 +97,14 @@ module Bitflyer
       end
 
       def order_book(product_code:)
+        delta_channel = :"lightning_board_#{product_code}"
+        snapshot_channel = :"lightning_board_snapshot_#{product_code}"
         book = @session_mutex.synchronize do
-          @order_books[product_code] ||= register_order_book(product_code)
+          cached_book = @order_books[product_code] ||= register_order_book(delta_channel, snapshot_channel)
+          # Start receiving deltas before requesting the snapshot.
+          queue_subscription(delta_channel)
+          queue_subscription(snapshot_channel)
+          cached_book
         end
         send_subscription_frames
         book
@@ -444,18 +450,11 @@ module Bitflyer
         end
       end
 
-      def register_order_book(product_code)
+      def register_order_book(delta_channel, snapshot_channel)
         book = OrderBook.new
-        delta_channel = :"lightning_board_#{product_code}"
-        # Start receiving deltas before requesting the snapshot.
-        register_board_feed(delta_channel, book.method(:update), delta_channel)
-        register_board_feed(:"lightning_board_snapshot_#{product_code}", book.method(:replace), delta_channel)
+        @board_feeds[delta_channel] = [book.method(:update), delta_channel]
+        @board_feeds[snapshot_channel] = [book.method(:replace), delta_channel]
         book
-      end
-
-      def register_board_feed(channel, handler, delta_channel)
-        @board_feeds[channel] = [handler, delta_channel]
-        queue_subscription(channel)
       end
 
       def route_messages(channel, messages, socket)

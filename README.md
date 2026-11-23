@@ -198,6 +198,8 @@ You can set lambda to get realtime events.
 Use `order_book` to track a product's snapshot and delta channels on the realtime client.
 Repeated calls for the same product return the same book. The subscriptions stay active
 for the lifetime of the client and can coexist with raw board callbacks.
+Call `order_book` again for the same product to retry any rejected or timed-out feed
+on the current connection. Existing raw callbacks are preserved.
 
 ```ruby
 client = Bitflyer.realtime_client

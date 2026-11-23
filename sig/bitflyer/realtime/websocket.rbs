@@ -89,9 +89,7 @@ module Bitflyer
 
       def registered_channels: () -> Array[Symbol]
 
-      def register_order_book: (String product_code) -> OrderBook
-
-      def register_board_feed: (Symbol channel, Method handler, Symbol delta_channel) -> void
+      def register_order_book: (Symbol delta_channel, Symbol snapshot_channel) -> OrderBook
       def record_subscription_result: (Integer id, Symbol channel, untyped error) -> void
       def route_board_messages: (Symbol channel, Array[untyped] messages) -> void
 
