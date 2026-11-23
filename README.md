@@ -71,7 +71,7 @@ Symbol and string keys may be mixed. Missing or nil required values and keys tha
 conversion to strings raise `ArgumentError` before an HTTP request is made.
 
 Order quantities and prices accept integers and finite floats. This also applies to the trigger price
-in parent order conditions. Pass expiration minutes and trailing offsets as integers. The client
+in parent order conditions. Pass expiration minutes as integers and `TRAIL` offsets as positive integers. The client
 raises `ArgumentError` before sending an order with an unsupported value such as a `BigDecimal`.
 
 #### Example

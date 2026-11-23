@@ -66,7 +66,7 @@ module Bitflyer
         # Each condition requires non-nil product_code, condition_type, side, and size.
         # LIMIT and STOP_LIMIT require price, STOP and STOP_LIMIT require trigger_price,
         # and TRAIL requires offset. Symbol and string keys may be mixed, but must be unique after string conversion.
-        # Condition sizes, prices, and trigger prices accept Integer or finite Float. Offsets accept Integer.
+        # Condition sizes, prices, and trigger prices accept Integer or finite Float. TRAIL offsets must be positive integers.
         def send_parent_order: (
           parameters: Array[Hash[Symbol | String, untyped]],
           ?order_method: String?,
