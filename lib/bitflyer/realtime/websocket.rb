@@ -11,12 +11,13 @@ module Bitflyer
       CONNECTION_TIMEOUT = 10
       SESSION_RESPONSE_TIMEOUT_MS = 10_000
       CALLBACK_QUEUE_LIMIT = 1_024
+      CALLBACK_PAYLOAD_LIMIT = 8 * 1024 * 1024
       FAILURE_NOTIFICATION_QUEUE_LIMIT = 1_024
       SUBSCRIPTION_ACK_TIMEOUT_MS = 10_000
       RECONNECT_BASE_DELAY = 1.0
       RECONNECT_MAX_DELAY = 30.0
       private_constant :CONNECTION_TIMEOUT, :SESSION_RESPONSE_TIMEOUT_MS, :CALLBACK_QUEUE_LIMIT,
-                       :FAILURE_NOTIFICATION_QUEUE_LIMIT, :SUBSCRIPTION_ACK_TIMEOUT_MS,
+                       :CALLBACK_PAYLOAD_LIMIT, :FAILURE_NOTIFICATION_QUEUE_LIMIT, :SUBSCRIPTION_ACK_TIMEOUT_MS,
                        :RECONNECT_BASE_DELAY, :RECONNECT_MAX_DELAY
 
       attr_accessor :ping_interval, :ping_timeout, :subscription_failed
@@ -349,6 +350,7 @@ module Bitflyer
       def initialize_callbacks
         @subscription_tokens = {}
         @callback_queue = []
+        @pending_callback_bytes = 0
         @pending_callback_counts = Hash.new(0)
         @callback_transport = nil
         @callback_wakeup = ConditionVariable.new
@@ -356,12 +358,14 @@ module Bitflyer
       end
 
       def enqueue_callback(channel, token, message, socket)
+        bytes = JSON.generate(message, allow_nan: true).bytesize
         @lifecycle_lock.synchronize do
           return unless active_callback_transport?(socket)
           return if @pending_callback_counts[:market_data] >= CALLBACK_QUEUE_LIMIT
+          return if @pending_callback_bytes + bytes > CALLBACK_PAYLOAD_LIMIT
           return unless subscribed_callback(channel, token)
 
-          push_callback(:market_data, [channel, token, message, socket])
+          push_callback(:market_data, [bytes, channel, token, message, socket])
         end
       end
 
@@ -370,7 +374,7 @@ module Bitflyer
           return unless active_callback_transport?(socket)
           return if kind == :subscription_failed && @pending_callback_counts[kind] >= FAILURE_NOTIFICATION_QUEUE_LIMIT
 
-          push_callback(kind, [nil, nil, notification, socket])
+          push_callback(kind, [0, nil, nil, notification, socket])
         end
       end
 
@@ -378,12 +382,14 @@ module Bitflyer
         @callback_worker ||= Thread.new { deliver_callbacks }
         @callback_queue << [kind, event]
         @pending_callback_counts[kind] += 1
+        @pending_callback_bytes += event.first
         @callback_wakeup.signal
       end
 
       def deliver_callbacks
         while (event = next_callback_event)
-          deliver_callback(*event)
+          _bytes, channel, token, message, socket = event
+          deliver_callback(channel, token, message, socket)
         end
       end
 
@@ -395,6 +401,7 @@ module Bitflyer
 
           kind, event = entry
           @pending_callback_counts[kind] -= 1
+          @pending_callback_bytes -= event.first
           event
         end
       end
@@ -421,15 +428,20 @@ module Bitflyer
         end
       end
 
-      def discard_channel_callbacks(channel)
-        previous_size = @callback_queue.size
-        @callback_queue.delete_if { |kind, event| kind == :market_data && event.first == channel }
-        @pending_callback_counts[:market_data] -= previous_size - @callback_queue.size
+      def discard_channel_callbacks(channel_name)
+        @callback_queue.delete_if do |kind, event|
+          next false unless kind == :market_data && event[1] == channel_name
+
+          @pending_callback_counts[kind] -= 1
+          @pending_callback_bytes -= event.first
+          true
+        end
       end
 
       def clear_callback_queue
         @callback_queue.clear
         @pending_callback_counts.clear
+        @pending_callback_bytes = 0
       end
 
       def stop_callbacks

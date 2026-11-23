@@ -263,8 +263,11 @@ Concurrent calls wait for the connection to close.
 Market data callbacks and `ready` and `subscription_failed` notifications from incoming frames
 run serially on a separate thread, so a slow callback does not block heartbeat processing.
 The queue holds up to 1,024 pending market data callbacks and, independently, up to
-1,024 pending `subscription_failed` notifications. When either limit is reached, new entries
-of that kind are dropped until space is available. The limits exclude the running callback.
+1,024 pending `subscription_failed` notifications. Market data also has an 8 MiB
+(8,388,608 byte) pending payload budget, measured as the sum of the messages' compact JSON
+byte lengths. New entries are dropped when their count limit is reached or, for market
+data, when adding the message would exceed the byte budget. Dequeuing or discarding an
+entry frees its capacity. The limits exclude the running callback.
 Pending entries run in the order they were queued, including `ready` notifications.
 Disconnecting or shutting down discards pending callbacks from that connection and allows any
 callback already running to finish.

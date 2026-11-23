@@ -30,18 +30,20 @@ module Bitflyer
       CONNECTION_TIMEOUT: Integer
       SESSION_RESPONSE_TIMEOUT_MS: Integer
       CALLBACK_QUEUE_LIMIT: Integer
+      CALLBACK_PAYLOAD_LIMIT: Integer
       FAILURE_NOTIFICATION_QUEUE_LIMIT: Integer
       SUBSCRIPTION_ACK_TIMEOUT_MS: Integer
       RECONNECT_BASE_DELAY: Float
       RECONNECT_MAX_DELAY: Float
 
       @subscription_tokens: Hash[Symbol, Object]
-      type callback_event = [Symbol?, Object?, untyped, Transport?]
+      type callback_event = [Integer, Symbol?, Object?, untyped, Transport?]
 
       type callback_kind = :market_data | :ready | :subscription_failed
 
       @callback_queue: Array[[callback_kind, callback_event]]
       @pending_callback_counts: Hash[callback_kind, Integer]
+      @pending_callback_bytes: Integer
       @callback_transport: Transport?
       @callback_wakeup: Thread::ConditionVariable
       @callback_worker: Thread?
@@ -72,7 +74,7 @@ module Bitflyer
 
       def subscribed_callback: (Symbol channel, Object? token) -> (^(untyped) -> void)?
 
-      def discard_channel_callbacks: (Symbol channel) -> void
+      def discard_channel_callbacks: (Symbol channel_name) -> void
 
       def clear_callback_queue: () -> void
 
