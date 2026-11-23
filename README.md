@@ -260,8 +260,9 @@ If the rejection occurs before callback registration, assigning `disconnected` d
 
 Call `client.shutdown` when you finish using a realtime client. It stops automatic reconnection, closes the connection, and stops the monitoring thread. You can call it more than once, including from a `ready` or subscription callback.
 Concurrent calls wait for the connection to close.
-Market data callbacks and `ready` and `subscription_failed` notifications from incoming frames
-run serially on a separate thread, so a slow callback does not block heartbeat processing.
+Market data callbacks and `subscription_failed` notifications run serially on a separate thread,
+so a slow callback does not block heartbeat processing. When an incoming frame or an unsubscribe
+completes setup, any registered `ready` callback runs on that same thread.
 The queue holds up to 1,024 pending market data callbacks and, independently, up to
 1,024 pending `subscription_failed` notifications. When either limit is reached, new entries
 of that kind are dropped until space is available. The limits exclude the running callback.

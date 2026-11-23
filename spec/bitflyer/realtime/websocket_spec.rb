@@ -1074,6 +1074,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     receive_frame('0{}')
 
     client.unsubscribe('lightning_ticker_BTC_JPY')
+    expect(ready_notifications.pop(timeout: 5)).to be(true)
     expect(ready).to have_received(:call).once
     client.subscribe('lightning_ticker_BTC_JPY') { |_message| }
     expect(transport).to have_received(:send).with('422["subscribe","lightning_ticker_BTC_JPY"]')
@@ -1231,7 +1232,55 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     receive_frame('0{}')
 
     expect(frames).to eq([subscribe_frame, unsubscribe_frame])
+    expect(ready_notifications.pop(timeout: 5)).to be(true)
     expect(ready).to have_received(:call).once
+  end
+
+  it 'queues readiness behind a running market-data callback when the last pending channel is removed' do
+    client = realtime_client
+    started = Queue.new
+    resume = Queue.new
+    events = Queue.new
+    allow(ready).to receive(:call) { events << [:ready, Thread.current] }
+    client.ticker_btc_jpy = lambda do |message|
+      started << Thread.current
+      resume.pop
+      events << message
+    end
+    client.executions_btc_jpy = ->(_message) {}
+
+    receive_frame('0{}')
+    receive_frame('431[null]')
+    receive_frame('42["lightning_ticker_BTC_JPY","ticker"]')
+    worker = started.pop(timeout: 5)
+    expect(worker).to be_a(Thread)
+
+    unsubscribe = Thread.new { client.unsubscribe('lightning_executions_BTC_JPY') }
+    expect(unsubscribe.join(5)).to eq(unsubscribe)
+    expect(ready).not_to have_received(:call)
+    receive_frame('432[null]')
+    resume.close
+
+    expect(events.pop(timeout: 5)).to eq('ticker')
+    expect(events.pop(timeout: 5)).to eq([:ready, worker])
+    expect(ready).to have_received(:call).once
+  ensure
+    resume&.close
+    unsubscribe&.join(5)
+    client&.shutdown
+  end
+
+  it 'delivers readiness synchronously when registered after removing the last pending channel' do
+    client = @client = Bitflyer.realtime_client
+    client.ticker_btc_jpy = ->(_message) {}
+    receive_frame('0{}')
+    client.unsubscribe('lightning_ticker_BTC_JPY')
+
+    callers = []
+    callback = -> { callers << Thread.current }
+    2.times { client.ready = callback }
+
+    expect(callers).to eq([Thread.current])
   end
 
   it 'waits for new acknowledgments after reconnecting and ignores replies from the previous socket' do
