@@ -4,6 +4,41 @@ require 'spec_helper'
 require 'bigdecimal'
 
 describe Bitflyer::HTTP::Private::Client do
+  describe '#positions' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:http) { instance_double(Net::HTTP) }
+    let(:response) { instance_double(Net::HTTPOK, code: '200', body: body) }
+    let(:body) { '[{"product_code":"FX_BTC_JPY","side":"BUY","size":0.25}]' }
+
+    before do
+      allow(Net::HTTP).to receive(:start).and_return(http)
+      allow(http).to receive(:request).and_return(response)
+      allow(Time).to receive(:now).and_return(Time.at(1_000_000))
+    end
+
+    it 'returns parsed positions for the default CFD product' do
+      expect(client.positions).to eq([{ 'product_code' => 'FX_BTC_JPY', 'side' => 'BUY', 'size' => 0.25 }])
+      expect(http).to have_received(:request).with(
+        have_attributes(method: 'GET', path: '/v1/me/getpositions?product_code=FX_BTC_JPY')
+      )
+    end
+
+    context 'when the API rejects the requested product' do
+      let(:body) { '{"error":"Invalid product code"}' }
+      let(:response) { instance_double(Net::HTTPBadRequest, code: '400', body: body) }
+
+      it 'forwards the product code and exposes the HTTP error' do
+        expect { client.positions(product_code: 'UNKNOWN') }
+          .to raise_error(Bitflyer::HTTP::ResponseError, 'bitFlyer API returned HTTP 400') { |error|
+            expect(error).to have_attributes(status: 400, body: body)
+          }
+        expect(http).to have_received(:request).with(
+          have_attributes(method: 'GET', path: '/v1/me/getpositions?product_code=UNKNOWN')
+        )
+      end
+    end
+  end
+
   describe '#send_child_order' do
     let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
     let(:order) { { child_order_type: 'MARKET', side: 'BUY', size: 0.1 } }
