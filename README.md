@@ -300,8 +300,9 @@ previous callback. Unsubscribing discards pending events for that subscription,
 immediately freeing their queue space, and allows any callback already running to finish.
 It also removes the channel from the subscriptions restored on reconnect. For runtime
 subscriptions, `subscription_failed` reports server rejections and acknowledgment
-timeouts. If an acknowledgment is still pending after 10 seconds, the next
-connection check reports the timeout. Other subscriptions stay active.
+timeouts. The 10-second acknowledgment deadline starts when the writer begins
+sending the request. The next connection check after the deadline reports the
+timeout if the acknowledgment is still pending. Other subscriptions stay active.
 Call `subscribe` again to retry a failed channel on the same connection.
 An acknowledged or pending subscription is reused when its callback changes.
 

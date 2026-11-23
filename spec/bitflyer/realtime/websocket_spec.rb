@@ -1112,6 +1112,8 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
   context 'with runtime subscription deadlines' do
     let(:client) { realtime_client }
     let(:events) { Queue.new }
+    let(:websocket) { client.websocket_client }
+    let(:writer) { websocket.instance_variable_get(:@subscription_writer) }
 
     before do
       @now = 100_000
@@ -1127,7 +1129,47 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 
     def poll_after(milliseconds)
       @now += milliseconds
-      client.websocket_client.send(:poll_transport)
+      websocket.send(:poll_transport)
+    end
+
+    it 'gives a queued subscription the full acknowledgment window after dispatch' do
+      frame = '422["subscribe","lightning_ticker_BTC_JPY"]'
+      writer.synchronize do
+        client.ticker_btc_jpy = ->(_message) {}
+        11.times { poll_after(1_000) }
+        expect(transport).not_to have_received(:send).with(frame)
+      end
+
+      websocket.send(:send_subscription_frames)
+      expect(transport).to have_received(:send).with(frame).once
+      9.times { poll_after(1_000) }
+      poll_after(999)
+      expect(failure_notifications).to be_empty
+
+      poll_after(1)
+      expect(failure_notifications.pop(timeout: 5))
+        .to eq([:lightning_ticker_BTC_JPY, 'Timed out waiting for subscription acknowledgment'])
+      2.times { poll_after(1_000) }
+      receive_frame('432["late rejection"]')
+      receive_frame('42["lightning_executions_BTC_JPY",1]')
+      expect(events.pop(timeout: 5)).to eq(1)
+      expect(subscription_failed).to have_received(:call).once
+    end
+
+    it 'skips a canceled queued request even when the same channel is registered again' do
+      writer.synchronize do
+        client.ticker_btc_jpy = ->(_message) {}
+        client.unsubscribe('lightning_ticker_BTC_JPY')
+        client.ticker_btc_jpy = ->(message) { events << message }
+      end
+
+      websocket.send(:send_subscription_frames)
+      expect(transport).not_to have_received(:send).with('422["subscribe","lightning_ticker_BTC_JPY"]')
+      expect(transport).to have_received(:send).with('423["subscribe","lightning_ticker_BTC_JPY"]').once
+      receive_frame('433[null]')
+      receive_frame('42["lightning_ticker_BTC_JPY",1]')
+      expect(events.pop(timeout: 5)).to eq(1)
+      expect(subscription_failed).not_to have_received(:call)
     end
 
     it 'expires each missing acknowledgment on its own deadline while pongs and other events continue' do
