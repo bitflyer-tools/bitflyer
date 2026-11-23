@@ -27,7 +27,13 @@ module Bitflyer
       @session_ready: bool
       @ready_state: :pending | :ready | :notified
       @last_ping_monotonic: Integer?
-      @last_pong_monotonic: Integer?
+      @pong_deadline: Integer?
+      @ping_write: PingWrite?
+
+      class PingWrite < Struct[bool]
+        def self.new: (bool acknowledged) -> instance
+        attr_accessor acknowledged: bool
+      end
 
       attr_reader websocket_client: Transport?
       def channel_names: () -> Array[Symbol]
@@ -87,6 +93,12 @@ module Bitflyer
       def debug_log: (untyped message) -> void
 
       private
+
+      def begin_ping: (Transport socket) -> PingWrite?
+
+      def ping_due?: () -> boolish
+
+      def finish_ping: (PingWrite ping, Integer? sent_at) -> void
 
       def registered_channels: () -> Array[Symbol]
 
