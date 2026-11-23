@@ -17,13 +17,20 @@ bundle install
 
 ## Run the checks
 
-Run the same test, lint, and type-check commands used by
+Run the same test, formatting, lint, and type-check commands used by
 [CI](.github/workflows/test.yml):
 
 ```sh
 bundle exec rspec
-bundle exec rubocop lib
+bundle exec rubocop --only Layout lib
+bundle exec rubocop --except Layout lib
 bundle exec rake steep
+```
+
+To apply formatting fixes to the library code, run:
+
+```sh
+bundle exec rubocop --autocorrect --only Layout lib
 ```
 
 ## Open a pull request
