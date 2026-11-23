@@ -273,9 +273,9 @@ describe Bitflyer do
       end
       allow(raw_socket).to receive(:close) { write_released << true }
 
-      session.ping_interval = 1_000
-      session.ping_timeout = 1_000
-      session.last_pong_at = connected_at.to_i - 2
+      allow(driver).to receive(:text).with('2').and_return(true)
+      session.setup_by_response(json: '{"pingInterval":1,"pingTimeout":0}')
+      session.last_ping_at = connected_at.to_i - 1
       monitor = session.instance_variable_get(:@monitor)
       monitor.report_on_exception = false
 
@@ -603,7 +603,7 @@ describe Bitflyer do
 
       allow(Time).to receive(:now).and_return(connected_at + 6)
       allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond).and_return(16_000)
-      expect(socket).to receive(:send).with('2')
+      expect(socket).to receive(:send).with('2').and_return(true)
       session.send_ping
       session.receive_pong
 
@@ -618,9 +618,10 @@ describe Bitflyer do
       client.last_ping_at = connected_at.to_i - 3
       client.last_pong_at = connected_at.to_i - 4
 
-      expect(socket).to receive(:send).with('2')
+      expect(socket).to receive(:send).with('2').and_return(true)
       expect(socket).to receive(:close)
       session.send_ping
+      allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond).and_return(11_000)
       session.wait_pong
     end
 
