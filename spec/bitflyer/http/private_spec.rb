@@ -451,6 +451,16 @@ describe Bitflyer::HTTP::Private::Client do
       end
     end
 
+    [0, -1].each do |offset|
+      it "rejects a TRAIL offset of #{offset} before making an HTTP request" do
+        expect(Net::HTTP).not_to receive(:start)
+        trail = condition.merge(condition_type: 'TRAIL', offset: offset)
+
+        expect { client.send_parent_order(parameters: [trail]) }
+          .to raise_error(ArgumentError, 'offset must be a positive Integer')
+      end
+    end
+
     it 'rejects a nil required field in a string-keyed condition before making an HTTP request' do
       expect(Net::HTTP).not_to receive(:start)
       incomplete = condition.transform_keys(&:to_s).merge('condition_type' => 'LIMIT', 'price' => nil)
@@ -477,21 +487,22 @@ describe Bitflyer::HTTP::Private::Client do
     it 'serializes symbol-keyed, string-keyed, and mixed-keyed conditions as a JSON array' do
       http = instance_double(Net::HTTP)
       response = instance_double(Net::HTTPOK, code: '200', body: '{"parent_order_acceptance_id":"123"}')
-      stop_limit = condition.merge(condition_type: 'STOP_LIMIT', price: 28_800, trigger_price: 29_000)
-      trail = condition.transform_keys(&:to_s).merge('condition_type' => 'TRAIL', 'offset' => 100)
-      mixed = { product_code: 'BTC_JPY', 'condition_type' => 'LIMIT', side: 'BUY', 'size' => 1, price: 28_000 }.freeze
+      symbol_trail = condition.merge(condition_type: 'TRAIL', offset: 1)
+      string_trail = condition.transform_keys(&:to_s).merge('condition_type' => 'TRAIL', 'offset' => 100)
+      mixed = { product_code: 'BTC_JPY', 'condition_type' => 'STOP_LIMIT', side: 'BUY', 'size' => 1,
+                price: 28_800, 'trigger_price' => 29_000 }.freeze
       allow(Net::HTTP).to receive(:start).and_return(http)
       expect(http).to receive(:request) do |request|
         expect(request.path).to eq('/v1/me/sendparentorder')
         expect(request.body).to eq(JSON.generate(
           'order_method' => 'IFDOCO',
           'time_in_force' => 'GTC',
-          'parameters' => [stop_limit.transform_keys(&:to_s), trail, mixed.transform_keys(&:to_s)]
+          'parameters' => [symbol_trail.transform_keys(&:to_s), string_trail, mixed.transform_keys(&:to_s)]
         ))
         response
       end
 
-      expect(client.send_parent_order(parameters: [stop_limit, trail, mixed], order_method: 'IFDOCO'))
+      expect(client.send_parent_order(parameters: [symbol_trail, string_trail, mixed], order_method: 'IFDOCO'))
         .to eq('parent_order_acceptance_id' => '123')
     end
   end
