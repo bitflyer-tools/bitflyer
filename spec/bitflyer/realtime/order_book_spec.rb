@@ -134,6 +134,38 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     expect(raw.pop(timeout: 5)).to eq('bids' => [{ 'price' => 102, 'size' => 2 }], 'asks' => [])
   end
 
+  %i[bids asks].each do |side|
+    it "rejects an empty object in #{side} until a valid snapshot arrives" do
+      book
+      frame('0{}')
+      frame('431[null]')
+
+      [snapshot, delta].each do |channel|
+        board(snapshot, bids: [[100, 1]], asks: [[110, 1]])
+        expect(book.current.best_bid.price).to eq(100)
+        expect(book.top_of_book.best_ask.price).to eq(110)
+        malformed = { bids: [{ price: 105, size: 1 }], asks: [{ price: 115, size: 1 }] }
+        malformed[side] = {}
+
+        expect { frame("42#{[channel, malformed].to_json}") }
+          .to output(/Order book sides must be arrays/).to_stdout
+        expect(book).not_to be_ready
+        expect(book.current).to be_nil
+        expect(book.top_of_book).to be_nil
+
+        board(delta, bids: [[106, 1]])
+        expect(book).not_to be_ready
+
+        board(snapshot)
+        expect(book).to be_ready
+        expect(book.current.bids).to be_empty
+        expect(book.current.asks).to be_empty
+        board(delta)
+        expect(book).to be_ready
+      end
+    end
+  end
+
   {
     'an overflowing price' => '{"price":1e309,"size":1}',
     'an overflowing size' => '{"price":100,"size":1e309}',
