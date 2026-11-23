@@ -240,6 +240,8 @@ See the [snapshot](https://bf-lightning-api.readme.io/docs/realtime-board-snapsh
 #### Private events
 
 To subscribe to the private `child_order_events` and `parent_order_events`, pass your API key and secret when creating the `realtime_client`.
+Private callbacks start receiving events after authentication succeeds and the server acknowledges
+their subscription on the current connection. Both steps are required again after reconnection.
 
 #### Connection status monitoring
 

@@ -2,6 +2,7 @@
 
 require 'json'
 require 'openssl'
+require 'bitflyer/realtime/channels'
 require 'bitflyer/realtime/transport'
 require_relative 'order_book'
 
@@ -265,7 +266,7 @@ module Bitflyer
         return reject_authentication(json, socket: socket) unless authentication_succeeded?(json)
 
         debug_log 'Authenticated'
-        subscribe_channels(socket: socket)
+        subscribe_channels(socket: socket, authenticated: true)
       end
 
       def authentication_succeeded?(json)
@@ -275,10 +276,11 @@ module Bitflyer
         false
       end
 
-      def subscribe_channels(socket: @websocket_client)
+      def subscribe_channels(socket: @websocket_client, authenticated: false)
         @session_mutex.synchronize do
           return if !@websocket_client.equal?(socket) || @session_ready
 
+          @session_authenticated = authenticated
           @session_ready = true
           registered_channels.each { |channel| queue_subscription(channel, setup: true) }
           @last_setup_subscription_id = @next_subscription_id
@@ -297,13 +299,16 @@ module Bitflyer
           pending = @pending_subscriptions[id]
           return unless pending
 
+          arguments = JSON.parse(json)
+          return unless arguments.is_a?(Array)
+
           channel = pending.first
-          error = JSON.parse(json).first
+          error = arguments.first
           remove_pending_subscription(channel)
           record_subscription_result(id, channel, error)
           [channel, error]
         end
-        notify_subscription_failure(socket, channel, error) if error
+        notify_subscription_failure(socket, channel, error) unless error.nil?
         notify_ready(socket, async: true)
       end
 
@@ -358,7 +363,7 @@ module Bitflyer
         @lifecycle_lock.synchronize do
           return unless active_callback_transport?(socket)
           return if @pending_callback_counts[:market_data] >= CALLBACK_QUEUE_LIMIT
-          return unless subscribed_callback(channel, token)
+          return unless subscribed_callback(channel, token, socket)
 
           push_callback(:market_data, [channel, token, message, socket])
         end
@@ -402,7 +407,7 @@ module Bitflyer
         callback = @lifecycle_lock.synchronize do
           return unless active_callback_transport?(socket)
 
-          subscribed_callback(channel, token) if channel
+          subscribed_callback(channel, token, socket) if channel
         end
         channel ? callback&.call(message) : message.call
       rescue StandardError => e
@@ -414,10 +419,17 @@ module Bitflyer
         !lifecycle_inactive? && !socket.nil? && @callback_transport.equal?(socket) && !socket.closed?
       end
 
-      def subscribed_callback(channel, token)
+      def subscribed_callback(channel, token, socket)
         @session_mutex.synchronize do
+          return unless @websocket_client.equal?(socket) && callback_channel_ready?(channel)
+
           @channel_callbacks[channel] if @subscription_tokens[channel].equal?(token)
         end
+      end
+
+      def callback_channel_ready?(channel)
+        !PRIVATE_CHANNEL_NAMES.include?(channel.to_s) ||
+          (@session_authenticated && @acknowledged_subscriptions.key?(channel))
       end
 
       def discard_channel_callbacks(channel)
@@ -437,10 +449,10 @@ module Bitflyer
       end
 
       def record_subscription_result(id, channel, error)
-        if error
-          @subscription_rejected = true if id <= @last_setup_subscription_id
-        else
+        if error.nil?
           @acknowledged_subscriptions[channel] = true
+        elsif id <= @last_setup_subscription_id
+          @subscription_rejected = true
         end
       end
 
@@ -463,7 +475,7 @@ module Bitflyer
           return unless @websocket_client.equal?(socket)
 
           route_board_messages(channel, messages)
-          return unless @channel_callbacks[channel]
+          return unless @channel_callbacks[channel] && callback_channel_ready?(channel)
 
           @subscription_tokens[channel]
         end
@@ -846,6 +858,7 @@ module Bitflyer
         @subscription_ack_deadline = nil
         @subscription_rejected = false
         @awaiting_authentication = false
+        @session_authenticated = false
         @session_ready = false
         @ready_state = :pending
       end

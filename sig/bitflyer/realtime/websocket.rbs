@@ -23,6 +23,7 @@ module Bitflyer
       @acknowledged_subscriptions: Hash[Symbol, bool]
       @subscription_rejected: bool
       @awaiting_authentication: bool
+      @session_authenticated: bool
       @session_ready: bool
       @ready_state: :pending | :ready | :notified
       @last_ping_monotonic: Integer?
@@ -73,7 +74,7 @@ module Bitflyer
 
       def authentication_succeeded?: (String json) -> bool
 
-      def subscribe_channels: (?socket: Transport?) -> void
+      def subscribe_channels: (?socket: Transport?, ?authenticated: bool) -> void
 
       def acknowledge_subscription: (id: Integer, json: String, ?socket: Transport?) -> void
 
