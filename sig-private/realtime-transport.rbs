@@ -94,6 +94,8 @@ module Bitflyer
       def setup_subscriptions_pending?: () -> bool
 
       def close_expired_subscriptions: () -> void
+      def expire_setup_subscriptions: () -> Transport?
+      def close_subscription_timeout: (Transport? socket) -> void
 
       def expire_runtime_subscriptions: (Transport socket) -> void
 

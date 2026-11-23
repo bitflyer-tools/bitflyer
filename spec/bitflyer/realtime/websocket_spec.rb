@@ -899,6 +899,47 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 
   after { @client&.shutdown }
 
+  [10_000, 10_001].each do |elapsed|
+    it "closes on a setup acknowledgment at #{elapsed} ms before polling and becomes ready after replay" do
+      now = 100_000
+      allow(Process).to receive(:clock_gettime).and_call_original
+      allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond) { now }
+      @client = Bitflyer.realtime_client
+      @client.ticker_btc_jpy = ->(_message) {}
+      @client.executions_btc_jpy = ->(_message) {}
+      receive_frame('0{}')
+      receive_frame('431[null]')
+
+      replacement = instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false)
+      replacement_handlers = {}
+      stub_transport(replacement, replacement_handlers)
+      allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(replacement)
+      expect(transport).to receive(:close) do
+        allow(transport).to receive(:closed?).and_return(true)
+        handlers.fetch(:close).call(nil)
+        allow(transport).to receive(:reconnectable?).and_return(true)
+      end
+
+      now += elapsed
+      receive_frame('432[null]')
+      @client.ready = ready
+      expect(ready).not_to have_received(:call)
+
+      @client.websocket_client.reconnect
+      receive_frame('0{}', replacement_handlers)
+      expect(replacement).to have_received(:send).with('421["subscribe","lightning_ticker_BTC_JPY"]').once
+      expect(replacement).to have_received(:send).with('422["subscribe","lightning_executions_BTC_JPY"]').once
+
+      now += 9_999
+      receive_frame('431[null]', replacement_handlers)
+      expect(ready).not_to have_received(:call)
+      receive_frame('432[null]', replacement_handlers)
+      receive_frame('432[null]', replacement_handlers)
+      expect(ready_notifications.pop(timeout: 5)).to be(true)
+      expect(ready).to have_received(:call).once
+    end
+  end
+
   shared_examples 'a stalled setup subscription' do
     it 'reconnects despite fresh pongs and notifies readiness once after replay' do
       now = 100_000

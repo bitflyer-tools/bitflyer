@@ -296,6 +296,7 @@ module Bitflyer
 
           pending = @pending_subscriptions[id]
           return unless pending
+          break if expire_setup_subscriptions
 
           channel = pending.first
           error = JSON.parse(json).first
@@ -303,6 +304,8 @@ module Bitflyer
           record_subscription_result(id, channel, error)
           [channel, error]
         end
+        return close_subscription_timeout(socket) unless channel
+
         notify_subscription_failure(socket, channel, error) if error
         notify_ready(socket, async: true)
       end
@@ -712,16 +715,22 @@ module Bitflyer
       end
 
       def close_expired_subscriptions
-        socket = @session_mutex.synchronize do
-          deadline = @subscription_ack_deadline
-          return unless deadline && monotonic_milliseconds >= deadline && setup_subscriptions_pending?
+        socket = @session_mutex.synchronize { expire_setup_subscriptions }
+        close_subscription_timeout(socket) if socket
+      end
 
-          @subscription_ack_deadline = nil
-          @subscription_rejected = true
-          @pending_subscriptions.clear
-          @pending_subscription_ids.clear
-          @websocket_client
-        end
+      def expire_setup_subscriptions
+        deadline = @subscription_ack_deadline
+        return unless deadline && monotonic_milliseconds >= deadline && setup_subscriptions_pending?
+
+        @subscription_ack_deadline = nil
+        @subscription_rejected = true
+        @pending_subscriptions.clear
+        @pending_subscription_ids.clear
+        @websocket_client
+      end
+
+      def close_subscription_timeout(socket)
         debug_log 'Timed out waiting for setup subscription acknowledgments'
         socket&.close
       end
