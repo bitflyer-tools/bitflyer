@@ -122,7 +122,7 @@ module Bitflyer
           end
         end
         send_subscription_frames
-        notify_ready(socket)
+        notify_ready(socket, async: true)
       end
 
       def connect
