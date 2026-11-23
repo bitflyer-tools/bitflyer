@@ -53,7 +53,7 @@ module Bitflyer
       @subscription_ack_deadline: Integer?
       @shutdown_lock: Mutex
       @session_deadline: [Integer, :setup | :authentication] | :expired | :established | nil
-      @subscription_frames: Array[[Transport?, String]]
+      @subscription_frames: Array[[Transport?, String, Integer?]]
       @subscription_writer: Mutex
 
       private
@@ -88,15 +88,17 @@ module Bitflyer
 
       def retry_pending?: () -> bool
 
-      def queue_subscription: (Symbol, ?setup: bool) -> void
+      def queue_subscription: (Symbol) -> void
 
       def remove_pending_subscription: (Symbol) -> void
 
-      def queue_subscription_frame: (String) -> void
+      def queue_subscription_frame: (String, ?Integer?) -> void
 
       def send_subscription_frames: () -> void
 
       def take_subscription_frame: () -> [Transport?, String]?
+
+      def begin_subscription_dispatch?: (Integer) -> bool
 
       def setup_subscriptions_acknowledged?: () -> bool
       def setup_subscriptions_pending?: () -> bool

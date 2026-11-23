@@ -20,7 +20,7 @@ module Bitflyer
       @last_setup_subscription_id: Integer
       @pending_setup_subscription_count: Integer
       @pending_subscription_ids: Hash[Symbol, Integer]
-      @pending_subscriptions: Hash[Integer, [Symbol, Integer?]]
+      @pending_subscriptions: Hash[Integer, [Symbol, (:queued | Integer | nil)]]
       @acknowledged_subscriptions: Hash[Symbol, bool]
       @subscription_rejected: bool
       @awaiting_authentication: bool

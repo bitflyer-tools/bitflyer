@@ -280,7 +280,7 @@ module Bitflyer
           return if !@websocket_client.equal?(socket) || @session_ready
 
           @session_ready = true
-          registered_channels.each { |channel| queue_subscription(channel, setup: true) }
+          registered_channels.each { |channel| queue_subscription(channel) }
           @last_setup_subscription_id = @next_subscription_id
           @pending_setup_subscription_count = @pending_subscriptions.size
           if setup_subscriptions_pending?
@@ -296,7 +296,7 @@ module Bitflyer
           return unless @websocket_client.equal?(socket)
 
           pending = @pending_subscriptions[id]
-          return unless pending
+          return unless pending && pending.last != :queued
 
           channel = pending.first
           error = JSON.parse(json).first
@@ -499,16 +499,15 @@ module Bitflyer
         end
       end
 
-      def queue_subscription(channel, setup: false)
+      def queue_subscription(channel)
         return unless @session_ready
         return if @acknowledged_subscriptions.key?(channel)
         return if @pending_subscription_ids.key?(channel)
 
         @next_subscription_id += 1
-        deadline = monotonic_milliseconds + SUBSCRIPTION_ACK_TIMEOUT_MS unless setup
-        @pending_subscriptions[@next_subscription_id] = [channel, deadline]
+        @pending_subscriptions[@next_subscription_id] = [channel, :queued]
         @pending_subscription_ids[channel] = @next_subscription_id
-        queue_subscription_frame("42#{@next_subscription_id}#{['subscribe', channel].to_json}")
+        queue_subscription_frame("42#{@next_subscription_id}#{['subscribe', channel].to_json}", @next_subscription_id)
       end
 
       def remove_pending_subscription(channel)
@@ -519,8 +518,8 @@ module Bitflyer
         @pending_setup_subscription_count -= 1 if id <= @last_setup_subscription_id
       end
 
-      def queue_subscription_frame(frame)
-        @subscription_frames << [@websocket_client, frame]
+      def queue_subscription_frame(frame, id = nil)
+        @subscription_frames << [@websocket_client, frame, id]
       end
 
       def send_subscription_frames
@@ -540,9 +539,22 @@ module Bitflyer
 
       def take_subscription_frame
         @session_mutex.synchronize do
-          @subscription_writer.unlock if @subscription_frames.empty?
-          @subscription_frames.shift
+          while (entry = @subscription_frames.shift)
+            socket, frame, id = entry
+            return [socket, frame] if !id || begin_subscription_dispatch?(id)
+          end
+          @subscription_writer.unlock
+          nil
         end
+      end
+
+      def begin_subscription_dispatch?(id)
+        pending = @pending_subscriptions[id]
+        return false unless pending && pending.last == :queued
+
+        deadline = monotonic_milliseconds + SUBSCRIPTION_ACK_TIMEOUT_MS if id > @last_setup_subscription_id
+        pending[1] = deadline
+        true
       end
 
       def close_connections
@@ -749,7 +761,9 @@ module Bitflyer
           return unless @websocket_client.equal?(socket) && socket.open?
 
           now = monotonic_milliseconds
-          pending = @pending_subscriptions.select { |_id, (_channel, deadline)| deadline && now >= deadline }
+          pending = @pending_subscriptions.select do |_id, (_channel, deadline)|
+            deadline.is_a?(Integer) && now >= deadline
+          end
           pending.each_value { |channel, _deadline| remove_pending_subscription(channel) }
           pending
         end
