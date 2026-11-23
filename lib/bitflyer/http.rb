@@ -114,7 +114,9 @@ module Bitflyer
       end
 
       def execute(request)
-        response = @mutex.synchronize { send_request(request) }
+        response = Timeout.timeout(REQUEST_TIMEOUT, RequestTimeoutError, 'bitFlyer API request deadline exceeded') do
+          @mutex.synchronize { send_request(request) }
+        end
         status = response.code.to_i
         body = response.body
         raise ResponseError.new(status, body) unless (200...300).cover?(status)
@@ -123,13 +125,11 @@ module Bitflyer
       end
 
       def send_request(request)
-        Timeout.timeout(REQUEST_TIMEOUT, RequestTimeoutError, 'bitFlyer API request deadline exceeded') do
-          http = (@http ||= Net::HTTP.start(
-            @uri.host.to_s, @uri.port, use_ssl: true, keep_alive_timeout: 10, max_retries: 0, ignore_eof: false
-          ))
-          sign_request(request, request.path, request.body)
-          request_with_retry(http, request)
-        end
+        http = (@http ||= Net::HTTP.start(
+          @uri.host.to_s, @uri.port, use_ssl: true, keep_alive_timeout: 10, max_retries: 0, ignore_eof: false
+        ))
+        sign_request(request, request.path, request.body)
+        request_with_retry(http, request)
       rescue StandardError
         close_session
         raise

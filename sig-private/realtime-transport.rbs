@@ -30,31 +30,39 @@ module Bitflyer
       CONNECTION_TIMEOUT: Integer
       SESSION_RESPONSE_TIMEOUT_MS: Integer
       CALLBACK_QUEUE_LIMIT: Integer
+      CALLBACK_PAYLOAD_LIMIT: Integer
       FAILURE_NOTIFICATION_QUEUE_LIMIT: Integer
       SUBSCRIPTION_ACK_TIMEOUT_MS: Integer
       RECONNECT_BASE_DELAY: Float
       RECONNECT_MAX_DELAY: Float
 
       @subscription_tokens: Hash[Symbol, Object]
-      type callback_event = [Symbol?, Object?, untyped, Transport?]
+      type callback_event = [Integer, Symbol?, Object?, untyped, Transport?]
 
       type callback_kind = :market_data | :ready | :subscription_failed
 
       @callback_queue: Array[[callback_kind, callback_event]]
       @pending_callback_counts: Hash[callback_kind, Integer]
+      @pending_callback_bytes: Integer
       @callback_transport: Transport?
       @callback_wakeup: Thread::ConditionVariable
       @callback_worker: Thread?
+      @disconnect_worker: Thread?
+      @pending_disconnect: [untyped, disconnected_callback]?
       @connection: [Transport, Thread]?
       @subscription_ack_deadline: Integer?
       @shutdown_lock: Mutex
       @session_deadline: [Integer, :setup | :authentication] | :expired | :established | nil
-      @subscription_frames: Array[[Transport?, String]]
+      @subscription_frames: Array[[Transport?, String, Integer?]]
       @subscription_writer: Mutex
 
       private
 
       def initialize_callbacks: () -> void
+
+      def deliver_disconnects: ([untyped, disconnected_callback]? notification) -> void
+
+      def next_disconnect_notification: () -> [untyped, disconnected_callback]?
 
       def enqueue_callback: (Symbol channel, Object? token, untyped message, Transport? socket) -> void
 
@@ -72,7 +80,7 @@ module Bitflyer
 
       def subscribed_callback: (Symbol channel, Object? token) -> (^(untyped) -> void)?
 
-      def discard_channel_callbacks: (Symbol channel) -> void
+      def discard_channel_callbacks: (Symbol channel_name) -> void
 
       def clear_callback_queue: () -> void
 
@@ -80,15 +88,17 @@ module Bitflyer
 
       def retry_pending?: () -> bool
 
-      def queue_subscription: (Symbol, ?setup: bool) -> void
+      def queue_subscription: (Symbol) -> void
 
       def remove_pending_subscription: (Symbol) -> void
 
-      def queue_subscription_frame: (String) -> void
+      def queue_subscription_frame: (String, ?Integer?) -> void
 
       def send_subscription_frames: () -> void
 
       def take_subscription_frame: () -> [Transport?, String]?
+
+      def begin_subscription_dispatch?: (Integer) -> bool
 
       def setup_subscriptions_acknowledged?: () -> bool
       def setup_subscriptions_pending?: () -> bool

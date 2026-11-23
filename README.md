@@ -29,6 +29,13 @@ ruby -r bitflyer -e 'p Bitflyer.http_public_client.board(product_code: "BTC_JPY"
 
 See the [getting started guide](docs/getting-started.md) for a script that lists markets and fetches an order book.
 
+## Features
+
+- Fetch markets, order book snapshots, tickers, executions, and funding rates over public HTTP.
+- Read balances and positions and place or cancel orders over authenticated HTTP.
+- Iterate through execution and balance history one page at a time.
+- Subscribe to live market data and authenticated order events, and track a live order book.
+
 ## Usage
 
 See https://lightning.bitflyer.jp/docs for details.
@@ -44,9 +51,11 @@ If the response has no body, the client returns `nil`.
 If the connection closes before the declared body length is received, the client retries a GET
 once and raises `EOFError` if the retry is also incomplete. A POST raises `EOFError` without retrying.
 
-Each HTTP request has a 30-second deadline covering connection establishment, the full response,
-and any GET retry. When the deadline expires, the client closes the connection and raises
-`Bitflyer::HTTP::RequestTimeoutError` (a subclass of `Timeout::Error`). The next request opens a new connection.
+Each HTTP request has a 30-second deadline covering the wait for another request on the same client,
+connection establishment, the full response, and any GET retry. An expired request raises
+`Bitflyer::HTTP::RequestTimeoutError` (a subclass of `Timeout::Error`). If it expires while waiting,
+the active request keeps its connection. If it expires while using the connection, the client closes
+that connection and the next request opens a new one.
 
 HTTP responses outside the 2xx range raise `Bitflyer::HTTP::ResponseError`. The error provides
 the numeric HTTP status in `status` and the raw response body in `body`.
@@ -71,7 +80,7 @@ Symbol and string keys may be mixed. Missing or nil required values and keys tha
 conversion to strings raise `ArgumentError` before an HTTP request is made.
 
 Order quantities and prices accept integers and finite floats. This also applies to the trigger price
-in parent order conditions. Pass expiration minutes and trailing offsets as integers. The client
+in parent order conditions. Pass expiration minutes as integers and `TRAIL` offsets as positive integers. The client
 raises `ArgumentError` before sending an order with an unsupported value such as a `BigDecimal`.
 
 #### Example
@@ -254,17 +263,23 @@ Each realtime connection attempt has a 10-second deadline for TCP and TLS establ
 The client closes and retries a connection if the Socket.IO setup packet or the authentication response takes 10 seconds to arrive. Each step has its own deadline, independent of heartbeat activity.
 
 A `StandardError` raised by `disconnected` is reported to standard error. Automatic reconnection continues when enabled.
+Each client runs one asynchronous `disconnected` callback at a time and retains at most one pending
+notification. A new notification replaces any pending one while the worker is busy.
 
 If the server rejects authentication, the client closes the connection and passes a `RuntimeError` with the server response to `disconnected`. Authentication rejection stops automatic reconnection.
 If the rejection occurs before callback registration, assigning `disconnected` delivers the pending error synchronously, once.
 
 Call `client.shutdown` when you finish using a realtime client. It stops automatic reconnection, closes the connection, and stops the monitoring thread. You can call it more than once, including from a `ready` or subscription callback.
 Concurrent calls wait for the connection to close.
-Market data callbacks and `ready` and `subscription_failed` notifications from incoming frames
-run serially on a separate thread, so a slow callback does not block heartbeat processing.
+Market data callbacks and `subscription_failed` notifications run serially on a separate thread,
+so a slow callback does not block heartbeat processing. When an incoming frame or an unsubscribe
+completes setup, any registered `ready` callback runs on that same thread.
 The queue holds up to 1,024 pending market data callbacks and, independently, up to
-1,024 pending `subscription_failed` notifications. When either limit is reached, new entries
-of that kind are dropped until space is available. The limits exclude the running callback.
+1,024 pending `subscription_failed` notifications. Market data also has an 8 MiB
+(8,388,608 byte) pending payload budget, measured as the sum of the messages' compact JSON
+byte lengths. New entries are dropped when their count limit is reached or, for market
+data, when adding the message would exceed the byte budget. Dequeuing or discarding an
+entry frees its capacity. The limits exclude the running callback.
 Pending entries run in the order they were queued, including `ready` notifications.
 Disconnecting or shutting down discards pending callbacks from that connection and allows any
 callback already running to finish.
@@ -300,8 +315,9 @@ previous callback. Unsubscribing discards pending events for that subscription,
 immediately freeing their queue space, and allows any callback already running to finish.
 It also removes the channel from the subscriptions restored on reconnect. For runtime
 subscriptions, `subscription_failed` reports server rejections and acknowledgment
-timeouts. If an acknowledgment is still pending after 10 seconds, the next
-connection check reports the timeout. Other subscriptions stay active.
+timeouts. The 10-second acknowledgment deadline starts when the writer begins
+sending the request. The next connection check after the deadline reports the
+timeout if the acknowledgment is still pending. Other subscriptions stay active.
 Call `subscribe` again to retry a failed channel on the same connection.
 An acknowledged or pending subscription is reused when its callback changes.
 

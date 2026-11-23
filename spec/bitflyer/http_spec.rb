@@ -39,6 +39,73 @@ describe Bitflyer::HTTP::Connection do
     end
   end
 
+  describe 'request deadlines under contention' do
+    let(:connection) { described_class.new(nil, nil) }
+    let(:response) { instance_double(Net::HTTPOK, code: '200', body: '{}') }
+    let(:transport) { instance_double(Net::HTTP, finish: nil) }
+    let(:active_request_started) { Queue.new }
+
+    before do
+      allow(Net::HTTP).to receive(:start).and_return(transport)
+    end
+
+    after do
+      @active_request&.kill
+      @active_request&.join
+    end
+
+    it 'times out while waiting without closing the active connection' do
+      release = Queue.new
+      allow(transport).to receive(:request).with(have_attributes(path: '/active')) do
+        active_request_started << true
+        release.pop
+        response
+      end
+      allow(transport).to receive(:request).with(have_attributes(path: '/next')).and_return(response)
+      start_active_request
+      stub_const('Bitflyer::HTTP::REQUEST_TIMEOUT', 0.1)
+
+      expect do
+        Timeout.timeout(2) { connection.get('/queued') }
+      end.to raise_error(Bitflyer::HTTP::RequestTimeoutError)
+      expect(transport).not_to have_received(:finish)
+      expect(transport).not_to have_received(:request).with(have_attributes(path: '/queued'))
+
+      release << true
+      expect(@active_request.value.body).to eq({})
+      expect(connection.get('/next').body).to eq({})
+      expect(Net::HTTP).to have_received(:start).once
+    end
+
+    it 'shares the remaining time between the queued GET and its retry' do
+      stub_const('Bitflyer::HTTP::REQUEST_TIMEOUT', 0.75)
+      allow(transport).to receive(:request).with(have_attributes(path: '/active')) do
+        active_request_started << true
+        sleep 0.45
+        response
+      end
+      queued_request = have_attributes(path: '/queued')
+      expect(transport).to receive(:request).with(queued_request).ordered do
+        sleep 0.1
+        raise EOFError
+      end
+      expect(transport).to receive(:request).with(queued_request).ordered do
+        sleep 0.5
+        response
+      end
+      start_active_request
+
+      expect { connection.get('/queued') }.to raise_error(Bitflyer::HTTP::RequestTimeoutError)
+      expect(@active_request.value.body).to eq({})
+      expect(transport).to have_received(:finish).once
+    end
+
+    def start_active_request
+      @active_request = Thread.new { connection.get('/active') }
+      Timeout.timeout(2) { active_request_started.pop }
+    end
+  end
+
   describe '#post' do
     let(:connection) { described_class.new('test_key', 'test_secret') }
     let(:response_body) { '{"child_order_acceptance_id":"123"}' }

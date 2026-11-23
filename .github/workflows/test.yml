@@ -18,8 +18,10 @@ jobs:
         with:
           ruby-version: .ruby-version
           bundler-cache: true
+      - name: Check formatting
+        run: bundle exec rubocop --only Layout lib
       - name: Run lint
-        run: bundle exec rubocop lib
+        run: bundle exec rubocop --except Layout lib
   typecheck:
     runs-on: ubuntu-24.04
     env:
