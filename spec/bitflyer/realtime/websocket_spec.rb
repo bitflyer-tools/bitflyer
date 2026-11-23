@@ -160,6 +160,45 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
     expect(disconnected).to be_empty
   end
 
+  it 'delivers only the latest pending close on the same worker after a burst of reconnects' do
+    notifications = Queue.new
+    release = Queue.new
+    first_error = IOError.new('first close')
+    allow(transport_class).to receive(:new).and_return(*([original, replacement] * 11))
+    [original, replacement].each { |transport| allow(transport).to receive(:reconnectable?).and_return(true) }
+    client.disconnected = lambda do |error|
+      notifications << [error, Thread.current]
+      release.pop if error.equal?(first_error)
+    end
+
+    handlers[original].fetch(:close).call(first_error)
+    first_notification = notifications.pop(timeout: 5)
+    expect(first_notification).to match([first_error, an_instance_of(Thread)])
+    worker = first_notification.last
+
+    errors = Array.new(20) { |index| IOError.new("close #{index}") }
+    errors.each do |error|
+      previous = client.websocket_client
+      client.reconnect
+      expect(client.websocket_client).not_to equal(previous)
+      handlers[client.websocket_client].fetch(:close).call(error)
+    end
+
+    expect(worker).to be_alive
+    expect(notifications).to be_empty
+    release << true
+    expect(worker.join(5)).to equal(worker)
+    expect(notifications.pop(timeout: 5)).to eq([errors.last, worker])
+    expect(notifications).to be_empty
+
+    client.reconnect
+    handlers[client.websocket_client].fetch(:close).call(nil)
+    expect(notifications.pop(timeout: 5)).to match([nil, an_instance_of(Thread)])
+  ensure
+    release << true
+    worker&.join(5)
+  end
+
   it 'keeps the replacement setup deadline when an old setup frame is already being dispatched' do
     allow(replacement).to receive(:close)
     client.ready = -> { @ready = true }

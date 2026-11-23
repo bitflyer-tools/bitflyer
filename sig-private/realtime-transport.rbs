@@ -45,6 +45,8 @@ module Bitflyer
       @callback_transport: Transport?
       @callback_wakeup: Thread::ConditionVariable
       @callback_worker: Thread?
+      @disconnect_worker: Thread?
+      @pending_disconnect: [untyped, disconnected_callback]?
       @connection: [Transport, Thread]?
       @subscription_ack_deadline: Integer?
       @shutdown_lock: Mutex
@@ -55,6 +57,10 @@ module Bitflyer
       private
 
       def initialize_callbacks: () -> void
+
+      def deliver_disconnects: ([untyped, disconnected_callback]? notification) -> void
+
+      def next_disconnect_notification: () -> [untyped, disconnected_callback]?
 
       def enqueue_callback: (Symbol channel, Object? token, untyped message, Transport? socket) -> void
 
