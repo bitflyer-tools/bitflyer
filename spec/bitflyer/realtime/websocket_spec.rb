@@ -160,6 +160,45 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'WebSocket handshakes' do
     expect(disconnected).to be_empty
   end
 
+  it 'delivers only the latest pending close on the same worker after a burst of reconnects' do
+    notifications = Queue.new
+    release = Queue.new
+    first_error = IOError.new('first close')
+    allow(transport_class).to receive(:new).and_return(*([original, replacement] * 11))
+    [original, replacement].each { |transport| allow(transport).to receive(:reconnectable?).and_return(true) }
+    client.disconnected = lambda do |error|
+      notifications << [error, Thread.current]
+      release.pop if error.equal?(first_error)
+    end
+
+    handlers[original].fetch(:close).call(first_error)
+    first_notification = notifications.pop(timeout: 5)
+    expect(first_notification).to match([first_error, an_instance_of(Thread)])
+    worker = first_notification.last
+
+    errors = Array.new(20) { |index| IOError.new("close #{index}") }
+    errors.each do |error|
+      previous = client.websocket_client
+      client.reconnect
+      expect(client.websocket_client).not_to equal(previous)
+      handlers[client.websocket_client].fetch(:close).call(error)
+    end
+
+    expect(worker).to be_alive
+    expect(notifications).to be_empty
+    release << true
+    expect(worker.join(5)).to equal(worker)
+    expect(notifications.pop(timeout: 5)).to eq([errors.last, worker])
+    expect(notifications).to be_empty
+
+    client.reconnect
+    handlers[client.websocket_client].fetch(:close).call(nil)
+    expect(notifications.pop(timeout: 5)).to match([nil, an_instance_of(Thread)])
+  ensure
+    release << true
+    worker&.join(5)
+  end
+
   it 'keeps the replacement setup deadline when an old setup frame is already being dispatched' do
     allow(replacement).to receive(:close)
     client.ready = -> { @ready = true }
@@ -973,6 +1012,25 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     expect(ready).to have_received(:call).once
   end
 
+  it 'handles runtime acknowledgments without scanning pending IDs before or after ready registration' do
+    client = @client = Bitflyer.realtime_client
+    client.ticker_btc_jpy = ->(_message) {}
+    receive_frame('0{}')
+    receive_frame('431[null]')
+
+    10.times { |index| client.subscribe("runtime_#{index}") { |_message| } }
+    pending = client.websocket_client.instance_variable_get(:@pending_subscriptions)
+    expect(pending).not_to receive(:each_key)
+
+    (2..6).each { |id| receive_frame("43#{id}[null]") }
+    client.ready = ready
+    expect(ready).to have_received(:call).once
+
+    (7..11).each { |id| receive_frame("43#{id}[null]") }
+    expect(pending).to be_empty
+    expect(ready).to have_received(:call).once
+  end
+
   it 'replaces a pending subscription callback without sending another request' do
     client = realtime_client
     original_callback = spy('original callback')
@@ -1078,6 +1136,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     receive_frame('0{}')
 
     client.unsubscribe('lightning_ticker_BTC_JPY')
+    expect(ready_notifications.pop(timeout: 5)).to be(true)
     expect(ready).to have_received(:call).once
     client.subscribe('lightning_ticker_BTC_JPY') { |_message| }
     expect(transport).to have_received(:send).with('422["subscribe","lightning_ticker_BTC_JPY"]')
@@ -1116,6 +1175,8 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
   context 'with runtime subscription deadlines' do
     let(:client) { realtime_client }
     let(:events) { Queue.new }
+    let(:websocket) { client.websocket_client }
+    let(:writer) { websocket.instance_variable_get(:@subscription_writer) }
 
     before do
       @now = 100_000
@@ -1131,7 +1192,47 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 
     def poll_after(milliseconds)
       @now += milliseconds
-      client.websocket_client.send(:poll_transport)
+      websocket.send(:poll_transport)
+    end
+
+    it 'gives a queued subscription the full acknowledgment window after dispatch' do
+      frame = '422["subscribe","lightning_ticker_BTC_JPY"]'
+      writer.synchronize do
+        client.ticker_btc_jpy = ->(_message) {}
+        11.times { poll_after(1_000) }
+        expect(transport).not_to have_received(:send).with(frame)
+      end
+
+      websocket.send(:send_subscription_frames)
+      expect(transport).to have_received(:send).with(frame).once
+      9.times { poll_after(1_000) }
+      poll_after(999)
+      expect(failure_notifications).to be_empty
+
+      poll_after(1)
+      expect(failure_notifications.pop(timeout: 5))
+        .to eq([:lightning_ticker_BTC_JPY, 'Timed out waiting for subscription acknowledgment'])
+      2.times { poll_after(1_000) }
+      receive_frame('432["late rejection"]')
+      receive_frame('42["lightning_executions_BTC_JPY",1]')
+      expect(events.pop(timeout: 5)).to eq(1)
+      expect(subscription_failed).to have_received(:call).once
+    end
+
+    it 'skips a canceled queued request even when the same channel is registered again' do
+      writer.synchronize do
+        client.ticker_btc_jpy = ->(_message) {}
+        client.unsubscribe('lightning_ticker_BTC_JPY')
+        client.ticker_btc_jpy = ->(message) { events << message }
+      end
+
+      websocket.send(:send_subscription_frames)
+      expect(transport).not_to have_received(:send).with('422["subscribe","lightning_ticker_BTC_JPY"]')
+      expect(transport).to have_received(:send).with('423["subscribe","lightning_ticker_BTC_JPY"]').once
+      receive_frame('433[null]')
+      receive_frame('42["lightning_ticker_BTC_JPY",1]')
+      expect(events.pop(timeout: 5)).to eq(1)
+      expect(subscription_failed).not_to have_received(:call)
     end
 
     it 'expires each missing acknowledgment on its own deadline while pongs and other events continue' do
@@ -1235,7 +1336,55 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     receive_frame('0{}')
 
     expect(frames).to eq([subscribe_frame, unsubscribe_frame])
+    expect(ready_notifications.pop(timeout: 5)).to be(true)
     expect(ready).to have_received(:call).once
+  end
+
+  it 'queues readiness behind a running market-data callback when the last pending channel is removed' do
+    client = realtime_client
+    started = Queue.new
+    resume = Queue.new
+    events = Queue.new
+    allow(ready).to receive(:call) { events << [:ready, Thread.current] }
+    client.ticker_btc_jpy = lambda do |message|
+      started << Thread.current
+      resume.pop
+      events << message
+    end
+    client.executions_btc_jpy = ->(_message) {}
+
+    receive_frame('0{}')
+    receive_frame('431[null]')
+    receive_frame('42["lightning_ticker_BTC_JPY","ticker"]')
+    worker = started.pop(timeout: 5)
+    expect(worker).to be_a(Thread)
+
+    unsubscribe = Thread.new { client.unsubscribe('lightning_executions_BTC_JPY') }
+    expect(unsubscribe.join(5)).to eq(unsubscribe)
+    expect(ready).not_to have_received(:call)
+    receive_frame('432[null]')
+    resume.close
+
+    expect(events.pop(timeout: 5)).to eq('ticker')
+    expect(events.pop(timeout: 5)).to eq([:ready, worker])
+    expect(ready).to have_received(:call).once
+  ensure
+    resume&.close
+    unsubscribe&.join(5)
+    client&.shutdown
+  end
+
+  it 'delivers readiness synchronously when registered after removing the last pending channel' do
+    client = @client = Bitflyer.realtime_client
+    client.ticker_btc_jpy = ->(_message) {}
+    receive_frame('0{}')
+    client.unsubscribe('lightning_ticker_BTC_JPY')
+
+    callers = []
+    callback = -> { callers << Thread.current }
+    2.times { client.ready = callback }
+
+    expect(callers).to eq([Thread.current])
   end
 
   it 'waits for new acknowledgments after reconnecting and ignores replies from the previous socket' do
@@ -1264,6 +1413,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
   end
 
   it 'discards a full queue of deltas on disconnect and delivers replacement deltas in order' do
+    stub_const("#{described_class}::CALLBACK_PAYLOAD_LIMIT", 1_024 * '"stale"'.bytesize)
     client = realtime_client
     next_transport = instance_double(Bitflyer::Realtime::Transport, send: nil, closed?: false, close_for_shutdown: nil)
     next_handlers = {}
@@ -1288,6 +1438,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     receive_frame("42#{JSON.generate(['lightning_board_BTC_JPY', *Array.new(1_024, 'stale')])}")
 
     handlers.fetch(:close).call(nil)
+    expect(client.websocket_client.instance_variable_get(:@pending_callback_bytes)).to eq(0)
     allow(transport).to receive(:reconnectable?).and_return(true)
     client.websocket_client.reconnect
     receive_frame('0{}', next_handlers)
@@ -1597,6 +1748,47 @@ describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
     receive_frame('41')
 
     expect(socket).to have_received(:close).once
+  end
+
+  it 'caps pending payload bytes and frees them on dequeue, unsubscribe, and shutdown' do
+    stub_const("#{described_class}::CALLBACK_PAYLOAD_LIMIT", 8)
+    started = Queue.new
+    resume = Queue.new
+    failures = Queue.new
+    client.subscription_failed = ->(channel, error) { failures << [channel, error] }
+    receive_frame('0{}')
+    client.subscribe(channel_name: :lightning_ticker_BTC_JPY) do |message|
+      started << message
+      resume.pop
+    end
+    client.subscribe(channel_name: :lightning_ticker_ETH_JPY) { |message| started << message }
+    client.subscribe(channel_name: :lightning_executions_BTC_JPY) { |_message| }
+    receive_frame('42["lightning_ticker_BTC_JPY","first"]')
+    expect(started.pop(timeout: 5)).to eq('first')
+
+    # Three multibyte characters and their JSON quotes fill the budget.
+    receive_frame('42["lightning_ticker_BTC_JPY","ééé","x"]')
+    receive_frame('433["rejected"]')
+    allow(Time).to receive(:now).and_return(Time.at(123))
+    receive_frame('3')
+    expect(client.last_pong_at).to eq(123)
+    resume << true
+    expect(started.pop(timeout: 5)).to eq('ééé')
+
+    receive_frame('42["lightning_ticker_ETH_JPY","stale!"]')
+    expect(client.instance_variable_get(:@pending_callback_bytes)).to eq(8)
+    client.unsubscribe(channel_name: :lightning_ticker_ETH_JPY)
+    receive_frame('42["lightning_ticker_BTC_JPY","oversize","third"]')
+    resume << true
+    expect(started.pop(timeout: 5)).to eq('third')
+    expect(failures.pop(timeout: 5)).to eq([:lightning_executions_BTC_JPY, 'rejected'])
+
+    receive_frame('42["lightning_ticker_BTC_JPY","stale"]')
+    client.shutdown
+    expect(client.instance_variable_get(:@pending_callback_bytes)).to eq(0)
+    expect(client.instance_variable_get(:@callback_queue)).to be_empty
+  ensure
+    resume&.close
   end
 
   it 'frees callback capacity on unsubscribe and preserves the order of other queued events' do

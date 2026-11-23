@@ -296,6 +296,9 @@ module Bitflyer
             raise ArgumentError, "#{field} is required in a parent order condition" if fields.fetch(field, nil).nil?
           end
           validate_order_numbers(fields)
+          return unless condition_type == 'TRAIL'
+
+          raise ArgumentError, 'offset must be a positive Integer' unless fields['offset'].positive?
         end
 
         def validate_order_numbers(fields)
