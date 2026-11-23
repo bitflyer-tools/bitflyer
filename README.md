@@ -254,6 +254,8 @@ Each realtime connection attempt has a 10-second deadline for TCP and TLS establ
 The client closes and retries a connection if the Socket.IO setup packet or the authentication response takes 10 seconds to arrive. Each step has its own deadline, independent of heartbeat activity.
 
 A `StandardError` raised by `disconnected` is reported to standard error. Automatic reconnection continues when enabled.
+Each client runs one asynchronous `disconnected` callback at a time and retains at most one pending
+notification. A new notification replaces any pending one while the worker is busy.
 
 If the server rejects authentication, the client closes the connection and passes a `RuntimeError` with the server response to `disconnected`. Authentication rejection stops automatic reconnection.
 If the rejection occurs before callback registration, assigning `disconnected` delivers the pending error synchronously, once.

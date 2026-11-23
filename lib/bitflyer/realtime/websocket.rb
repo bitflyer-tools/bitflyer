@@ -221,15 +221,14 @@ module Bitflyer
 
       def handle_close(error:, socket: @websocket_client, complete_close: nil)
         debug_log error
-        callback = @lifecycle_lock.synchronize do
+        @lifecycle_lock.synchronize do
           connecting_socket = @connection&.first
           next if lifecycle_inactive? || !(reset_readiness(socket) || (socket && connecting_socket.equal?(socket)))
 
           # Keep retries gated until the previous session has been invalidated.
           complete_close&.call
-          @disconnected
+          dispatch_disconnected(error, @disconnected)
         end
-        dispatch_disconnected(error, callback)
       end
 
       def setup_by_response(json:, socket: @websocket_client)
@@ -355,6 +354,8 @@ module Bitflyer
         @callback_transport = nil
         @callback_wakeup = ConditionVariable.new
         @callback_worker = nil
+        @disconnect_worker = nil
+        @pending_disconnect = nil
       end
 
       def enqueue_callback(channel, token, message, socket)
@@ -890,15 +891,37 @@ module Bitflyer
       end
 
       def notify_authentication_failure(error)
-        callback = @lifecycle_lock.synchronize do
+        @lifecycle_lock.synchronize do
           @pending_authentication_error = error unless @disconnected
-          @disconnected
+          dispatch_disconnected(error, @disconnected)
         end
-        dispatch_disconnected(error, callback)
       end
 
       def dispatch_disconnected(error, callback)
-        Thread.new { notify_disconnected(error, callback) } if callback
+        return unless callback
+
+        if @disconnect_worker&.alive?
+          @pending_disconnect = [error, callback]
+        else
+          @pending_disconnect = nil
+          @disconnect_worker = Thread.new { deliver_disconnects([error, callback]) }
+        end
+      end
+
+      def deliver_disconnects(notification)
+        while notification
+          notify_disconnected(*notification)
+          notification = next_disconnect_notification
+        end
+      end
+
+      def next_disconnect_notification
+        @lifecycle_lock.synchronize do
+          pending = @pending_disconnect
+          @pending_disconnect = nil
+          @disconnect_worker = nil unless pending
+          pending
+        end
       end
 
       def notify_disconnected(error, callback)
