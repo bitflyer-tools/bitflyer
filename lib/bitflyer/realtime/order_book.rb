@@ -113,6 +113,8 @@ module Bitflyer
       end
 
       def merge_side(side, levels)
+        raise ArgumentError, 'Order book sides must be arrays' unless levels.is_a?(Array)
+
         levels.each do |level|
           price = level.fetch('price')
           size = level.fetch('size')

@@ -11,13 +11,14 @@ module Bitflyer
       CONNECTION_TIMEOUT = 10
       SESSION_RESPONSE_TIMEOUT_MS = 10_000
       CALLBACK_QUEUE_LIMIT = 1_024
+      CALLBACK_PAYLOAD_LIMIT = 8 * 1024 * 1024
       FAILURE_NOTIFICATION_QUEUE_LIMIT = 1_024
       SUBSCRIPTION_ACK_TIMEOUT_MS = 10_000
       RECONNECT_BASE_DELAY = 1.0
       RECONNECT_MAX_DELAY = 30.0
       PingWrite = Struct.new(:acknowledged)
       private_constant :PingWrite, :CONNECTION_TIMEOUT, :SESSION_RESPONSE_TIMEOUT_MS, :CALLBACK_QUEUE_LIMIT,
-                       :FAILURE_NOTIFICATION_QUEUE_LIMIT, :SUBSCRIPTION_ACK_TIMEOUT_MS,
+                       :CALLBACK_PAYLOAD_LIMIT, :FAILURE_NOTIFICATION_QUEUE_LIMIT, :SUBSCRIPTION_ACK_TIMEOUT_MS,
                        :RECONNECT_BASE_DELAY, :RECONNECT_MAX_DELAY
 
       attr_accessor :ping_interval, :ping_timeout, :subscription_failed, :last_pong_at
@@ -98,8 +99,14 @@ module Bitflyer
       end
 
       def order_book(product_code:)
+        delta_channel = :"lightning_board_#{product_code}"
+        snapshot_channel = :"lightning_board_snapshot_#{product_code}"
         book = @session_mutex.synchronize do
-          @order_books[product_code] ||= register_order_book(product_code)
+          cached_book = @order_books[product_code] ||= register_order_book(delta_channel, snapshot_channel)
+          # Start receiving deltas before requesting the snapshot.
+          queue_subscription(delta_channel)
+          queue_subscription(snapshot_channel)
+          cached_book
         end
         send_subscription_frames
         book
@@ -122,7 +129,7 @@ module Bitflyer
           end
         end
         send_subscription_frames
-        notify_ready(socket)
+        notify_ready(socket, async: true)
       end
 
       def connect
@@ -206,15 +213,14 @@ module Bitflyer
 
       def handle_close(error:, socket: @websocket_client, complete_close: nil)
         debug_log error
-        callback = @lifecycle_lock.synchronize do
+        @lifecycle_lock.synchronize do
           connecting_socket = @connection&.first
           next if lifecycle_inactive? || !(reset_readiness(socket) || (socket && connecting_socket.equal?(socket)))
 
           # Keep retries gated until the previous session has been invalidated.
           complete_close&.call
-          @disconnected
+          dispatch_disconnected(error, @disconnected)
         end
-        dispatch_disconnected(error, callback)
       end
 
       def setup_by_response(json:, socket: @websocket_client)
@@ -266,9 +272,10 @@ module Bitflyer
           return if !@websocket_client.equal?(socket) || @session_ready
 
           @session_ready = true
-          registered_channels.each { |channel| queue_subscription(channel, setup: true) }
+          registered_channels.each { |channel| queue_subscription(channel) }
           @last_setup_subscription_id = @next_subscription_id
-          unless @pending_subscriptions.empty?
+          @pending_setup_subscription_count = @pending_subscriptions.size
+          if setup_subscriptions_pending?
             @subscription_ack_deadline = monotonic_milliseconds + SUBSCRIPTION_ACK_TIMEOUT_MS
           end
         end
@@ -281,7 +288,7 @@ module Bitflyer
           return unless @websocket_client.equal?(socket)
 
           pending = @pending_subscriptions[id]
-          return unless pending
+          return unless pending && pending.last != :queued
 
           channel = pending.first
           error = JSON.parse(json).first
@@ -366,19 +373,24 @@ module Bitflyer
       def initialize_callbacks
         @subscription_tokens = {}
         @callback_queue = []
+        @pending_callback_bytes = 0
         @pending_callback_counts = Hash.new(0)
         @callback_transport = nil
         @callback_wakeup = ConditionVariable.new
         @callback_worker = nil
+        @disconnect_worker = nil
+        @pending_disconnect = nil
       end
 
       def enqueue_callback(channel, token, message, socket)
+        bytes = JSON.generate(message, allow_nan: true).bytesize
         @lifecycle_lock.synchronize do
           return unless active_callback_transport?(socket)
           return if @pending_callback_counts[:market_data] >= CALLBACK_QUEUE_LIMIT
+          return if @pending_callback_bytes + bytes > CALLBACK_PAYLOAD_LIMIT
           return unless subscribed_callback(channel, token)
 
-          push_callback(:market_data, [channel, token, message, socket])
+          push_callback(:market_data, [bytes, channel, token, message, socket])
         end
       end
 
@@ -387,7 +399,7 @@ module Bitflyer
           return unless active_callback_transport?(socket)
           return if kind == :subscription_failed && @pending_callback_counts[kind] >= FAILURE_NOTIFICATION_QUEUE_LIMIT
 
-          push_callback(kind, [nil, nil, notification, socket])
+          push_callback(kind, [0, nil, nil, notification, socket])
         end
       end
 
@@ -395,12 +407,14 @@ module Bitflyer
         @callback_worker ||= Thread.new { deliver_callbacks }
         @callback_queue << [kind, event]
         @pending_callback_counts[kind] += 1
+        @pending_callback_bytes += event.first
         @callback_wakeup.signal
       end
 
       def deliver_callbacks
         while (event = next_callback_event)
-          deliver_callback(*event)
+          _bytes, channel, token, message, socket = event
+          deliver_callback(channel, token, message, socket)
         end
       end
 
@@ -412,6 +426,7 @@ module Bitflyer
 
           kind, event = entry
           @pending_callback_counts[kind] -= 1
+          @pending_callback_bytes -= event.first
           event
         end
       end
@@ -438,15 +453,20 @@ module Bitflyer
         end
       end
 
-      def discard_channel_callbacks(channel)
-        previous_size = @callback_queue.size
-        @callback_queue.delete_if { |kind, event| kind == :market_data && event.first == channel }
-        @pending_callback_counts[:market_data] -= previous_size - @callback_queue.size
+      def discard_channel_callbacks(channel_name)
+        @callback_queue.delete_if do |kind, event|
+          next false unless kind == :market_data && event[1] == channel_name
+
+          @pending_callback_counts[kind] -= 1
+          @pending_callback_bytes -= event.first
+          true
+        end
       end
 
       def clear_callback_queue
         @callback_queue.clear
         @pending_callback_counts.clear
+        @pending_callback_bytes = 0
       end
 
       def stop_callbacks
@@ -462,18 +482,11 @@ module Bitflyer
         end
       end
 
-      def register_order_book(product_code)
+      def register_order_book(delta_channel, snapshot_channel)
         book = OrderBook.new
-        delta_channel = :"lightning_board_#{product_code}"
-        # Start receiving deltas before requesting the snapshot.
-        register_board_feed(delta_channel, book.method(:update), delta_channel)
-        register_board_feed(:"lightning_board_snapshot_#{product_code}", book.method(:replace), delta_channel)
+        @board_feeds[delta_channel] = [book.method(:update), delta_channel]
+        @board_feeds[snapshot_channel] = [book.method(:replace), delta_channel]
         book
-      end
-
-      def register_board_feed(channel, handler, delta_channel)
-        @board_feeds[channel] = [handler, delta_channel]
-        queue_subscription(channel)
       end
 
       def route_messages(channel, messages, socket)
@@ -503,25 +516,27 @@ module Bitflyer
         end
       end
 
-      def queue_subscription(channel, setup: false)
+      def queue_subscription(channel)
         return unless @session_ready
         return if @acknowledged_subscriptions.key?(channel)
         return if @pending_subscription_ids.key?(channel)
 
         @next_subscription_id += 1
-        deadline = monotonic_milliseconds + SUBSCRIPTION_ACK_TIMEOUT_MS unless setup
-        @pending_subscriptions[@next_subscription_id] = [channel, deadline]
+        @pending_subscriptions[@next_subscription_id] = [channel, :queued]
         @pending_subscription_ids[channel] = @next_subscription_id
-        queue_subscription_frame("42#{@next_subscription_id}#{['subscribe', channel].to_json}")
+        queue_subscription_frame("42#{@next_subscription_id}#{['subscribe', channel].to_json}", @next_subscription_id)
       end
 
       def remove_pending_subscription(channel)
         id = @pending_subscription_ids.delete(channel)
-        @pending_subscriptions.delete(id) if id
+        return unless id
+
+        @pending_subscriptions.delete(id)
+        @pending_setup_subscription_count -= 1 if id <= @last_setup_subscription_id
       end
 
-      def queue_subscription_frame(frame)
-        @subscription_frames << [@websocket_client, frame]
+      def queue_subscription_frame(frame, id = nil)
+        @subscription_frames << [@websocket_client, frame, id]
       end
 
       def send_subscription_frames
@@ -541,9 +556,22 @@ module Bitflyer
 
       def take_subscription_frame
         @session_mutex.synchronize do
-          @subscription_writer.unlock if @subscription_frames.empty?
-          @subscription_frames.shift
+          while (entry = @subscription_frames.shift)
+            socket, frame, id = entry
+            return [socket, frame] if !id || begin_subscription_dispatch?(id)
+          end
+          @subscription_writer.unlock
+          nil
         end
+      end
+
+      def begin_subscription_dispatch?(id)
+        pending = @pending_subscriptions[id]
+        return false unless pending && pending.last == :queued
+
+        deadline = monotonic_milliseconds + SUBSCRIPTION_ACK_TIMEOUT_MS if id > @last_setup_subscription_id
+        pending[1] = deadline
+        true
       end
 
       def close_connections
@@ -738,6 +766,7 @@ module Bitflyer
 
           @subscription_ack_deadline = nil
           @subscription_rejected = true
+          @pending_setup_subscription_count = 0
           @pending_subscriptions.clear
           @pending_subscription_ids.clear
           @websocket_client
@@ -751,7 +780,9 @@ module Bitflyer
           return unless @websocket_client.equal?(socket) && socket.open?
 
           now = monotonic_milliseconds
-          pending = @pending_subscriptions.select { |_id, (_channel, deadline)| deadline && now >= deadline }
+          pending = @pending_subscriptions.select do |_id, (_channel, deadline)|
+            deadline.is_a?(Integer) && now >= deadline
+          end
           pending.each_value { |channel, _deadline| remove_pending_subscription(channel) }
           pending
         end
@@ -834,7 +865,7 @@ module Bitflyer
       end
 
       def setup_subscriptions_pending?
-        @pending_subscriptions.each_key.any? { |id| id <= @last_setup_subscription_id }
+        @pending_setup_subscription_count.positive?
       end
 
       def take_ready_callback
@@ -861,6 +892,7 @@ module Bitflyer
         @order_books.each_value(&:invalidate)
         @subscription_frames = []
         @next_subscription_id = @last_setup_subscription_id = 0
+        @pending_setup_subscription_count = 0
         @pending_subscriptions = {}
         @pending_subscription_ids = {}
         @acknowledged_subscriptions = {}
@@ -893,15 +925,37 @@ module Bitflyer
       end
 
       def notify_authentication_failure(error)
-        callback = @lifecycle_lock.synchronize do
+        @lifecycle_lock.synchronize do
           @pending_authentication_error = error unless @disconnected
-          @disconnected
+          dispatch_disconnected(error, @disconnected)
         end
-        dispatch_disconnected(error, callback)
       end
 
       def dispatch_disconnected(error, callback)
-        Thread.new { notify_disconnected(error, callback) } if callback
+        return unless callback
+
+        if @disconnect_worker&.alive?
+          @pending_disconnect = [error, callback]
+        else
+          @pending_disconnect = nil
+          @disconnect_worker = Thread.new { deliver_disconnects([error, callback]) }
+        end
+      end
+
+      def deliver_disconnects(notification)
+        while notification
+          notify_disconnected(*notification)
+          notification = next_disconnect_notification
+        end
+      end
+
+      def next_disconnect_notification
+        @lifecycle_lock.synchronize do
+          pending = @pending_disconnect
+          @pending_disconnect = nil
+          @disconnect_worker = nil unless pending
+          pending
+        end
       end
 
       def notify_disconnected(error, callback)
