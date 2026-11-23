@@ -168,6 +168,38 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     expect(raw.pop(timeout: 5)).to eq('bids' => [{ 'price' => 102, 'size' => 2 }], 'asks' => [])
   end
 
+  %i[bids asks].each do |side|
+    it "rejects an empty object in #{side} until a valid snapshot arrives" do
+      book
+      frame('0{}')
+      frame('431[null]')
+
+      [snapshot, delta].each do |channel|
+        board(snapshot, bids: [[100, 1]], asks: [[110, 1]])
+        expect(book.current.best_bid.price).to eq(100)
+        expect(book.top_of_book.best_ask.price).to eq(110)
+        malformed = { bids: [{ price: 105, size: 1 }], asks: [{ price: 115, size: 1 }] }
+        malformed[side] = {}
+
+        expect { frame("42#{[channel, malformed].to_json}") }
+          .to output(/Order book sides must be arrays/).to_stdout
+        expect(book).not_to be_ready
+        expect(book.current).to be_nil
+        expect(book.top_of_book).to be_nil
+
+        board(delta, bids: [[106, 1]])
+        expect(book).not_to be_ready
+
+        board(snapshot)
+        expect(book).to be_ready
+        expect(book.current.bids).to be_empty
+        expect(book.current.asks).to be_empty
+        board(delta)
+        expect(book).to be_ready
+      end
+    end
+  end
+
   {
     'an overflowing price' => '{"price":1e309,"size":1}',
     'an overflowing size' => '{"price":100,"size":1e309}',
@@ -312,30 +344,42 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     expect(book.current).to be_nil
   end
 
-  it 'retries rejected board subscriptions on the same connection without duplicating requests' do
-    book
-    frame('0{}')
-    client.subscribe(delta) { |_message| }
-    client.subscribe(snapshot) { |_message| }
-    frame('431["subscription rejected"]')
-    frame('432["subscription rejected"]')
+  %i[delta snapshot].each do |feed|
+    %i[rejected timed_out].each do |failure|
+      it "retries only the #{failure.to_s.tr('_', ' ')} #{feed} feed through order_book" do
+        failed_channel = public_send(feed)
+        failed_id, acknowledged_id = feed == :delta ? [1, 2] : [2, 1]
+        raw = Queue.new
+        websocket = client.websocket_client
+        frame('0{}')
+        book
+        client.subscribe(failed_channel) { |message| raw << message }
+        callbacks = websocket.channel_callbacks
+        frame("43#{acknowledged_id}[null]")
+        if failure == :rejected
+          frame("43#{failed_id}#{['subscription rejected'].to_json}")
+        else
+          allow(transport).to receive(:open?).and_return(true)
+          allow(websocket).to receive(:monotonic_milliseconds)
+            .and_return(Process.clock_gettime(Process::CLOCK_MONOTONIC, :millisecond) + 10_000)
+          websocket.send(:expire_runtime_subscriptions, transport)
+        end
 
-    client.subscribe(delta) { |_message| }
-    client.subscribe(snapshot) { |_message| }
-    client.subscribe(delta) { |_message| }
-    client.subscribe(snapshot) { |_message| }
-    frame('433[null]')
-    frame('434[null]')
+        expect(client.order_book(product_code: 'BTC_JPY')).to equal(book)
+        expect(client.order_book(product_code: 'BTC_JPY')).to equal(book)
+        expect(transport).to have_received(:send).with("423#{['subscribe', failed_channel].to_json}").once
+        frame('433[null]')
+        expect(client.order_book(product_code: 'BTC_JPY')).to equal(book)
+        expect(websocket.channel_callbacks).to eq(callbacks)
+        expect(transport).to have_received(:send).with(/\A42\d+\["subscribe",/).exactly(3).times
 
-    raw = Queue.new
-    client.subscribe(delta) { |message| raw << message }
-    client.subscribe(snapshot) { |_message| }
-    [delta, snapshot].each do |channel|
-      expect(transport).to have_received(:send).with(/\A42\d+\["subscribe","#{channel}"\]\z/).twice
+        expect(book).not_to be_ready
+        board(snapshot, bids: [[8, 1]])
+        expect(book).to be_ready
+        board(delta, bids: [[8, 2]])
+        expect(book.current.best_bid.size).to eq(2)
+        expect(raw.pop(timeout: 5).fetch('bids')).to eq([{ 'price' => 8, 'size' => feed == :delta ? 2 : 1 }])
+      end
     end
-    board(snapshot, bids: [[8, 1]])
-    board(delta, bids: [[8, 2]])
-    expect(book.current.best_bid.size).to eq(2)
-    expect(raw.pop(timeout: 5).fetch('bids')).to eq([{ 'price' => 8, 'size' => 2 }])
   end
 end

@@ -105,9 +105,13 @@ module Bitflyer
       end
 
       def merge(message)
+        bids = message.fetch('bids')
+        asks = message.fetch('asks')
+        raise ArgumentError, 'Order book sides must be arrays' unless bids.is_a?(Array) && asks.is_a?(Array)
+
         @current = nil
-        best_bid = merge_side(@bids, message.fetch('bids'), @best_bid, descending: true)
-        best_ask = merge_side(@asks, message.fetch('asks'), @best_ask, descending: false)
+        best_bid = merge_side(@bids, bids, @best_bid, descending: true)
+        best_ask = merge_side(@asks, asks, @best_ask, descending: false)
         @top_of_book = nil unless @best_bid.equal?(best_bid) && @best_ask.equal?(best_ask)
         @best_bid = best_bid
         @best_ask = best_ask
