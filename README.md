@@ -29,6 +29,13 @@ ruby -r bitflyer -e 'p Bitflyer.http_public_client.board(product_code: "BTC_JPY"
 
 See the [getting started guide](docs/getting-started.md) for a script that lists markets and fetches an order book.
 
+## Features
+
+- Fetch markets, order book snapshots, tickers, executions, and funding rates over public HTTP.
+- Read balances and positions and place or cancel orders over authenticated HTTP.
+- Iterate through execution and balance history one page at a time.
+- Subscribe to live market data and authenticated order events, and track a live order book.
+
 ## Usage
 
 See https://lightning.bitflyer.jp/docs for details.
