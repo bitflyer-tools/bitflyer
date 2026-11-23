@@ -17,12 +17,13 @@ module Bitflyer
       SUBSCRIPTION_ACK_TIMEOUT_MS = 10_000
       RECONNECT_BASE_DELAY = 1.0
       RECONNECT_MAX_DELAY = 30.0
-      private_constant :CONNECTION_TIMEOUT, :SESSION_RESPONSE_TIMEOUT_MS, :CALLBACK_QUEUE_LIMIT,
+      PingWrite = Struct.new(:acknowledged)
+      private_constant :PingWrite, :CONNECTION_TIMEOUT, :SESSION_RESPONSE_TIMEOUT_MS, :CALLBACK_QUEUE_LIMIT,
                        :CALLBACK_PAYLOAD_LIMIT, :FAILURE_NOTIFICATION_QUEUE_LIMIT, :SUBSCRIPTION_ACK_TIMEOUT_MS,
                        :RECONNECT_BASE_DELAY, :RECONNECT_MAX_DELAY
 
-      attr_accessor :ping_interval, :ping_timeout, :subscription_failed
-      attr_reader :websocket_client, :ready, :disconnected, :last_ping_at, :last_pong_at
+      attr_accessor :ping_interval, :ping_timeout, :subscription_failed, :last_pong_at
+      attr_reader :websocket_client, :ready, :disconnected, :last_ping_at
 
       def initialize(host:, key:, secret:, debug: false)
         @host = host
@@ -147,47 +148,32 @@ module Bitflyer
 
       def send_ping
         socket = @websocket_client
-        last_ping_monotonic = @last_ping_monotonic
-        ping_interval = @ping_interval
-        return unless last_ping_monotonic && ping_interval
-
-        now = monotonic_milliseconds
-        return unless now - last_ping_monotonic >= ping_interval
-
-        debug_log 'Sent ping'
         return unless socket
-        return if socket.send('2') == false
 
-        @lifecycle_lock.synchronize do
-          if @websocket_client.equal?(socket)
-            @last_ping_monotonic = now
-            @last_ping_at = Time.now.to_i
-          end
-        end
+        ping = begin_ping(socket)
+        return unless ping
+
+        sent = socket.send('2')
+        sent_at = monotonic_milliseconds if sent
+        debug_log 'Sent ping' if sent
+      ensure
+        finish_ping(ping, sent_at) if ping
       end
 
       def wait_pong
-        socket = @websocket_client
-        last_pong_monotonic = @last_pong_monotonic
-        ping_interval = @ping_interval
-        ping_timeout = @ping_timeout
-        return unless last_pong_monotonic && ping_interval && ping_timeout
-
-        now = monotonic_milliseconds
-        return unless now - last_pong_monotonic >= ping_interval + ping_timeout
+        socket = @lifecycle_lock.synchronize do
+          deadline = @pong_deadline
+          @websocket_client if deadline && monotonic_milliseconds >= deadline
+        end
+        return unless socket
 
         debug_log 'Timed out waiting pong'
-        socket&.close
+        socket.close
       end
 
       def last_ping_at=(timestamp)
         @last_ping_monotonic = monotonic_from_unix_seconds(timestamp)
         @last_ping_at = timestamp
-      end
-
-      def last_pong_at=(timestamp)
-        @last_pong_monotonic = monotonic_from_unix_seconds(timestamp)
-        @last_pong_at = timestamp
       end
 
       def reconnect
@@ -305,6 +291,7 @@ module Bitflyer
 
           pending = @pending_subscriptions[id]
           return unless pending && pending.last != :queued
+          break if expire_setup_subscriptions
 
           arguments = JSON.parse(json)
           return unless arguments.is_a?(Array)
@@ -315,7 +302,9 @@ module Bitflyer
           record_subscription_result(id, channel, error)
           [channel, error]
         end
-        notify_subscription_failure(socket, channel, error) unless error.nil?
+        return close_subscription_timeout(socket) unless channel
+
+        notify_subscription_failure(socket, channel, error)
         notify_ready(socket, async: true)
       end
 
@@ -323,7 +312,9 @@ module Bitflyer
         @lifecycle_lock.synchronize do
           return if lifecycle_inactive? || !socket || !@websocket_client.equal?(socket)
 
-          @last_pong_monotonic = monotonic_milliseconds
+          ping = @ping_write
+          ping.acknowledged = true if ping
+          @pong_deadline = nil
           @last_pong_at = Time.now.to_i
         end
         debug_log 'Received pong'
@@ -352,6 +343,36 @@ module Bitflyer
       end
 
       private
+
+      def begin_ping(socket)
+        @lifecycle_lock.synchronize do
+          return unless @websocket_client.equal?(socket) && !lifecycle_inactive?
+          return if @ping_write || @pong_deadline
+          return unless ping_due?
+
+          @ping_write = PingWrite.new(false)
+        end
+      end
+
+      def ping_due?
+        last_ping = @last_ping_monotonic
+        interval = @ping_interval
+        last_ping && interval && monotonic_milliseconds - last_ping >= interval
+      end
+
+      def finish_ping(ping, sent_at)
+        @lifecycle_lock.synchronize do
+          return unless @ping_write.equal?(ping)
+
+          @ping_write = nil
+          return unless sent_at
+
+          @last_ping_monotonic = sent_at
+          @last_ping_at = Time.now.to_i
+          timeout = @ping_timeout
+          @pong_deadline = sent_at + timeout if timeout && !ping.acknowledged
+        end
+      end
 
       def registered_channels
         @board_feeds.keys | @channel_callbacks.keys
@@ -648,6 +669,7 @@ module Bitflyer
       def replace_transport(transport)
         return if @websocket_client.equal?(transport)
 
+        @ping_write = @pong_deadline = nil
         @ping_interval = @ping_timeout = nil
         @session_deadline = nil
         self.last_ping_at = self.last_pong_at = nil
@@ -730,7 +752,8 @@ module Bitflyer
         @ping_interval = body['pingInterval']&.to_i || 25_000
         @ping_timeout = body['pingTimeout']&.to_i || 60_000
         @last_ping_at = @last_pong_at = Time.now.to_i
-        @last_ping_monotonic = @last_pong_monotonic = monotonic_milliseconds
+        @ping_write = @pong_deadline = nil
+        @last_ping_monotonic = monotonic_milliseconds
       end
 
       def session_expired?(socket)
@@ -752,17 +775,23 @@ module Bitflyer
       end
 
       def close_expired_subscriptions
-        socket = @session_mutex.synchronize do
-          deadline = @subscription_ack_deadline
-          return unless deadline && monotonic_milliseconds >= deadline && setup_subscriptions_pending?
+        socket = @session_mutex.synchronize { expire_setup_subscriptions }
+        close_subscription_timeout(socket) if socket
+      end
 
-          @subscription_ack_deadline = nil
-          @subscription_rejected = true
-          @pending_setup_subscription_count = 0
-          @pending_subscriptions.clear
-          @pending_subscription_ids.clear
-          @websocket_client
-        end
+      def expire_setup_subscriptions
+        deadline = @subscription_ack_deadline
+        return unless deadline && monotonic_milliseconds >= deadline && setup_subscriptions_pending?
+
+        @subscription_ack_deadline = nil
+        @subscription_rejected = true
+        @pending_setup_subscription_count = 0
+        @pending_subscriptions.clear
+        @pending_subscription_ids.clear
+        @websocket_client
+      end
+
+      def close_subscription_timeout(socket)
         debug_log 'Timed out waiting for setup subscription acknowledgments'
         socket&.close
       end
@@ -784,6 +813,8 @@ module Bitflyer
       end
 
       def notify_subscription_failure(socket, channel, error)
+        return if error.nil?
+
         failure = @subscription_failed
         enqueue_notification(socket, :subscription_failed) { failure.call(channel, error) } if failure
       end
@@ -872,6 +903,7 @@ module Bitflyer
         @session_mutex.synchronize do
           return false unless @websocket_client.equal?(socket)
 
+          @ping_write = @pong_deadline = nil
           @callback_transport = nil
           clear_callback_queue
           clear_readiness

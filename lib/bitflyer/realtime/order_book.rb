@@ -60,10 +60,7 @@ module Bitflyer
         @lock.synchronize do
           next unless @ready
 
-          @top_of_book ||= TopOfBook.new(
-            best_bid: @bids.each_value.max_by(&:price),
-            best_ask: @asks.each_value.min_by(&:price)
-          )
+          @top_of_book ||= TopOfBook.new(best_bid: @best_bid, best_ask: @best_ask)
         end
       end
 
@@ -100,32 +97,60 @@ module Bitflyer
       def reset
         @bids = {}
         @asks = {}
+        @best_bid = nil
+        @best_ask = nil
         @current = nil
         @top_of_book = nil
         @ready = false
       end
 
       def merge(message)
+        bids = message.fetch('bids')
+        asks = message.fetch('asks')
+        raise ArgumentError, 'Order book sides must be arrays' unless bids.is_a?(Array) && asks.is_a?(Array)
+
         @current = nil
-        @top_of_book = nil
-        merge_side(@bids, message.fetch('bids'))
-        merge_side(@asks, message.fetch('asks'))
+        best_bid = merge_side(@bids, bids, @best_bid, descending: true)
+        best_ask = merge_side(@asks, asks, @best_ask, descending: false)
+        @top_of_book = nil unless @best_bid.equal?(best_bid) && @best_ask.equal?(best_ask)
+        @best_bid = best_bid
+        @best_ask = best_ask
       end
 
-      def merge_side(side, levels)
-        raise ArgumentError, 'Order book sides must be arrays' unless levels.is_a?(Array)
-
+      def merge_side(side, levels, best, descending:)
+        best_key = best ? best.price.to_r : nil
         levels.each do |level|
-          price = level.fetch('price')
-          size = level.fetch('size')
-          raise ArgumentError, 'Order book price and size must be finite non-negative numbers' unless
-            valid_level_number?(price) && valid_level_number?(size)
+          key = apply_level(side, level)
+          next unless key
 
-          next if price.zero?
-
-          key = price.to_r
-          size.zero? ? side.delete(key) : side[key] = Level.new(price: price, size: size)
+          best_key = key if best_key.nil? || (descending ? key > best_key : key < best_key)
         end
+        best_level(side, best_key, descending: descending)
+      end
+
+      def best_level(side, best_key, descending:)
+        return unless best_key
+
+        # A removed candidate needs a replacement only after the whole side has been updated.
+        side[best_key] || side[descending ? side.each_key.max : side.each_key.min]
+      end
+
+      def apply_level(side, level)
+        price = level.fetch('price')
+        size = level.fetch('size')
+        raise ArgumentError, 'Order book price and size must be finite non-negative numbers' unless
+          valid_level_number?(price) && valid_level_number?(size)
+
+        return if price.zero?
+
+        key = price.to_r
+        if size.zero?
+          side.delete(key)
+          return
+        end
+
+        side[key] = Level.new(price: price, size: size)
+        key
       end
 
       def valid_level_number?(value)

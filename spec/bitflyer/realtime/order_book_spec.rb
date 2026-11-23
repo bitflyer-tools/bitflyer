@@ -74,7 +74,24 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     expect(book.current.spread).to be_nil
   end
 
-  it 'reads the best levels after deltas without building sorted depth' do
+  it 'reuses the top after unrelated deltas without scanning either side' do
+    book
+    frame('0{}')
+    frame('431[null]')
+    board(snapshot, bids: [[8, 1], [9, 2]], asks: [[12, 3], [10, 4]])
+    top = book.top_of_book
+
+    %i[@bids @asks].each do |name|
+      side = book.instance_variable_get(name)
+      %i[each each_key each_value keys values].each { |method| expect(side).not_to receive(method) }
+    end
+    board(delta, bids: [[8, 5]])
+    expect(book.top_of_book).to equal(top)
+    board(delta, asks: [[12, 6]])
+    expect(book.top_of_book).to equal(top)
+  end
+
+  it 'reads immutable best levels after deltas and snapshot replacement without building sorted depth' do
     book
     frame('0{}')
     frame('431[null]')
@@ -97,6 +114,23 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     top = book.top_of_book
     expect(top.best_bid).to be_nil
     expect(top.best_ask.price).to eq(10)
+    expect(top.spread).to be_nil
+
+    board(delta, bids: [[7, 1], [9, 2]], asks: [[9.5, 3]])
+    improved = book.top_of_book
+    expect([improved.best_bid.price, improved.best_ask.price, improved.spread]).to eq([9, 9.5, 0.5])
+    expect(improved.best_bid).to be_frozen
+    expect(improved.best_ask).to be_frozen
+
+    board(delta, bids: [[11, 2], [11.0, 0], [9, 0], [7, 4]], asks: [[9.5, 0]])
+    replacement = book.top_of_book
+    expect([replacement.best_bid.price, replacement.best_bid.size, replacement.best_ask.price]).to eq([7, 4, 10])
+    expect([improved.best_bid.price, improved.best_ask.price]).to eq([9, 9.5])
+
+    board(snapshot, asks: [[15, 2]])
+    top = book.top_of_book
+    expect(top.best_bid).to be_nil
+    expect(top.best_ask.price).to eq(15)
     expect(top.spread).to be_nil
   end
 
