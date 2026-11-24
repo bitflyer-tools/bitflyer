@@ -43,6 +43,26 @@ module Bitflyer
         end
       end
 
+      # The read-only object returned to callers. It exposes no way to replace, update, or
+      # invalidate the book it wraps; only the realtime client's internal update path can do that.
+      class Handle
+        def initialize(order_book)
+          @order_book = order_book
+        end
+
+        def current
+          @order_book.current
+        end
+
+        def top_of_book
+          @order_book.top_of_book
+        end
+
+        def ready?
+          @order_book.ready?
+        end
+      end
+
       def initialize
         @lock = Mutex.new
         invalidate

@@ -15,6 +15,7 @@ module Bitflyer
       @session_mutex: Thread::Mutex
       @channel_callbacks: Hash[Symbol, message_callback]
       @order_books: Hash[String, OrderBook]
+      @order_book_handles: Hash[String, OrderBook::Handle]
       @board_feeds: Hash[Symbol, [Method, Symbol]]
       @next_subscription_id: Integer
       @last_setup_subscription_id: Integer
@@ -54,7 +55,7 @@ module Bitflyer
 
       def subscribe: (channel_name: Symbol) { (untyped message) -> void } -> void
 
-      def order_book: (product_code: String) -> OrderBook
+      def order_book: (product_code: String) -> OrderBook::Handle
 
       def unsubscribe: (channel_name: Symbol) -> void
 
