@@ -42,41 +42,41 @@ module Bitflyer
 
         private
 
-        def before?(a, b)
-          @descending ? a > b : a < b
+        def before?(lhs, rhs)
+          @descending ? lhs > rhs : lhs < rhs
         end
 
-        def swap(i, j)
-          vi = @heap.fetch(i)
-          vj = @heap.fetch(j)
-          @heap[i] = vj
-          @heap[j] = vi
-          @positions[vj] = i
-          @positions[vi] = j
+        def swap(pos_a, pos_b)
+          val_a = @heap.fetch(pos_a)
+          val_b = @heap.fetch(pos_b)
+          @heap[pos_a] = val_b
+          @heap[pos_b] = val_a
+          @positions[val_b] = pos_a
+          @positions[val_a] = pos_b
         end
 
-        def sift_up(i)
-          while i > 0
-            parent = (i - 1) / 2
-            break unless before?(@heap.fetch(i), @heap.fetch(parent))
+        def sift_up(idx)
+          while idx.positive?
+            parent = (idx - 1) / 2
+            break unless before?(@heap.fetch(idx), @heap.fetch(parent))
 
-            swap(i, parent)
-            i = parent
+            swap(idx, parent)
+            idx = parent
           end
         end
 
-        def sift_down(i)
+        def sift_down(idx)
           size = @heap.size
           loop do
-            left = (2 * i) + 1
-            right = (2 * i) + 2
-            top = i
+            left = (2 * idx) + 1
+            right = (2 * idx) + 2
+            top = idx
             top = left if left < size && before?(@heap.fetch(left), @heap.fetch(top))
             top = right if right < size && before?(@heap.fetch(right), @heap.fetch(top))
-            break if top == i
+            break if top == idx
 
-            swap(i, top)
-            i = top
+            swap(idx, top)
+            idx = top
           end
         end
       end
