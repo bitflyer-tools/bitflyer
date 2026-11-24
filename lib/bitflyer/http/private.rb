@@ -91,11 +91,7 @@ module Bitflyer
           minute_to_expire: nil,
           time_in_force: 'GTC'
         )
-          raise ArgumentError, 'product_code is required' if product_code.nil?
-          raise ArgumentError, 'child_order_type is required' if child_order_type.nil?
-          raise ArgumentError, 'side is required' if side.nil?
-          raise ArgumentError, 'size is required' if size.nil?
-          raise ArgumentError, 'price is required for LIMIT orders' if child_order_type == 'LIMIT' && price.nil?
+          validate_send_child_order_params(product_code, child_order_type, side, size, price)
 
           body = {
             product_code: product_code,
@@ -268,6 +264,14 @@ module Bitflyer
         end
 
         private
+
+        def validate_send_child_order_params(product_code, child_order_type, side, size, price)
+          raise ArgumentError, 'product_code is required' if product_code.nil?
+          raise ArgumentError, 'child_order_type is required' if child_order_type.nil?
+          raise ArgumentError, 'side is required' if side.nil?
+          raise ArgumentError, 'size is required' if size.nil?
+          raise ArgumentError, 'price is required for LIMIT orders' if child_order_type == 'LIMIT' && price.nil?
+        end
 
         def order_identifier(**identifiers)
           supplied = identifiers.compact

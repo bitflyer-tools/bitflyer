@@ -160,6 +160,14 @@ module Bitflyer
 
         private
 
+        def validate_send_child_order_params: (
+          String? product_code,
+          String? child_order_type,
+          String? side,
+          (Integer | Float)? size,
+          (Integer | Float)? price
+        ) -> void
+
         def order_identifier: (**String?) -> Hash[Symbol, String]
 
         def normalize_parent_order_condition: (Hash[Symbol | String, untyped] condition) -> Hash[String, untyped]
