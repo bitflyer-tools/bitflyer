@@ -53,7 +53,7 @@ module Bitflyer
         def each: () -> Enumerator[[Symbol, message_callback], _ChannelCallbacks]
                 | () { ([Symbol, message_callback]) -> void } -> _ChannelCallbacks
         def each_pair: () -> Enumerator[[Symbol, message_callback], _ChannelCallbacks]
-                     | () { (Symbol, message_callback) -> void } -> _ChannelCallbacks
+                     | () { ([Symbol, message_callback]) -> void } -> _ChannelCallbacks
         def map: [T] () { ([Symbol, message_callback]) -> T } -> Array[T]
                | () -> Enumerator[[Symbol, message_callback], Array[untyped]]
         def []: (Symbol channel_name) -> message_callback?
