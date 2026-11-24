@@ -1,0 +1,23 @@
+module Bitflyer
+  module Realtime
+    class OrderBook
+      class PriceIndex
+        @descending: bool
+        @heap: Array[Rational]
+        @positions: Hash[Rational, Integer]
+
+        def initialize: (descending: bool) -> void
+        def best: () -> Rational?
+        def add: (Rational key) -> void
+        def remove: (Rational key) -> void
+
+        private
+
+        def before?: (Rational a, Rational b) -> bool
+        def swap: (Integer i, Integer j) -> void
+        def sift_up: (Integer i) -> void
+        def sift_down: (Integer i) -> void
+      end
+    end
+  end
+end
