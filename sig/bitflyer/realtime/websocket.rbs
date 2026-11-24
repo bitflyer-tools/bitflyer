@@ -35,9 +35,42 @@ module Bitflyer
         attr_accessor acknowledged: bool
       end
 
+      interface _ChannelNames
+        def each: () -> Enumerator[Symbol, _ChannelNames]
+                | () { (Symbol) -> void } -> _ChannelNames
+        def map: [T] () { (Symbol) -> T } -> Array[T]
+               | () -> Enumerator[Symbol, Array[untyped]]
+        def include?: (Symbol channel_name) -> bool
+        def []: (int index) -> Symbol?
+              | (int start, int length) -> Array[Symbol]?
+              | (Range[Integer?] range) -> Array[Symbol]?
+        def empty?: () -> bool
+        def length: () -> Integer
+        def size: () -> Integer
+      end
+
+      interface _ChannelCallbacks
+        def each: () -> Enumerator[[Symbol, message_callback], _ChannelCallbacks]
+                | () { ([Symbol, message_callback]) -> void } -> _ChannelCallbacks
+        def each_pair: () -> Enumerator[[Symbol, message_callback], _ChannelCallbacks]
+                     | () { (Symbol, message_callback) -> void } -> _ChannelCallbacks
+        def map: [T] () { ([Symbol, message_callback]) -> T } -> Array[T]
+               | () -> Enumerator[[Symbol, message_callback], Array[untyped]]
+        def []: (Symbol channel_name) -> message_callback?
+        def fetch: (Symbol channel_name) -> message_callback
+                 | [T] (Symbol channel_name, T default) -> (message_callback | T)
+                 | [T] (Symbol channel_name) { (Symbol channel_name) -> T } -> (message_callback | T)
+        def key?: (Symbol channel_name) -> bool
+        def keys: () -> Array[Symbol]
+        def values: () -> Array[message_callback]
+        def empty?: () -> bool
+        def length: () -> Integer
+        def size: () -> Integer
+      end
+
       attr_reader websocket_client: Transport?
-      def channel_names: () -> Array[Symbol]
-      def channel_callbacks: () -> Hash[Symbol, message_callback]
+      def channel_names: () -> _ChannelNames
+      def channel_callbacks: () -> _ChannelCallbacks
       attr_accessor ping_interval: Integer?
       attr_accessor ping_timeout: Integer?
       attr_accessor last_ping_at: Integer?

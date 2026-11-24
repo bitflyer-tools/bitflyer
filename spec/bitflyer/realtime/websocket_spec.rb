@@ -1140,6 +1140,8 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     callbacks = websocket.channel_callbacks
     expect(names).to eq([channel]).and be_frozen
     expect(callbacks).to eq(channel => callback).and be_frozen
+    expect { names << :another }.to raise_error(FrozenError)
+    expect { callbacks.delete(channel) }.to raise_error(FrozenError)
 
     receive_frame('0{}')
     expect(transport).to have_received(:send).with('421["subscribe","lightning_ticker_BTC_JPY"]').once
