@@ -402,6 +402,7 @@ module Bitflyer
       def enqueue_notification(socket, kind, bytes: 0, &notification)
         @lifecycle_lock.synchronize do
           return unless active_callback_transport?(socket)
+
           if kind == :subscription_failed
             return if @pending_callback_counts[kind] >= FAILURE_NOTIFICATION_QUEUE_LIMIT
             return if @pending_failure_bytes + bytes > FAILURE_NOTIFICATION_PAYLOAD_LIMIT
