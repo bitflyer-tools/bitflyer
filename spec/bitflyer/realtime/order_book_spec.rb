@@ -335,6 +335,42 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     release.close
   end
 
+  it 'invalidates the book when deltas push a side past the configured level limit and recovers on a valid snapshot' do
+    stub_const('Bitflyer::Realtime::OrderBook::MAX_LEVELS_PER_SIDE', 2)
+    book
+    frame('0{}')
+    frame('431[null]')
+    board(snapshot, bids: [[8, 1], [9, 2]])
+    expect(book).to be_ready
+
+    expect { board(delta, bids: [[10, 1]]) }.to output(/Order book side exceeds 2 levels/).to_stdout
+    expect(book).not_to be_ready
+    expect(book.current).to be_nil
+
+    board(delta, bids: [[11, 1]])
+    expect(book).not_to be_ready
+
+    board(snapshot, bids: [[8, 1]])
+    expect(book).to be_ready
+    expect(book.current.bids.map(&:price)).to eq([8])
+  end
+
+  it 'invalidates the book when a single snapshot exceeds the configured level limit' do
+    stub_const('Bitflyer::Realtime::OrderBook::MAX_LEVELS_PER_SIDE', 2)
+    book
+    frame('0{}')
+    frame('431[null]')
+
+    expect { board(snapshot, bids: [[8, 1], [9, 1], [10, 1]]) }
+      .to output(/Order book side exceeds 2 levels/).to_stdout
+    expect(book).not_to be_ready
+    expect(book.current).to be_nil
+
+    board(snapshot, bids: [[8, 1]])
+    expect(book).to be_ready
+    expect(book.current.bids.map(&:price)).to eq([8])
+  end
+
   it 'keeps the book uninitialized when the delta subscription is rejected' do
     book
     frame('0{}')

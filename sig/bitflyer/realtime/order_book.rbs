@@ -70,6 +70,7 @@ module Bitflyer
       def merge_side: (Hash[Rational, Level] side, untyped levels, Level? best, descending: bool) -> Level?
       def best_level: (Hash[Rational, Level] side, Rational? best_key, descending: bool) -> Level?
       def apply_level: (Hash[Rational, Level] side, untyped level) -> Rational?
+      def new_level_over_limit?: (Hash[Rational, Level] side, Rational key) -> bool
       def valid_level_number?: (untyped value) -> bool
       def sorted_levels: (Hash[Rational, Level] side) -> Array[Level]
     end
