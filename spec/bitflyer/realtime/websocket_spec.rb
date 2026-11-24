@@ -373,6 +373,32 @@ describe Bitflyer::Realtime::WebSocketClient do
     release << true
   end
 
+  it 'skips JSON serialization for market data dropped by a count-saturated callback queue' do
+    stub_const("#{described_class}::CALLBACK_QUEUE_LIMIT", 1)
+    @attempts = [nil]
+    @client = Bitflyer.realtime_client
+    allow(JSON).to receive(:generate).and_call_original
+    release = Queue.new
+    events = Queue.new
+    @client.ticker_btc_jpy = lambda do |event|
+      events << event
+      release.pop
+    end
+
+    receive_message('42["lightning_ticker_BTC_JPY",0]')
+    expect(events.pop(timeout: 5)).to eq(0)
+    receive_message('42["lightning_ticker_BTC_JPY",1]')
+    expect(JSON).to have_received(:generate).with(1, allow_nan: true)
+
+    receive_message('42["lightning_ticker_BTC_JPY",2]')
+    expect(JSON).not_to have_received(:generate).with(2, allow_nan: true)
+
+    release << true
+    expect(events.pop(timeout: 5)).to eq(1)
+  ensure
+    release << true
+  end
+
   it 'waits for the replacement session before sending new subscriptions' do
     allow_any_instance_of(described_class).to receive(:start_monitoring)
     @attempts = [nil, nil]
