@@ -123,9 +123,7 @@ module Bitflyer
             discard_channel_callbacks(channel_name)
             return if @board_feeds.key?(channel_name)
 
-            remove_pending_subscription(channel_name)
-            @acknowledged_subscriptions.delete(channel_name)
-            queue_subscription_frame("42#{['unsubscribe', channel_name].to_json}") if @session_ready
+            cancel_subscription(channel_name)
             @websocket_client
           end
         end
@@ -551,6 +549,22 @@ module Bitflyer
 
         @pending_subscriptions.delete(id)
         @pending_setup_subscription_count -= 1 if id <= @last_setup_subscription_id
+      end
+
+      def cancel_subscription(channel)
+        id = @pending_subscription_ids[channel]
+        undispatched = id && @pending_subscriptions[id]&.last == :queued
+        remove_pending_subscription(channel)
+        @acknowledged_subscriptions.delete(channel)
+        if undispatched
+          remove_subscription_frame(id)
+        elsif @session_ready
+          queue_subscription_frame("42#{['unsubscribe', channel].to_json}")
+        end
+      end
+
+      def remove_subscription_frame(id)
+        @subscription_frames.reject! { |_socket, _frame, frame_id| frame_id == id }
       end
 
       def queue_subscription_frame(frame, id = nil)

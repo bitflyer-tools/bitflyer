@@ -1315,6 +1315,21 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
       expect(subscription_failed).not_to have_received(:call)
     end
 
+    it 'leaves no queued frames after repeated subscribe and unsubscribe pairs while dispatch is stalled' do
+      writer.synchronize do
+        100.times do
+          client.ticker_btc_jpy = ->(_message) {}
+          client.unsubscribe('lightning_ticker_BTC_JPY')
+        end
+      end
+
+      expect(websocket.instance_variable_get(:@subscription_frames)).to be_empty
+      expect(websocket.instance_variable_get(:@pending_subscriptions)).to be_empty
+      expect(websocket.instance_variable_get(:@pending_subscription_ids)).to be_empty
+      expect(websocket.channel_names).to eq([:lightning_executions_BTC_JPY])
+      expect(transport).not_to have_received(:send).with(/"unsubscribe"/)
+    end
+
     it 'expires each missing acknowledgment on its own deadline while pongs and other events continue' do
       client.subscribe('lightning_ticker_BTC_JPY') { |_message| }
       5.times { poll_after(1_000) }
@@ -1418,6 +1433,30 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     expect(frames).to eq([subscribe_frame, unsubscribe_frame])
     expect(ready_notifications.pop(timeout: 5)).to be(true)
     expect(ready).to have_received(:call).once
+  end
+
+  it 'delivers events after resubscribing a channel unsubscribed while its subscribe frame was dispatching' do
+    client = realtime_client
+    events = Queue.new
+    client.ticker_btc_jpy = ->(_message) {}
+    subscribe_frame = '421["subscribe","lightning_ticker_BTC_JPY"]'
+    unsubscribe_frame = '42["unsubscribe","lightning_ticker_BTC_JPY"]'
+    resubscribe_frame = '422["subscribe","lightning_ticker_BTC_JPY"]'
+    frames = []
+    allow(transport).to receive(:send) do |frame|
+      if frame == subscribe_frame
+        client.unsubscribe('lightning_ticker_BTC_JPY')
+        client.ticker_btc_jpy = ->(message) { events << message }
+      end
+      frames << frame
+    end
+
+    receive_frame('0{}')
+
+    expect(frames).to eq([subscribe_frame, unsubscribe_frame, resubscribe_frame])
+    receive_frame('432[null]')
+    receive_frame('42["lightning_ticker_BTC_JPY",1]')
+    expect(events.pop(timeout: 5)).to eq(1)
   end
 
   it 'queues readiness behind a running market-data callback when the last pending channel is removed' do
