@@ -386,6 +386,8 @@ module Bitflyer
       end
 
       def enqueue_callback(channel, token, message, socket)
+        return if @pending_callback_counts[:market_data] >= CALLBACK_QUEUE_LIMIT
+
         bytes = JSON.generate(message, allow_nan: true).bytesize
         @lifecycle_lock.synchronize do
           return unless active_callback_transport?(socket)
