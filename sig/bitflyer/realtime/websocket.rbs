@@ -59,7 +59,7 @@ module Bitflyer
         def []: (Symbol channel_name) -> message_callback?
         def fetch: (Symbol channel_name) -> message_callback
                  | [T] (Symbol channel_name, T default) -> (message_callback | T)
-                 | [T] (Symbol channel_name) { (Symbol channel_name) -> T } -> (message_callback | T)
+                 | [K2 < Symbol, T] (K2 channel_name) { (K2) -> T } -> (message_callback | T)
         def key?: (Symbol channel_name) -> bool
         def keys: () -> Array[Symbol]
         def values: () -> Array[message_callback]
