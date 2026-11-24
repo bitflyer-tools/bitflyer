@@ -14,13 +14,14 @@ module Bitflyer
       CALLBACK_QUEUE_LIMIT = 1_024
       CALLBACK_PAYLOAD_LIMIT = 8 * 1024 * 1024
       FAILURE_NOTIFICATION_QUEUE_LIMIT = 1_024
+      FAILURE_NOTIFICATION_PAYLOAD_LIMIT = 8 * 1024 * 1024
       SUBSCRIPTION_ACK_TIMEOUT_MS = 10_000
       RECONNECT_BASE_DELAY = 1.0
       RECONNECT_MAX_DELAY = 30.0
       PingWrite = Struct.new(:acknowledged)
       private_constant :PingWrite, :CONNECTION_TIMEOUT, :SESSION_RESPONSE_TIMEOUT_MS, :CALLBACK_QUEUE_LIMIT,
-                       :CALLBACK_PAYLOAD_LIMIT, :FAILURE_NOTIFICATION_QUEUE_LIMIT, :SUBSCRIPTION_ACK_TIMEOUT_MS,
-                       :RECONNECT_BASE_DELAY, :RECONNECT_MAX_DELAY
+                       :CALLBACK_PAYLOAD_LIMIT, :FAILURE_NOTIFICATION_QUEUE_LIMIT, :FAILURE_NOTIFICATION_PAYLOAD_LIMIT,
+                       :SUBSCRIPTION_ACK_TIMEOUT_MS, :RECONNECT_BASE_DELAY, :RECONNECT_MAX_DELAY
 
       attr_accessor :ping_interval, :ping_timeout, :subscription_failed, :last_pong_at
       attr_reader :websocket_client, :ready, :disconnected, :last_ping_at
@@ -382,6 +383,7 @@ module Bitflyer
         @subscription_tokens = {}
         @callback_queue = []
         @pending_callback_bytes = 0
+        @pending_failure_bytes = 0
         @pending_callback_counts = Hash.new(0)
         @callback_transport = nil
         @callback_wakeup = ConditionVariable.new
@@ -402,12 +404,16 @@ module Bitflyer
         end
       end
 
-      def enqueue_notification(socket, kind, &notification)
+      def enqueue_notification(socket, kind, bytes: 0, &notification)
         @lifecycle_lock.synchronize do
           return unless active_callback_transport?(socket)
-          return if kind == :subscription_failed && @pending_callback_counts[kind] >= FAILURE_NOTIFICATION_QUEUE_LIMIT
 
-          push_callback(kind, [0, nil, nil, notification, socket])
+          if kind == :subscription_failed
+            return if @pending_callback_counts[kind] >= FAILURE_NOTIFICATION_QUEUE_LIMIT
+            return if @pending_failure_bytes + bytes > FAILURE_NOTIFICATION_PAYLOAD_LIMIT
+          end
+
+          push_callback(kind, [bytes, nil, nil, notification, socket])
         end
       end
 
@@ -415,7 +421,11 @@ module Bitflyer
         @callback_worker ||= Thread.new { deliver_callbacks }
         @callback_queue << [kind, event]
         @pending_callback_counts[kind] += 1
-        @pending_callback_bytes += event.first
+        if kind == :subscription_failed
+          @pending_failure_bytes += event.first
+        else
+          @pending_callback_bytes += event.first
+        end
         @callback_wakeup.signal
       end
 
@@ -434,7 +444,11 @@ module Bitflyer
 
           kind, event = entry
           @pending_callback_counts[kind] -= 1
-          @pending_callback_bytes -= event.first
+          if kind == :subscription_failed
+            @pending_failure_bytes -= event.first
+          else
+            @pending_callback_bytes -= event.first
+          end
           event
         end
       end
@@ -482,6 +496,7 @@ module Bitflyer
         @callback_queue.clear
         @pending_callback_counts.clear
         @pending_callback_bytes = 0
+        @pending_failure_bytes = 0
       end
 
       def stop_callbacks
@@ -816,7 +831,10 @@ module Bitflyer
         return if error.nil?
 
         failure = @subscription_failed
-        enqueue_notification(socket, :subscription_failed) { failure.call(channel, error) } if failure
+        return unless failure
+
+        bytes = JSON.generate(error, allow_nan: true).bytesize
+        enqueue_notification(socket, :subscription_failed, bytes: bytes) { failure.call(channel, error) }
       end
 
       def wait_for_monitor_tick

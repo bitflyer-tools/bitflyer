@@ -32,6 +32,7 @@ module Bitflyer
       CALLBACK_QUEUE_LIMIT: Integer
       CALLBACK_PAYLOAD_LIMIT: Integer
       FAILURE_NOTIFICATION_QUEUE_LIMIT: Integer
+      FAILURE_NOTIFICATION_PAYLOAD_LIMIT: Integer
       SUBSCRIPTION_ACK_TIMEOUT_MS: Integer
       RECONNECT_BASE_DELAY: Float
       RECONNECT_MAX_DELAY: Float
@@ -44,6 +45,7 @@ module Bitflyer
       @callback_queue: Array[[callback_kind, callback_event]]
       @pending_callback_counts: Hash[callback_kind, Integer]
       @pending_callback_bytes: Integer
+      @pending_failure_bytes: Integer
       @callback_transport: Transport?
       @callback_wakeup: Thread::ConditionVariable
       @callback_worker: Thread?
@@ -66,7 +68,7 @@ module Bitflyer
 
       def enqueue_callback: (Symbol channel, Object? token, untyped message, Transport? socket) -> void
 
-      def enqueue_notification: (Transport? socket, :ready | :subscription_failed kind) { () -> void } -> void
+      def enqueue_notification: (Transport? socket, :ready | :subscription_failed kind, ?bytes: Integer) { () -> void } -> void
 
       def push_callback: (callback_kind, callback_event) -> void
 

@@ -1873,6 +1873,44 @@ describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
     resume&.close
   end
 
+  it 'caps pending subscription failure payload bytes and frees them on dequeue and shutdown' do
+    stub_const("#{described_class}::FAILURE_NOTIFICATION_PAYLOAD_LIMIT", 8)
+    started = Queue.new
+    resume = Queue.new
+    failures = Queue.new
+    client.subscription_failed = lambda do |channel, error|
+      started << true
+      resume.pop
+      failures << [channel, error]
+    end
+    receive_frame('0{}')
+    client.subscribe(channel_name: :lightning_ticker_BTC_JPY) { |_message| }
+    client.subscribe(channel_name: :lightning_ticker_ETH_JPY) { |_message| }
+    client.subscribe(channel_name: :lightning_executions_BTC_JPY) { |_message| }
+
+    receive_frame('431["x"]')
+    expect(started.pop(timeout: 5)).to be(true)
+
+    # "oversize" exceeds the stubbed 8-byte budget while the callback worker is blocked, so it is dropped.
+    receive_frame('432["oversize"]')
+    expect(client.instance_variable_get(:@pending_failure_bytes)).to eq(0)
+
+    # An ordinary small failure still fits the budget and reaches the callback.
+    receive_frame('433["y"]')
+    expect(client.instance_variable_get(:@pending_failure_bytes)).to eq(3)
+    resume << true
+    expect(failures.pop(timeout: 5)).to eq([:lightning_ticker_BTC_JPY, 'x'])
+    expect(started.pop(timeout: 5)).to be(true)
+    resume << true
+    expect(failures.pop(timeout: 5)).to eq([:lightning_executions_BTC_JPY, 'y'])
+
+    client.shutdown
+    expect(client.instance_variable_get(:@pending_failure_bytes)).to eq(0)
+    expect(client.instance_variable_get(:@callback_queue)).to be_empty
+  ensure
+    resume&.close
+  end
+
   it 'frees callback capacity on unsubscribe and preserves the order of other queued events' do
     channel = :lightning_ticker_BTC_JPY
     started = Queue.new
