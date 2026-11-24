@@ -454,6 +454,24 @@ describe Bitflyer::Realtime::WebSocketClient do
     expect(@client.websocket_client.websocket_client).to eq(socket)
   end
 
+  it 'keeps the monitor alive after a broken WebSocket upgrade write and replays subscriptions once reconnected' do
+    @attempts = [Errno::EPIPE.new, nil]
+    @reconnected = Queue.new
+    @client = Bitflyer.realtime_client
+    events = Queue.new
+    @client.ticker_btc_jpy = ->(event) { events << event }
+
+    Timeout.timeout(5) { @reconnected.pop }
+    expect(socket).to have_received(:connect).twice
+    expect(socket).to have_received(:close_for_shutdown).once
+
+    receive_message('0{}')
+    expect(socket).to have_received(:send).with('421["subscribe","lightning_ticker_BTC_JPY"]').once
+
+    receive_message('42["lightning_ticker_BTC_JPY",{"ltp":100}]')
+    expect(events.pop(timeout: 5)).to eq({ 'ltp' => 100 })
+  end
+
   context 'when a session stalls before readiness' do
     let(:pongs) { Queue.new }
     let(:notifications) { Queue.new }
