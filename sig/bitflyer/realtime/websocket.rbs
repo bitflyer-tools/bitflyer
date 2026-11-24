@@ -36,8 +36,8 @@ module Bitflyer
       end
 
       interface _ChannelNames
-        def each: () -> Enumerator[Symbol, _ChannelNames]
-                | () { (Symbol) -> void } -> _ChannelNames
+        def each: () -> Enumerator[Symbol, self]
+                | () { (Symbol) -> void } -> self
         def map: [T] () { (Symbol) -> T } -> Array[T]
                | () -> Enumerator[Symbol, Array[untyped]]
         def include?: (Symbol channel_name) -> bool
@@ -50,10 +50,10 @@ module Bitflyer
       end
 
       interface _ChannelCallbacks
-        def each: () -> Enumerator[[Symbol, message_callback], _ChannelCallbacks]
-                | () { ([Symbol, message_callback]) -> void } -> _ChannelCallbacks
-        def each_pair: () -> Enumerator[[Symbol, message_callback], _ChannelCallbacks]
-                     | () { ([Symbol, message_callback]) -> void } -> _ChannelCallbacks
+        def each: () -> Enumerator[[Symbol, message_callback], self]
+                | () { ([Symbol, message_callback]) -> void } -> self
+        def each_pair: () -> Enumerator[[Symbol, message_callback], self]
+                     | () { ([Symbol, message_callback]) -> void } -> self
         def map: [T] () { ([Symbol, message_callback]) -> T } -> Array[T]
                | () -> Enumerator[[Symbol, message_callback], Array[untyped]]
         def []: (Symbol channel_name) -> message_callback?
