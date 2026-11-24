@@ -68,6 +68,10 @@ the connection. The next request opens a new connection.
 order ID or order acceptance ID. They raise `ArgumentError` before sending a request
 if neither identifier or both identifiers are non-nil.
 
+`send_child_order`, `cancel_child_order`, `cancel_parent_order`, and `cancel_all_child_orders`
+default `product_code` to `BTC_JPY` when omitted, but raise `ArgumentError` before sending a
+request if `product_code: nil` is passed explicitly.
+
 `send_child_order` requires `child_order_type`, `side`, and `size`. A `LIMIT` order also requires
 `price`. Missing or nil required values raise `ArgumentError` before an HTTP request is made.
 
