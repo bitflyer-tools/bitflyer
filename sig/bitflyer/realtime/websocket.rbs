@@ -140,6 +140,10 @@ module Bitflyer
 
       def route_messages: (Symbol channel, Array[untyped] messages, Transport? socket) { (Object? token) -> void } -> void
 
+      def cancel_subscription: (Symbol channel) -> void
+
+      def remove_subscription_frame: (Integer id) -> void
+
       def start_monitoring: () -> Thread
 
       def wait_for_monitor_tick: () -> (:retry | :poll)?
