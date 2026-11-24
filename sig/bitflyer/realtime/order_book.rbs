@@ -45,6 +45,8 @@ module Bitflyer
         def initialize: (bids: Array[Level], asks: Array[Level]) -> void
       end
 
+      MAX_LEVELS_PER_SIDE: Integer
+
       @lock: Mutex
       @bids: Hash[Rational, Level]
       @asks: Hash[Rational, Level]
