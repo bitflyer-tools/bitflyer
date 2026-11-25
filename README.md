@@ -376,6 +376,8 @@ After changing the realtime channel list, regenerate the callback setter signatu
 
 Bug reports and pull requests are welcome on GitHub. See the [contributing guide](CONTRIBUTING.md) for setup and checks. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [Contributor Covenant](http://contributor-covenant.org) code of conduct.
 
+See the [changelog](CHANGELOG.md) for notable changes per release.
+
 
 ## License
 
