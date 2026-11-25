@@ -217,16 +217,12 @@ module Bitflyer
           max_pages: IdPagination::DEFAULT_MAX_PAGES,
           &block
         )
-          stream = IdPagination.stream(before, max_pages) do |cursor|
+          IdPagination.stream(before, max_pages, on_each: block) do |cursor|
             executions(
               product_code: product_code, count: count, before: cursor, after: after,
               child_order_id: child_order_id, child_order_acceptance_id: child_order_acceptance_id
             )
           end
-          return stream unless block
-
-          stream.each(&block)
-          nil
         end
 
         def balance_history(currency_code: nil, count: nil, before: nil, after: nil)
@@ -243,13 +239,9 @@ module Bitflyer
           currency_code: nil, count: nil, before: nil, after: nil, max_pages: IdPagination::DEFAULT_MAX_PAGES,
           &block
         )
-          stream = IdPagination.stream(before, max_pages) do |cursor|
+          IdPagination.stream(before, max_pages, on_each: block) do |cursor|
             balance_history(currency_code: currency_code, count: count, before: cursor, after: after)
           end
-          return stream unless block
-
-          stream.each(&block)
-          nil
         end
 
         def positions(product_code: 'FX_BTC_JPY')
