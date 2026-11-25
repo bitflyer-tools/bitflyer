@@ -67,9 +67,12 @@ module Bitflyer
         private
 
         def format_from_date(from_date)
-          return from_date unless from_date.respond_to?(:strftime)
-
-          from_date.strftime('%Y-%m-%dT%H:%M:%S.%L')
+          case from_date
+          when Time
+            from_date.strftime('%Y-%m-%dT%H:%M:%S.%L')
+          else
+            from_date
+          end
         end
       end
     end
