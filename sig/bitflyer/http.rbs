@@ -7,7 +7,8 @@ module Bitflyer
     module IdPagination
       DEFAULT_MAX_PAGES: Integer
 
-      def self.stream: (Integer? before, Integer max_pages) { (Integer?) -> untyped } -> Enumerator[untyped, untyped]
+      def self.stream: (Integer? before, Integer max_pages, ?on_each: nil) { (Integer?) -> untyped } -> Enumerator[untyped, untyped]
+                      | (Integer? before, Integer max_pages, on_each: ^(untyped) -> void) { (Integer?) -> untyped } -> nil
 
       private def self.validate_page_budget: (Integer max_pages) -> void
     end
