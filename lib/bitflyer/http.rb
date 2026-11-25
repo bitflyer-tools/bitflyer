@@ -26,14 +26,8 @@ module Bitflyer
         enumerator = Enumerator.new do |yielder|
           cursor = before
           max_pages.times do
-            page = yield(cursor)
-            break if page.empty?
-
-            next_cursor = page.map { |entry| entry.fetch('id') }.min
-            break if cursor && next_cursor >= cursor
-
-            page.each { |entry| yielder << entry }
-            cursor = next_cursor
+            cursor = advance_page(yielder, cursor) { yield(cursor) }
+            break unless cursor
           end
         end
         return enumerator unless on_each
@@ -41,6 +35,18 @@ module Bitflyer
         enumerator.each(&on_each)
         nil
       end
+
+      def self.advance_page(yielder, cursor)
+        page = yield
+        return nil if page.empty?
+
+        next_cursor = page.map { |entry| entry.fetch('id') }.min
+        return nil if cursor && next_cursor >= cursor
+
+        page.each { |entry| yielder << entry }
+        next_cursor
+      end
+      private_class_method :advance_page
 
       def self.validate_page_budget(max_pages)
         return if max_pages.is_a?(Integer) && max_pages >= 0
