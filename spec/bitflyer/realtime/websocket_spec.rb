@@ -2026,6 +2026,20 @@ describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
 
       expect(ready_notifications.pop(timeout: 5)).to be(true)
     end
+
+    it 'derives the authentication nonce from SecureRandom rather than Random' do
+      allow(SecureRandom).to receive(:hex).with(16).and_call_original
+      allow(Random).to receive(:new)
+
+      receive_frame('0{}')
+
+      expect(SecureRandom).to have_received(:hex).with(16).once
+      expect(Random).not_to have_received(:new)
+      expect(socket).to have_received(:send).with(start_with('420')) do |frame|
+        _event, params = JSON.parse(frame.delete_prefix('420'))
+        expect(params.fetch('nonce')).to match(/\A[0-9a-f]{32}\z/)
+      end
+    end
   end
 end
 
