@@ -61,7 +61,15 @@ module Bitflyer
         end
 
         def chats(from_date: (Time.now - (5 * 24 * 60 * 60)))
-          @connection.get('/v1/getchats', from_date: from_date).body
+          @connection.get('/v1/getchats', from_date: format_from_date(from_date)).body
+        end
+
+        private
+
+        def format_from_date(from_date)
+          return from_date unless from_date.respond_to?(:strftime)
+
+          from_date.strftime('%Y-%m-%dT%H:%M:%S.%L')
         end
       end
     end
