@@ -6,7 +6,7 @@ target :lib do
   signature 'sig', 'sig-private'
   check 'lib'
 
-  library 'forwardable', 'json', 'net-http', 'openssl', 'socket', 'timeout', 'uri'
+  library 'forwardable', 'json', 'net-http', 'openssl', 'securerandom', 'socket', 'timeout', 'uri'
 
   configure_code_diagnostics(D::Ruby.default)
 end
