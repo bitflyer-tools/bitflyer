@@ -21,9 +21,10 @@ Run the same test, formatting, lint, and type-check commands used by
 [CI](.github/workflows/test.yml):
 
 ```sh
-bundle exec rspec
+COVERAGE=true bundle exec rspec
 bundle exec rubocop --only Layout lib
 bundle exec rubocop --except Layout lib
+ruby script/generate_realtime_signatures.rb --check
 bundle exec rake steep
 ```
 
