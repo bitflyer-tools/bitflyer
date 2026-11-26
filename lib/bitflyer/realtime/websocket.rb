@@ -139,7 +139,7 @@ module Bitflyer
 
         connected = connection_established?(connection)
       rescue SocketError, Errno::ECONNREFUSED, Errno::ECONNRESET, Errno::ETIMEDOUT,
-             Errno::EHOSTUNREACH, Errno::ENETUNREACH, Timeout::Error => e
+             Errno::EHOSTUNREACH, Errno::ENETUNREACH, Errno::EPIPE, Timeout::Error => e
         puts e
         puts e.backtrace&.join("\n")
       ensure
