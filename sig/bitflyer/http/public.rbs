@@ -32,6 +32,10 @@ module Bitflyer
         ) { (untyped) -> void } -> nil
 
         def chats: (?from_date: Time | String) -> untyped
+
+        private
+
+        def format_from_date: (Time | String from_date) -> String
       end
     end
   end

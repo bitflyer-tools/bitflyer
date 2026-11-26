@@ -136,10 +136,15 @@ describe Bitflyer::HTTP::Public::Client do
   end
 
   describe '#chats' do
-    it 'calls GET /v1/getchats with from_date' do
+    it 'formats a Time from_date as ISO 8601 with milliseconds' do
       frozen_time = Time.new(2025, 1, 10, 0, 0, 0, '+00:00')
       client.chats(from_date: frozen_time)
-      expect(connection).to have_received(:get).with('/v1/getchats', from_date: frozen_time)
+      expect(connection).to have_received(:get).with('/v1/getchats', from_date: '2025-01-10T00:00:00.000')
+    end
+
+    it 'passes a String from_date through unchanged' do
+      client.chats(from_date: '2025-01-10T00:00:00.000')
+      expect(connection).to have_received(:get).with('/v1/getchats', from_date: '2025-01-10T00:00:00.000')
     end
   end
 end
@@ -171,6 +176,24 @@ describe 'Public health requests' do
     it 'calls GET /v1/gethealth when product_code is explicitly nil' do
       client.health(product_code: nil)
       expect(http).to have_received(:request).with(have_attributes(method: 'GET', path: '/v1/gethealth'))
+    end
+  end
+
+  describe 'GET /v1/getchats' do
+    let(:http) { instance_double(Net::HTTP) }
+    let(:http_response) { instance_double(Net::HTTPOK, code: '200', body: '[]') }
+
+    before do
+      allow(Net::HTTP).to receive(:start).and_return(http)
+      allow(http).to receive(:request).and_return(http_response)
+    end
+
+    it 'sends an ISO 8601 formatted from_date query parameter' do
+      frozen_time = Time.new(2025, 1, 10, 0, 0, 0, '+00:00')
+      client.chats(from_date: frozen_time)
+      expect(http).to have_received(:request).with(
+        have_attributes(method: 'GET', path: '/v1/getchats?from_date=2025-01-10T00%3A00%3A00.000')
+      )
     end
   end
 end
