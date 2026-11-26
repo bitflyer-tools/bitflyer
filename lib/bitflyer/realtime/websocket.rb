@@ -2,6 +2,7 @@
 
 require 'json'
 require 'openssl'
+require 'securerandom'
 require 'bitflyer/realtime/channels'
 require 'bitflyer/realtime/transport'
 require_relative 'order_book'
@@ -124,9 +125,7 @@ module Bitflyer
             discard_channel_callbacks(channel_name)
             return if @board_feeds.key?(channel_name)
 
-            remove_pending_subscription(channel_name)
-            @acknowledged_subscriptions.delete(channel_name)
-            queue_subscription_frame("42#{['unsubscribe', channel_name].to_json}") if @session_ready
+            cancel_subscription(channel_name)
             @websocket_client
           end
         end
@@ -238,7 +237,7 @@ module Bitflyer
       def authenticate(socket: @websocket_client)
         debug_log 'Authenticate'
         timestamp = Time.now.to_i
-        nonce = Random.new.bytes(16).unpack1('H*').to_s
+        nonce = SecureRandom.hex(16)
         signature = OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new('sha256'), @secret.to_s, timestamp.to_s + nonce)
         auth_params = {
           api_key: @key,
@@ -393,6 +392,8 @@ module Bitflyer
       end
 
       def enqueue_callback(channel, token, message, socket)
+        return if @pending_callback_counts[:market_data] >= CALLBACK_QUEUE_LIMIT
+
         bytes = JSON.generate(message, allow_nan: true).bytesize
         @lifecycle_lock.synchronize do
           return unless active_callback_transport?(socket)
@@ -563,6 +564,22 @@ module Bitflyer
 
         @pending_subscriptions.delete(id)
         @pending_setup_subscription_count -= 1 if id <= @last_setup_subscription_id
+      end
+
+      def cancel_subscription(channel)
+        id = @pending_subscription_ids[channel]
+        undispatched = id && @pending_subscriptions[id]&.last == :queued
+        remove_pending_subscription(channel)
+        @acknowledged_subscriptions.delete(channel)
+        if undispatched
+          remove_subscription_frame(id)
+        elsif @session_ready
+          queue_subscription_frame("42#{['unsubscribe', channel].to_json}")
+        end
+      end
+
+      def remove_subscription_frame(id)
+        @subscription_frames.reject! { |_socket, _frame, frame_id| frame_id == id }
       end
 
       def queue_subscription_frame(frame, id = nil)
