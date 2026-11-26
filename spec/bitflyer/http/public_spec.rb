@@ -38,6 +38,18 @@ describe Bitflyer::HTTP::Public::Client do
     end
   end
 
+  describe '#board_state' do
+    it 'calls GET /v1/getboardstate with default product_code' do
+      client.board_state
+      expect(connection).to have_received(:get).with('/v1/getboardstate', product_code: 'BTC_JPY')
+    end
+
+    it 'calls GET /v1/getboardstate with custom product_code' do
+      client.board_state(product_code: 'ETH_JPY')
+      expect(connection).to have_received(:get).with('/v1/getboardstate', product_code: 'ETH_JPY')
+    end
+  end
+
   describe '#executions' do
     it 'calls GET /v1/executions with default params' do
       client.executions
