@@ -139,8 +139,6 @@ module Bitflyer
       def record_subscription_result: (Integer id, Symbol channel, untyped error) -> void
       def route_board_messages: (Symbol channel, Array[untyped] messages) -> void
 
-      def callback_channel_ready?: (Symbol channel) -> bool
-
       def route_messages: (Symbol channel, Array[untyped] messages, Transport? socket) { (Object? token) -> void } -> void
 
       def cancel_subscription: (Symbol channel) -> void
