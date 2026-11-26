@@ -80,7 +80,8 @@ module Bitflyer
 
       def active_callback_transport?: (Transport? socket) -> bool
 
-      def subscribed_callback: (Symbol channel, Object? token) -> (^(untyped) -> void)?
+      def subscribed_callback: (Symbol channel, Object? token, Transport? socket) -> (^(untyped) -> void)?
+      def callback_channel_ready?: (Symbol channel) -> bool
 
       def discard_channel_callbacks: (Symbol channel_name) -> void
 
