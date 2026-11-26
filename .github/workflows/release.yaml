@@ -43,3 +43,9 @@ jobs:
           BUNDLE_FROZEN=false bundle lock --local
           git add Gemfile.lock && git commit --amend --no-edit
       - uses: rubygems/release-gem@5c53f5308233b7c0f47411f0471b3faae6fa57b2 # v1.4.2
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(ruby -Ilib -rbitflyer/version -e 'puts Bitflyer::VERSION')
+          gh release create "v$version" --generate-notes
