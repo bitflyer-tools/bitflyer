@@ -28,6 +28,10 @@ module Bitflyer
           @connection.get('/v1/ticker', product_code: product_code).body
         end
 
+        def board_state(product_code: 'BTC_JPY')
+          @connection.get('/v1/getboardstate', product_code: product_code).body
+        end
+
         def funding_rate(product_code:)
           @connection.get('/v1/getfundingrate', product_code: product_code).body
         end
