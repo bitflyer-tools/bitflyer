@@ -2,6 +2,7 @@
 
 require 'json'
 require 'openssl'
+require 'securerandom'
 require 'bitflyer/realtime/transport'
 require_relative 'order_book'
 
@@ -235,7 +236,7 @@ module Bitflyer
       def authenticate(socket: @websocket_client)
         debug_log 'Authenticate'
         timestamp = Time.now.to_i
-        nonce = Random.new.bytes(16).unpack1('H*').to_s
+        nonce = SecureRandom.hex(16)
         signature = OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new('sha256'), @secret.to_s, timestamp.to_s + nonce)
         auth_params = {
           api_key: @key,
