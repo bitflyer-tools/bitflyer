@@ -244,6 +244,8 @@ in arrival order when a book update fails. Views already read stay unchanged as 
 
 Updates with a non-finite or negative price or size invalidate the book until a valid
 snapshot arrives. Zero-price levels are ignored, and a zero size removes the level at its price.
+Each side retains at most 5,000 price levels; a snapshot or delta that would push a side past
+that limit invalidates the book until a valid snapshot arrives.
 
 See the [snapshot](https://bf-lightning-api.readme.io/docs/realtime-board-snapshot) and
 [delta](https://bf-lightning-api.readme.io/docs/realtime-board) channel documentation.
