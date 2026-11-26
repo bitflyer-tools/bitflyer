@@ -50,6 +50,8 @@ module Bitflyer
       @lock: Mutex
       @bids: Hash[Rational, Level]
       @asks: Hash[Rational, Level]
+      @bid_index: PriceIndex
+      @ask_index: PriceIndex
       @best_bid: Level?
       @best_ask: Level?
       @current: View?
@@ -69,9 +71,8 @@ module Bitflyer
 
       def reset: () -> void
       def merge: (untyped message) -> void
-      def merge_side: (Hash[Rational, Level] side, untyped levels, Level? best, descending: bool) -> Level?
-      def best_level: (Hash[Rational, Level] side, Rational? best_key, descending: bool) -> Level?
-      def apply_level: (Hash[Rational, Level] side, untyped level) -> Rational?
+      def merge_side: (Hash[Rational, Level] side, untyped levels, PriceIndex index) -> Level?
+      def apply_level: (Hash[Rational, Level] side, PriceIndex index, untyped level) -> void
       def new_level_over_limit?: (Hash[Rational, Level] side, Rational key) -> bool
       def valid_level_number?: (untyped value) -> bool
       def sorted_levels: (Hash[Rational, Level] side) -> Array[Level]

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative 'order_book/price_index'
+
 module Bitflyer
   module Realtime
     class OrderBook
@@ -102,6 +104,8 @@ module Bitflyer
       def reset
         @bids = {}
         @asks = {}
+        @bid_index = PriceIndex.new(descending: true)
+        @ask_index = PriceIndex.new(descending: false)
         @best_bid = nil
         @best_ask = nil
         @current = nil
@@ -115,32 +119,20 @@ module Bitflyer
         raise ArgumentError, 'Order book sides must be arrays' unless bids.is_a?(Array) && asks.is_a?(Array)
 
         @current = nil
-        best_bid = merge_side(@bids, bids, @best_bid, descending: true)
-        best_ask = merge_side(@asks, asks, @best_ask, descending: false)
+        best_bid = merge_side(@bids, bids, @bid_index)
+        best_ask = merge_side(@asks, asks, @ask_index)
         @top_of_book = nil unless @best_bid.equal?(best_bid) && @best_ask.equal?(best_ask)
         @best_bid = best_bid
         @best_ask = best_ask
       end
 
-      def merge_side(side, levels, best, descending:)
-        best_key = best ? best.price.to_r : nil
-        levels.each do |level|
-          key = apply_level(side, level)
-          next unless key
-
-          best_key = key if best_key.nil? || (descending ? key > best_key : key < best_key)
-        end
-        best_level(side, best_key, descending: descending)
+      def merge_side(side, levels, index)
+        levels.each { |level| apply_level(side, index, level) }
+        key = index.best
+        key && side[key]
       end
 
-      def best_level(side, best_key, descending:)
-        return unless best_key
-
-        # A removed candidate needs a replacement only after the whole side has been updated.
-        side[best_key] || side[descending ? side.each_key.max : side.each_key.min]
-      end
-
-      def apply_level(side, level)
+      def apply_level(side, index, level)
         price = level.fetch('price')
         size = level.fetch('size')
         raise ArgumentError, 'Order book price and size must be finite non-negative numbers' unless
@@ -150,14 +142,14 @@ module Bitflyer
 
         key = price.to_r
         if size.zero?
-          side.delete(key)
+          index.remove(key) if side.delete(key)
           return
         end
 
         raise ArgumentError, "Order book side exceeds #{MAX_LEVELS_PER_SIDE} levels" if new_level_over_limit?(side, key)
 
+        index.add(key) unless side.key?(key)
         side[key] = Level.new(price: price, size: size)
-        key
       end
 
       def new_level_over_limit?(side, key)
