@@ -2,10 +2,6 @@ module Bitflyer
   module HTTP
     module Private
       class Client
-        PARENT_ORDER_CONDITION_COUNTS: Hash[String, Integer]
-        PARENT_ORDER_REQUIRED_FIELDS: Array[String]
-        PARENT_ORDER_CONDITION_FIELDS: Hash[String, Array[String]]
-
         @connection: Connection
 
         def initialize: (String key, String secret) -> void
@@ -161,16 +157,6 @@ module Bitflyer
         private
 
         def order_identifier: (**String?) -> Hash[Symbol, String]
-
-        def normalize_parent_order_condition: (Hash[Symbol | String, untyped] condition) -> Hash[String, untyped]
-
-        def validate_parent_order_condition_count: (String order_method, Integer count) -> void
-
-        def validate_parent_order_condition: (Hash[String, untyped] fields) -> void
-
-        def validate_order_numbers: (Hash[untyped, untyped] fields) -> void
-
-        def json_number?: (untyped value) -> bool
       end
     end
   end
