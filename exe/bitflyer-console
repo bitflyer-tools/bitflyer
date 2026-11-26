@@ -13,7 +13,7 @@ if api_key && api_secret
   private_client = Bitflyer.http_private_client(api_key, api_secret)
   puts 'public_client and private_client are ready (BITFLYER_API_KEY/BITFLYER_API_SECRET found).'
 else
-  puts 'public_client is ready. Set BITFLYER_API_KEY and BITFLYER_API_SECRET to also get private_client.'
+  puts 'public_client is ready. Set BITFLYER_API_KEY and BITFLYER_API_SECRET to also get a private client.'
 end
 
 binding.irb
