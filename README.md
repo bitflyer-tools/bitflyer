@@ -31,7 +31,7 @@ See the [getting started guide](docs/getting-started.md) for a script that lists
 
 ## Features
 
-- Fetch markets, order book snapshots, tickers, executions, and funding rates over public HTTP.
+- Fetch markets, order book snapshots, tickers, executions, funding rates, and board state over public HTTP.
 - Read balances and positions and place or cancel orders over authenticated HTTP.
 - Iterate through execution and balance history one page at a time.
 - Subscribe to live market data and authenticated order events, and track a live order book.
@@ -248,6 +248,8 @@ in arrival order when a book update fails. Views already read stay unchanged as 
 
 Updates with a non-finite or negative price or size invalidate the book until a valid
 snapshot arrives. Zero-price levels are ignored, and a zero size removes the level at its price.
+Each side retains at most 5,000 price levels; a snapshot or delta that would push a side past
+that limit invalidates the book until a valid snapshot arrives.
 
 See the [snapshot](https://bf-lightning-api.readme.io/docs/realtime-board-snapshot) and
 [delta](https://bf-lightning-api.readme.io/docs/realtime-board) channel documentation.
@@ -255,6 +257,8 @@ See the [snapshot](https://bf-lightning-api.readme.io/docs/realtime-board-snapsh
 #### Private events
 
 To subscribe to the private `child_order_events` and `parent_order_events`, pass your API key and secret when creating the `realtime_client`.
+Private callbacks start receiving events after authentication succeeds and the server acknowledges
+their subscription on the current connection. Both steps are required again after reconnection.
 
 #### Connection status monitoring
 
