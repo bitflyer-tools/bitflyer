@@ -711,6 +711,18 @@ describe Bitflyer do
 
         expect(socket).to have_received(:send).once
       end
+
+      it 'derives the nonce from SecureRandom' do
+        expect(SecureRandom).to receive(:hex).with(16).and_call_original
+        allow(socket).to receive(:send) do |message|
+          _event, params = JSON.parse(message.delete_prefix('420'))
+          expect(params.fetch('nonce')).to match(/\A[0-9a-f]{32}\z/)
+        end
+
+        client.websocket_client.setup_by_response(json: '{}')
+
+        expect(socket).to have_received(:send).once
+      end
     end
   end
 end
