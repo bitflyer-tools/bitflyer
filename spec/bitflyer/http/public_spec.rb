@@ -155,5 +155,10 @@ describe 'Public health requests' do
         have_attributes(method: 'GET', path: '/v1/gethealth?product_code=ETH_JPY')
       )
     end
+
+    it 'calls GET /v1/gethealth when product_code is explicitly nil' do
+      client.health(product_code: nil)
+      expect(http).to have_received(:request).with(have_attributes(method: 'GET', path: '/v1/gethealth'))
+    end
   end
 end
