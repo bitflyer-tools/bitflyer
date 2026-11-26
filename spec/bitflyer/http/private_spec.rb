@@ -57,6 +57,12 @@ describe Bitflyer::HTTP::Private::Client do
       end
     end
 
+    it 'rejects a nil product_code before making an HTTP request' do
+      expect(Net::HTTP).not_to receive(:start)
+      expect { client.send_child_order(**order.merge(product_code: nil)) }
+        .to raise_error(ArgumentError, 'product_code is required')
+    end
+
     [{}, { price: nil }].each do |price_option|
       it "rejects a limit order with #{price_option.empty? ? 'an omitted' : 'a nil'} price before making an HTTP request" do
         expect(Net::HTTP).not_to receive(:start)
@@ -286,7 +292,43 @@ describe Bitflyer::HTTP::Private::Client do
             expect(client.public_send(method, identifier => 'identifier', other_identifier => nil)).to eq({})
           end
         end
+
+        next unless verb == :post
+
+        it 'rejects a nil product_code before dispatch' do
+          expect(connection).not_to receive(verb)
+          parameters = { order_id => 'order-id', product_code: nil }
+          expect { client.public_send(method, **parameters) }
+            .to raise_error(ArgumentError, 'product_code is required')
+        end
       end
+    end
+  end
+
+  describe '#cancel_all_child_orders' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:connection) { instance_double(Bitflyer::HTTP::Connection) }
+
+    before do
+      allow(Bitflyer::HTTP::Connection).to receive(:new).with('test_key', 'test_secret').and_return(connection)
+    end
+
+    it 'rejects a nil product_code before dispatch' do
+      expect(connection).not_to receive(:post)
+      expect { client.cancel_all_child_orders(product_code: nil) }
+        .to raise_error(ArgumentError, 'product_code is required')
+    end
+
+    it 'sends the default product code when omitted' do
+      expect(connection).to receive(:post).with('/v1/me/cancelallchildorders', product_code: 'BTC_JPY')
+                                           .and_return(Bitflyer::HTTP::Response.new({}))
+      expect(client.cancel_all_child_orders).to eq({})
+    end
+
+    it 'sends the supplied product code' do
+      expect(connection).to receive(:post).with('/v1/me/cancelallchildorders', product_code: 'ETH_JPY')
+                                           .and_return(Bitflyer::HTTP::Response.new({}))
+      expect(client.cancel_all_child_orders(product_code: 'ETH_JPY')).to eq({})
     end
   end
 

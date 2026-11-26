@@ -84,10 +84,7 @@ module Bitflyer
           minute_to_expire: nil,
           time_in_force: 'GTC'
         )
-          raise ArgumentError, 'child_order_type is required' if child_order_type.nil?
-          raise ArgumentError, 'side is required' if side.nil?
-          raise ArgumentError, 'size is required' if size.nil?
-          raise ArgumentError, 'price is required for LIMIT orders' if child_order_type == 'LIMIT' && price.nil?
+          validate_send_child_order_params(product_code, child_order_type, side, size, price)
 
           body = {
             product_code: product_code,
@@ -103,6 +100,8 @@ module Bitflyer
         end
 
         def cancel_child_order(product_code: 'BTC_JPY', child_order_id: nil, child_order_acceptance_id: nil)
+          raise ArgumentError, 'product_code is required' if product_code.nil?
+
           identifier = order_identifier(
             child_order_id: child_order_id, child_order_acceptance_id: child_order_acceptance_id
           )
@@ -129,6 +128,8 @@ module Bitflyer
         end
 
         def cancel_parent_order(product_code: 'BTC_JPY', parent_order_id: nil, parent_order_acceptance_id: nil)
+          raise ArgumentError, 'product_code is required' if product_code.nil?
+
           identifier = order_identifier(
             parent_order_id: parent_order_id, parent_order_acceptance_id: parent_order_acceptance_id
           )
@@ -137,6 +138,8 @@ module Bitflyer
         end
 
         def cancel_all_child_orders(product_code: 'BTC_JPY')
+          raise ArgumentError, 'product_code is required' if product_code.nil?
+
           @connection.post('/v1/me/cancelallchildorders', product_code: product_code).body
         end
 
@@ -246,6 +249,14 @@ module Bitflyer
         end
 
         private
+
+        def validate_send_child_order_params(product_code, child_order_type, side, size, price)
+          raise ArgumentError, 'product_code is required' if product_code.nil?
+          raise ArgumentError, 'child_order_type is required' if child_order_type.nil?
+          raise ArgumentError, 'side is required' if side.nil?
+          raise ArgumentError, 'size is required' if size.nil?
+          raise ArgumentError, 'price is required for LIMIT orders' if child_order_type == 'LIMIT' && price.nil?
+        end
 
         def order_identifier(**identifiers)
           supplied = identifiers.compact
