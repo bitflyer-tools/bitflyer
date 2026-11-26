@@ -31,6 +31,20 @@ TLS socket and uses `websocket-driver` for the WebSocket handshake and frames.
 For changes to subscriptions or connection behavior, start with the relevant
 specs in [`spec/bitflyer/realtime/`](../spec/bitflyer/realtime).
 
+### Live order book
+
+`WebSocketClient#order_book` hands out an
+[`OrderBook`](../lib/bitflyer/realtime/order_book.rb), which merges snapshot
+and delta messages under a mutex and exposes immutable `current` and
+`top_of_book` views. Each side tracks its best price with a
+[`PriceIndex`](../lib/bitflyer/realtime/order_book/price_index.rb), a binary
+heap kept in lockstep with that side's price-to-level `Hash` so the best
+price is always the heap root instead of a linear scan.
+
+For order book changes, start with
+[`spec/bitflyer/realtime/order_book_spec.rb`](../spec/bitflyer/realtime/order_book_spec.rb)
+and [`spec/bitflyer/realtime/order_book/price_index_spec.rb`](../spec/bitflyer/realtime/order_book/price_index_spec.rb).
+
 ## Type signatures
 
 The gem ships RBS declarations from [`sig/`](../sig). Steep also reads
