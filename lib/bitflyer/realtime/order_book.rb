@@ -142,7 +142,7 @@ module Bitflyer
 
         key = price.to_r
         if size.zero?
-          index.remove(key) if side.delete(key)
+          remove_level(side, index, key)
           return
         end
 
@@ -150,6 +150,10 @@ module Bitflyer
 
         index.add(key) unless side.key?(key)
         side[key] = Level.new(price: price, size: size)
+      end
+
+      def remove_level(side, index, key)
+        index.remove(key) if side.delete(key)
       end
 
       def new_level_over_limit?(side, key)

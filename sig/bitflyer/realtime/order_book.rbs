@@ -73,6 +73,7 @@ module Bitflyer
       def merge: (untyped message) -> void
       def merge_side: (Hash[Rational, Level] side, untyped levels, PriceIndex index) -> Level?
       def apply_level: (Hash[Rational, Level] side, PriceIndex index, untyped level) -> void
+      def remove_level: (Hash[Rational, Level] side, PriceIndex index, Rational key) -> void
       def new_level_over_limit?: (Hash[Rational, Level] side, Rational key) -> bool
       def valid_level_number?: (untyped value) -> bool
       def sorted_levels: (Hash[Rational, Level] side) -> Array[Level]
