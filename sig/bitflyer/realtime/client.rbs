@@ -40,7 +40,7 @@ module Bitflyer
 
       def subscribe: (String | Symbol channel_name) { (untyped message) -> void } -> void
 
-      def order_book: (product_code: String) -> OrderBook
+      def order_book: (product_code: String) -> OrderBook::Handle
 
       def unsubscribe: (String | Symbol channel_name) -> void
 

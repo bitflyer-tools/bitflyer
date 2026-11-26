@@ -74,6 +74,25 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     expect(book.current.spread).to be_nil
   end
 
+  it 'exposes no mutator on the handle and stays unavailable after shutdown' do
+    expect(book).to be_an_instance_of(Bitflyer::Realtime::OrderBook::Handle)
+    frame('0{}')
+    frame('431[null]')
+    board(snapshot, bids: [[8, 1]])
+    expect(book).to be_ready
+
+    client.shutdown
+    expect(book).not_to be_ready
+    expect(book.current).to be_nil
+
+    %i[replace update invalidate].each { |mutator| expect(book).not_to respond_to(mutator) }
+    expect { book.replace('bids' => [{ 'price' => 200, 'size' => 1 }], 'asks' => []) }
+      .to raise_error(NoMethodError)
+
+    expect(book).not_to be_ready
+    expect(book.current).to be_nil
+  end
+
   it 'reuses the top after unrelated deltas without scanning either side' do
     book
     frame('0{}')
@@ -81,8 +100,9 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     board(snapshot, bids: [[8, 1], [9, 2]], asks: [[12, 3], [10, 4]])
     top = book.top_of_book
 
+    live_book = book.instance_variable_get(:@order_book)
     %i[@bids @asks].each do |name|
-      side = book.instance_variable_get(name)
+      side = live_book.instance_variable_get(name)
       %i[each each_key each_value keys values].each { |method| expect(side).not_to receive(method) }
     end
     board(delta, bids: [[8, 5]])
@@ -134,7 +154,7 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     board(snapshot, bids: [[8, 1], [9, 2]], asks: [[12, 3], [10, 4]])
     before_delta = book.top_of_book
 
-    expect(book).not_to receive(:sorted_levels)
+    expect(book.instance_variable_get(:@order_book)).not_to receive(:sorted_levels)
     board(delta, bids: [[9.0, 0]])
     top = book.top_of_book
     expect([top.best_bid.price, top.best_ask.price, top.spread]).to eq([8, 10, 2])

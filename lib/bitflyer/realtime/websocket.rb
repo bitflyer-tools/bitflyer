@@ -33,6 +33,7 @@ module Bitflyer
         @debug = debug
         @channel_callbacks = {}
         @order_books = {}
+        @order_book_handles = {}
         @board_feeds = {}
         @lifecycle_lock = Mutex.new
         @shutdown_lock = Mutex.new
@@ -103,15 +104,15 @@ module Bitflyer
       def order_book(product_code:)
         delta_channel = :"lightning_board_#{product_code}"
         snapshot_channel = :"lightning_board_snapshot_#{product_code}"
-        book = @session_mutex.synchronize do
-          cached_book = @order_books[product_code] ||= register_order_book(delta_channel, snapshot_channel)
+        handle = @session_mutex.synchronize do
+          book = @order_books[product_code] ||= register_order_book(delta_channel, snapshot_channel)
           # Start receiving deltas before requesting the snapshot.
           queue_subscription(delta_channel)
           queue_subscription(snapshot_channel)
-          cached_book
+          @order_book_handles[product_code] ||= OrderBook::Handle.new(book)
         end
         send_subscription_frames
-        book
+        handle
       end
 
       def unsubscribe(channel_name:)
