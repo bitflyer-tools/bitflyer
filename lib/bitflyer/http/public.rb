@@ -51,13 +51,9 @@ module Bitflyer
           product_code: 'BTC_JPY', count: nil, before: nil, after: nil, max_pages: IdPagination::DEFAULT_MAX_PAGES,
           &block
         )
-          stream = IdPagination.stream(before, max_pages) do |cursor|
+          IdPagination.stream(before, max_pages, on_each: block) do |cursor|
             executions(product_code: product_code, count: count, before: cursor, after: after)
           end
-          return stream unless block
-
-          stream.each(&block)
-          nil
         end
 
         def chats(from_date: (Time.now - (5 * 24 * 60 * 60)))
