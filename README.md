@@ -320,7 +320,8 @@ client.executions_btc_jpy = ->(json){ p json }
 ```
 
 To update a watchlist on the same connection, pass the full Socket.IO channel name
-to `subscribe` and `unsubscribe`. A second callback for the same channel replaces the
+as a `Symbol` via the `channel_name:` keyword to `subscribe` and `unsubscribe`.
+A second callback for the same channel replaces the
 previous callback. Unsubscribing discards pending events for that subscription,
 immediately freeing their queue space, and allows any callback already running to finish.
 It also removes the channel from the subscriptions restored on reconnect. For runtime
@@ -342,10 +343,10 @@ watchlist = []
 
 update_watchlist = lambda do |product_codes|
   (watchlist - product_codes).each do |code|
-    client.unsubscribe("lightning_ticker_#{code}")
+    client.unsubscribe(channel_name: :"lightning_ticker_#{code}")
   end
   (product_codes - watchlist).each do |code|
-    client.subscribe("lightning_ticker_#{code}") { |ticker| p [code, ticker] }
+    client.subscribe(channel_name: :"lightning_ticker_#{code}") { |ticker| p [code, ticker] }
   end
   watchlist = product_codes
 end
