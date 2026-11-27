@@ -27,6 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up Pages
+        if: github.event_name != 'pull_request'
         uses: actions/configure-pages@v6
       - name: Build with Jekyll
         uses: actions/jekyll-build-pages@v1
@@ -34,6 +35,7 @@ jobs:
           source: docs
           destination: ./_site
       - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v5
 
   deploy:
