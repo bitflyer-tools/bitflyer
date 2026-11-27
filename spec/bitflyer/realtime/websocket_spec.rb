@@ -447,6 +447,16 @@ describe Bitflyer::Realtime::WebSocketClient do
     expect(socket).to have_received(:connect).exactly(8).times
   end
 
+  it 'builds the TLS trust store once despite repeated connection refusals' do
+    allow(Bitflyer::Realtime::Transport).to receive(:default_ssl_context).and_call_original
+    @attempts = Array.new(8) { Errno::ECONNREFUSED.new }
+
+    measure_retries(random: 0.5, ticks: 8)
+
+    expect(socket).to have_received(:connect).exactly(8).times
+    expect(Bitflyer::Realtime::Transport).to have_received(:default_ssl_context).once
+  end
+
   it 'uses different retry delays across clients with different jitter samples' do
     delays = [0.25, 0.75].map do |random|
       @attempts = [Errno::ECONNREFUSED.new, Errno::ECONNREFUSED.new]
