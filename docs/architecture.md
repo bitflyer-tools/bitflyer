@@ -1,3 +1,8 @@
+---
+layout: default
+title: Architecture
+---
+
 # Architecture
 
 Start with [`lib/bitflyer.rb`](../lib/bitflyer.rb). It exposes the three client

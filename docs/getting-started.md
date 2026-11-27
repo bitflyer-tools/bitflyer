@@ -1,3 +1,8 @@
+---
+layout: default
+title: Getting started
+---
+
 # Getting started
 
 Use the bitflyer Ruby gem to list available markets and fetch an order book from

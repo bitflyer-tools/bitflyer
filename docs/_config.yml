@@ -1,0 +1,4 @@
+title: bitflyer
+description: Ruby client for the bitFlyer Lightning API
+theme: jekyll-theme-minimal
+show_downloads: false
