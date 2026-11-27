@@ -15,7 +15,16 @@ module Bitflyer
 
       attr_reader :url, :thread
 
-      def initialize
+      def self.default_ssl_context
+        trust_store = OpenSSL::X509::Store.new
+        trust_store.set_default_paths
+        OpenSSL::SSL::SSLContext.new.tap do |context|
+          context.set_params(verify_mode: OpenSSL::SSL::VERIFY_PEER, verify_hostname: true, cert_store: trust_store)
+        end
+      end
+
+      def initialize(ssl_context: nil)
+        @ssl_context = ssl_context
         @driver_lock = Mutex.new
         @close_lock = Mutex.new
         @handlers = {}
@@ -92,10 +101,7 @@ module Bitflyer
         hostname = uri.hostname
         raise ArgumentError, 'Realtime connections require a TLS hostname' unless hostname
 
-        trust_store = OpenSSL::X509::Store.new
-        trust_store.set_default_paths
-        context = OpenSSL::SSL::SSLContext.new
-        context.set_params(verify_mode: OpenSSL::SSL::VERIFY_PEER, verify_hostname: true, cert_store: trust_store)
+        context = @ssl_context || self.class.default_ssl_context
         tcp = TCPSocket.new(hostname, uri.port || 443)
         socket = OpenSSL::SSL::SSLSocket.new(tcp, context)
         socket.sync_close = true

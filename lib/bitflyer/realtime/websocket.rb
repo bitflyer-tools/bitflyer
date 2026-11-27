@@ -644,6 +644,10 @@ module Bitflyer
         end
       end
 
+      def tls_context
+        @tls_context ||= Transport.default_ssl_context
+      end
+
       def start_connection
         @lifecycle_lock.synchronize do
           socket = @websocket_client
@@ -651,7 +655,7 @@ module Bitflyer
 
           reset_readiness(socket)
           advance_reconnect_delay
-          transport = Transport.new
+          transport = Transport.new(ssl_context: tls_context)
           register_transport_handlers(transport)
           connector = Thread.new do
             transport.connect "#{@host}/socket.io/?transport=websocket"
