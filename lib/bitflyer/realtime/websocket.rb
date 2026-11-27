@@ -179,7 +179,7 @@ module Bitflyer
       def reconnect
         debug_log 'Reconnecting...'
         connect
-      rescue OpenSSL::SSL::SSLError => e
+      rescue StandardError => e
         debug_log e
       end
 
