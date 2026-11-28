@@ -178,30 +178,29 @@ describe Bitflyer::HTTP::Private::Client do
 
   describe '#child_orders' do
     let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
-    let(:connection) { instance_double(Bitflyer::HTTP::Connection) }
+    let(:http) { instance_double(Net::HTTP) }
 
     before do
-      allow(Bitflyer::HTTP::Connection).to receive(:new).with('test_key', 'test_secret').and_return(connection)
-      allow(connection).to receive(:get).and_return(Bitflyer::HTTP::Response.new([]))
+      allow(Net::HTTP).to receive(:start).and_return(http)
+      allow(http).to receive(:request).and_return(instance_double(Net::HTTPOK, code: '200', body: '[]'))
     end
 
     it 'passes the child order ID' do
       client.child_orders(child_order_id: 'JOR20150707-084555-022523')
-      expect(connection).to have_received(:get).with(
-        '/v1/me/getchildorders', { product_code: 'BTC_JPY', child_order_id: 'JOR20150707-084555-022523' }
+      expect(http).to have_received(:request).with(
+        have_attributes(path: '/v1/me/getchildorders?product_code=BTC_JPY&child_order_id=JOR20150707-084555-022523')
       )
     end
 
     it 'passes the child order acceptance ID' do
       client.child_orders(child_order_acceptance_id: 'JRF20150707-084552-031927')
-      expect(connection).to have_received(:get).with(
-        '/v1/me/getchildorders', { product_code: 'BTC_JPY', child_order_acceptance_id: 'JRF20150707-084552-031927' }
-      )
+      path = '/v1/me/getchildorders?product_code=BTC_JPY&child_order_acceptance_id=JRF20150707-084552-031927'
+      expect(http).to have_received(:request).with(have_attributes(path: path))
     end
 
     it 'preserves the default query without ID filters' do
       client.child_orders
-      expect(connection).to have_received(:get).with('/v1/me/getchildorders', { product_code: 'BTC_JPY' })
+      expect(http).to have_received(:request).with(have_attributes(path: '/v1/me/getchildorders?product_code=BTC_JPY'))
     end
   end
 
@@ -546,6 +545,39 @@ describe Bitflyer::HTTP::Private::Client do
 
       expect(client.send_parent_order(parameters: [symbol_trail, string_trail, mixed], order_method: 'IFDOCO'))
         .to eq('parent_order_acceptance_id' => '123')
+    end
+  end
+
+  describe 'account information requests' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:http) { instance_double(Net::HTTP) }
+
+    before do
+      allow(Net::HTTP).to receive(:start).and_return(http)
+      allow(Time).to receive(:now).and_return(Time.at(1_000_000))
+    end
+
+    {
+      permissions: ['/v1/me/getpermissions', ['/v1/me/getbalance']],
+      balance: ['/v1/me/getbalance', [{ 'currency_code' => 'JPY', 'amount' => 1000, 'available' => 900 }]],
+      collateral: ['/v1/me/getcollateral', { 'collateral' => 1000, 'require_collateral' => 100 }],
+      addresses: ['/v1/me/getaddresses', [{ 'currency_code' => 'BTC', 'address' => 'example-address' }]],
+      bank_accounts: ['/v1/me/getbankaccounts', [{ 'id' => 1, 'bank_name' => 'Example Bank' }]]
+    }.each do |method, (path, payload)|
+      it "signs the GET request and returns the parsed response for ##{method}" do
+        signature = OpenSSL::HMAC.hexdigest('SHA256', 'test_secret', "1000000GET#{path}")
+        response = instance_double(Net::HTTPOK, code: '200', body: JSON.generate(payload))
+
+        expect(http).to receive(:request) do |request|
+          expect(request).to have_attributes(method: 'GET', path: path)
+          expect(request['ACCESS-KEY']).to eq('test_key')
+          expect(request['ACCESS-TIMESTAMP']).to eq('1000000')
+          expect(request['ACCESS-SIGN']).to eq(signature)
+          response
+        end
+
+        expect(client.public_send(method)).to eq(payload)
+      end
     end
   end
 

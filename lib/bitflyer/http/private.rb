@@ -65,7 +65,7 @@ module Bitflyer
             bank_account_id: bank_account_id,
             amount: amount,
             code: code
-          }.delete_if { |_, v| v.nil? }
+          }
           @connection.post('/v1/me/withdraw', body).body
         end
 
@@ -105,7 +105,7 @@ module Bitflyer
           identifier = order_identifier(
             child_order_id: child_order_id, child_order_acceptance_id: child_order_acceptance_id
           )
-          body = { product_code: product_code }.compact.merge(identifier)
+          body = { product_code: product_code }.merge(identifier)
           @connection.post('/v1/me/cancelchildorder', body).body
         end
 
@@ -133,7 +133,7 @@ module Bitflyer
           identifier = order_identifier(
             parent_order_id: parent_order_id, parent_order_acceptance_id: parent_order_acceptance_id
           )
-          body = { product_code: product_code }.compact.merge(identifier)
+          body = { product_code: product_code }.merge(identifier)
           @connection.post('/v1/me/cancelparentorder', body).body
         end
 
@@ -162,7 +162,7 @@ module Bitflyer
             parent_order_id: parent_order_id,
             child_order_id: child_order_id,
             child_order_acceptance_id: child_order_acceptance_id
-          }.delete_if { |_, v| v.nil? }
+          }
           @connection.get('/v1/me/getchildorders', query).body
         end
 
@@ -173,7 +173,7 @@ module Bitflyer
             before: before,
             after: after,
             parent_order_state: parent_order_state
-          }.delete_if { |_, v| v.nil? }
+          }
           @connection.get('/v1/me/getparentorders', query).body
         end
 
@@ -199,7 +199,7 @@ module Bitflyer
             after: after,
             child_order_id: child_order_id,
             child_order_acceptance_id: child_order_acceptance_id
-          }.delete_if { |_, v| v.nil? }
+          }
           @connection.get('/v1/me/getexecutions', query).body
         end
 
@@ -227,7 +227,7 @@ module Bitflyer
             count: count,
             before: before,
             after: after
-          }.delete_if { |_, v| v.nil? }
+          }
           @connection.get('/v1/me/getbalancehistory', query).body
         end
 
