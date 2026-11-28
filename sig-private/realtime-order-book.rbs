@@ -1,0 +1,7 @@
+module Bitflyer
+  module Realtime
+    class OrderBook
+      MAX_LEVELS_PER_SIDE: Integer
+    end
+  end
+end
