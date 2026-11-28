@@ -320,7 +320,8 @@ client.executions_btc_jpy = ->(json){ p json }
 ```
 
 To update a watchlist on the same connection, pass the full Socket.IO channel name
-as a `Symbol` via the `channel_name:` keyword to `subscribe` and `unsubscribe`.
+as a positional `String` or `Symbol` to `subscribe` and `unsubscribe` on the
+client returned by `Bitflyer.realtime_client`.
 A second callback for the same channel replaces the
 previous callback. Unsubscribing discards pending events for that subscription,
 immediately freeing their queue space, and allows any callback already running to finish.
@@ -334,8 +335,9 @@ An acknowledged or pending subscription is reused when its callback changes.
 
 The WebSocket client's `channel_names` and `channel_callbacks` return frozen snapshots
 of the registered channels and their user callbacks, respectively. `channel_names`
-also includes channels managed by `order_book`. Use `subscribe` and `unsubscribe`
-to change user subscriptions.
+also includes channels managed by `order_book`. When calling `subscribe` or
+`unsubscribe` directly on `WebSocketClient`, pass the channel as a `Symbol`
+using the `channel_name:` keyword.
 
 ```ruby
 client = Bitflyer.realtime_client
@@ -343,10 +345,10 @@ watchlist = []
 
 update_watchlist = lambda do |product_codes|
   (watchlist - product_codes).each do |code|
-    client.unsubscribe(channel_name: :"lightning_ticker_#{code}")
+    client.unsubscribe("lightning_ticker_#{code}")
   end
   (product_codes - watchlist).each do |code|
-    client.subscribe(channel_name: :"lightning_ticker_#{code}") { |ticker| p [code, ticker] }
+    client.subscribe("lightning_ticker_#{code}") { |ticker| p [code, ticker] }
   end
   watchlist = product_codes
 end
