@@ -6,7 +6,7 @@ require 'timeout'
 
 RSpec.describe Bitflyer::Realtime::WebSocketClient, 'with a silent TLS peer' do
   before do
-    stub_const('Bitflyer::Realtime::WebSocketClient::CONNECTION_TIMEOUT', 1)
+    stub_const('Bitflyer::Realtime::ConnectionAttempt::TIMEOUT', 1)
     @server = TCPServer.new('127.0.0.1', 0)
   end
 

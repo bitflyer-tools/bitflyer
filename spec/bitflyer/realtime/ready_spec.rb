@@ -11,7 +11,7 @@ describe 'Realtime ready notifications' do
   before do
     allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(transport)
     stub_connection(transport)
-    allow_any_instance_of(Bitflyer::Realtime::WebSocketClient).to receive(:start_monitoring)
+    allow_any_instance_of(Bitflyer::Realtime::ConnectionLifecycle).to receive(:start_monitoring)
   end
 
   after { @client&.shutdown }

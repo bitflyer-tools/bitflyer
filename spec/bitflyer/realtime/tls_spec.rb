@@ -27,7 +27,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
   end
 
   before do
-    allow_any_instance_of(described_class).to receive(:start_monitoring)
+    allow_any_instance_of(Bitflyer::Realtime::ConnectionLifecycle).to receive(:start_monitoring)
   end
 
   after do
@@ -65,8 +65,9 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
       socket.read
     end
     start_handshake << true
-    allow(@client).to receive(:start_monitoring).and_call_original
-    @client.instance_variable_set(:@monitor, @client.__send__(:start_monitoring))
+    connection = @client.instance_variable_get(:@connection)
+    allow(connection).to receive(:start_monitoring).and_call_original
+    connection.start_monitoring
     expect(Timeout.timeout(5) { authentication.pop }).to start_with('420["auth",{"api_key":"test-api-key"')
     expect(@client.websocket_client).not_to equal(transport)
     expect(events).to be_empty
@@ -78,10 +79,10 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     release = Queue.new
     started = Queue.new
     pongs = Queue.new
-    allow_any_instance_of(described_class).to receive(:start_monitoring).and_call_original
+    allow_any_instance_of(Bitflyer::Realtime::ConnectionLifecycle).to receive(:start_monitoring).and_call_original
     serve(trusted_certificate) { |socket| answer_heartbeats(socket) }
     @client = described_class.new(host: host, key: nil, secret: nil)
-    allow(@client).to receive(:receive_pong).and_wrap_original do |receive_pong|
+    allow(@client.instance_variable_get(:@heartbeat)).to receive(:receive_pong).and_wrap_original do |receive_pong|
       receive_pong.call
       pongs << true
     end
@@ -117,8 +118,9 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
       @client.websocket_client.close
 
       serve(public_send(invalid_certificate))
-      allow(@client).to receive(:start_monitoring).and_call_original
-      @client.instance_variable_set(:@monitor, @client.__send__(:start_monitoring))
+      connection = @client.instance_variable_get(:@connection)
+      allow(connection).to receive(:start_monitoring).and_call_original
+      connection.start_monitoring
       expect(server_result).to eq(:tls_rejected)
 
       serve(trusted_certificate)

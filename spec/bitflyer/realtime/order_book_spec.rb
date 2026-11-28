@@ -14,7 +14,7 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
   before do
     stub_transport(transport, events)
     allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(transport)
-    allow_any_instance_of(Bitflyer::Realtime::WebSocketClient).to receive(:start_monitoring)
+    allow_any_instance_of(Bitflyer::Realtime::ConnectionLifecycle).to receive(:start_monitoring)
   end
 
   after { client.shutdown }
@@ -431,9 +431,10 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
           frame("43#{failed_id}#{['subscription rejected'].to_json}")
         else
           allow(transport).to receive(:open?).and_return(true)
-          allow(websocket).to receive(:monotonic_milliseconds)
-            .and_return(Process.clock_gettime(Process::CLOCK_MONOTONIC, :millisecond) + 10_000)
-          websocket.send(:expire_runtime_subscriptions, transport)
+          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC, :millisecond) + 10_000
+          allow(Process).to receive(:clock_gettime).and_call_original
+          allow(Process).to receive(:clock_gettime).with(Process::CLOCK_MONOTONIC, :millisecond).and_return(deadline)
+          websocket.instance_variable_get(:@subscriptions).expire(transport)
         end
 
         expect(client.order_book(product_code: 'BTC_JPY')).to equal(book)

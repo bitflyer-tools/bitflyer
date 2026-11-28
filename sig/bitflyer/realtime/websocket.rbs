@@ -1,41 +1,6 @@
 module Bitflyer
   module Realtime
     class WebSocketClient
-      @host: String
-      @key: String?
-      @secret: String?
-      @debug: bool
-      @lifecycle_lock: Mutex
-      @monitor_wakeup: Thread::ConditionVariable
-      @stopped: bool
-      @reconnect_delay: Float?
-      @authentication_error: RuntimeError?
-      @pending_authentication_error: RuntimeError?
-      @monitor: Thread?
-      @session_mutex: Thread::Mutex
-      @channel_callbacks: Hash[Symbol, message_callback]
-      @order_books: Hash[String, OrderBook]
-      @board_feeds: Hash[Symbol, [Method, Symbol]]
-      @next_subscription_id: Integer
-      @last_setup_subscription_id: Integer
-      @pending_setup_subscription_count: Integer
-      @pending_subscription_ids: Hash[Symbol, Integer]
-      @pending_subscriptions: Hash[Integer, [Symbol, (:queued | Integer | nil)]]
-      @acknowledged_subscriptions: Hash[Symbol, bool]
-      @subscription_rejected: bool
-      @awaiting_authentication: bool
-      @session_authenticated: bool
-      @session_ready: bool
-      @ready_state: :pending | :ready | :notified
-      @last_ping_monotonic: Integer?
-      @pong_deadline: Integer?
-      @ping_write: PingWrite?
-
-      class PingWrite < Struct[bool]
-        def self.new: (bool acknowledged) -> instance
-        attr_accessor acknowledged: bool
-      end
-
       interface _ChannelNames
         def each: () -> Enumerator[Symbol, self]
                 | () { (Symbol) -> void } -> self
@@ -124,59 +89,6 @@ module Bitflyer
       def emit_message: (json: String, ?socket: Transport?) -> void
 
       def debug_log: (untyped message) -> void
-
-      private
-
-      def begin_ping: (Transport socket) -> PingWrite?
-
-      def ping_due?: () -> boolish
-
-      def finish_ping: (PingWrite ping, Integer? sent_at) -> void
-
-      def registered_channels: () -> Array[Symbol]
-
-      def register_order_book: (Symbol delta_channel, Symbol snapshot_channel) -> OrderBook
-      def record_subscription_result: (Integer id, Symbol channel, untyped error) -> void
-      def route_board_messages: (Symbol channel, Array[untyped] messages) -> void
-
-      def route_messages: (Symbol channel, Array[untyped] messages, Transport? socket) { (Object? token) -> void } -> void
-
-      def cancel_subscription: (Symbol channel) -> void
-
-      def remove_subscription_frame: (Integer id) -> void
-
-      def start_monitoring: () -> Thread
-
-      def wait_for_monitor_tick: () -> (:retry | :poll)?
-
-      def poll_transport: () -> void
-
-      def advance_reconnect_delay: () -> void
-
-      def jittered_reconnect_delay: () -> Float
-
-      def lifecycle_inactive?: () -> bool
-
-      def notify_ready: (Transport?, ?async: bool) -> void
-      def prepare_ready_callback: (Transport?) -> ready_callback?
-
-      def take_ready_callback: () -> ready_callback?
-
-      def reset_readiness: (?Transport?) -> bool
-
-      def clear_readiness: () -> void
-
-      def reject_authentication: (String json, ?socket: Transport?) -> void
-
-      def notify_authentication_failure: (RuntimeError error) -> void
-
-      def dispatch_disconnected: (untyped error, disconnected_callback? callback) -> void
-
-      def notify_disconnected: (untyped error, disconnected_callback callback) -> void
-
-      def monotonic_milliseconds: () -> Integer
-
-      def monotonic_from_unix_seconds: (Integer?) -> Integer?
     end
   end
 end

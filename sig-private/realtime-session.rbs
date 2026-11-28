@@ -1,0 +1,171 @@
+module Bitflyer
+  module Realtime
+    type realtime_logger = ^(untyped) -> void
+
+    class WebSocketClient
+      extend Forwardable
+
+      @debug: bool
+      @connection: ConnectionLifecycle
+      @heartbeat: Heartbeat
+      @subscriptions: SubscriptionSession
+      @dispatcher: CallbackDispatcher
+      @protocol: SocketIOSession
+
+      private
+
+      def connection_events: () -> ConnectionLifecycle::Events
+      def reset_session: (Transport?, ?stopping: bool) -> bool
+      def replace_transport: (Transport, ^() -> void) -> void
+      def poll_transport: () -> void
+    end
+
+    class ConnectionLifecycle
+      class Events < Struct[Proc]
+        def self.new: (
+          reset: ^(Transport?, ?stopping: bool) -> bool,
+          replace: ^(Transport, ^() -> void) -> void,
+          opened: ^() -> void,
+          message: ^(untyped, Transport) -> void,
+          closed: ^(untyped) -> void,
+          poll: ^() -> void
+        ) -> instance
+
+        attr_reader reset: ^(Transport?, ?stopping: bool) -> bool
+        attr_reader replace: ^(Transport, ^() -> void) -> void
+        attr_reader opened: ^() -> void
+        attr_reader message: ^(untyped, Transport) -> void
+        attr_reader closed: ^(untyped) -> void
+        attr_reader poll: ^() -> void
+      end
+
+      RECONNECT_BASE_DELAY: Float
+      RECONNECT_MAX_DELAY: Float
+
+      @host: String
+      @log: realtime_logger
+      @events: Events
+      @shutdown_lock: Mutex
+      @monitor_wakeup: Thread::ConditionVariable
+      @stopped: bool
+      @authentication_rejected: bool
+      @connection: ConnectionAttempt?
+      @monitor: Thread?
+      @reconnect_delay: Float?
+      @tls_context: OpenSSL::SSL::SSLContext?
+
+      attr_reader lock: Mutex
+      attr_reader transport: Transport?
+
+      def initialize: (String, realtime_logger, Events) -> void
+      def synchronize: [T] () { () -> T } -> T
+      def inactive?: () -> bool
+      def reset_backoff: () -> void
+      def reject_authentication: () -> void
+      def handle_close: (error: untyped, ?socket: Transport?, ?complete_close: (^() -> void)?) -> void
+      def disconnect: (?socket: Transport?) -> void
+      def connect: () -> void
+      def reconnect: () -> void
+      def start_monitoring: () -> Thread
+      def shutdown: () -> void
+
+      private
+
+      def start_connection: () -> ConnectionAttempt?
+      def finish_connection: (ConnectionAttempt, bool) -> void
+      def close_connections: () -> void
+      def stop_lifecycle: () -> [Transport?, ConnectionAttempt?]
+      def tls_context: () -> OpenSSL::SSL::SSLContext
+      def activate_transport: (Transport) -> void
+      def wait_for_monitor_tick: () -> (:retry | :poll)?
+      def advance_reconnect_delay: () -> void
+      def jittered_reconnect_delay: () -> Float
+      def register_transport_handlers: (Transport) -> void
+      def replace_transport: (Transport) -> void
+    end
+
+    class ConnectionAttempt
+      TIMEOUT: Integer
+      @connector: Thread
+
+      attr_reader transport: Transport
+
+      def initialize: (Transport, String) -> void
+      def established?: (realtime_logger) -> bool
+      def cancel: () -> void
+      def close: (?unless_transport: Transport?) -> void
+    end
+
+    class Heartbeat
+      class PingWrite < Struct[bool]
+        def self.new: (bool acknowledged) -> instance
+        attr_accessor acknowledged: bool
+      end
+
+      @connection: ConnectionLifecycle
+      @log: realtime_logger
+      @last_ping_monotonic: Integer?
+      @pong_deadline: Integer?
+      @ping_write: PingWrite?
+
+      attr_accessor ping_interval: Integer?
+      attr_accessor ping_timeout: Integer?
+      attr_accessor last_pong_at: Integer?
+      attr_accessor last_ping_at: Integer?
+
+      def initialize: (ConnectionLifecycle, realtime_logger) -> void
+      def reset: () -> void
+      def clear_pending: () -> void
+      def send_ping: () -> void
+      def wait_pong: () -> void
+      def receive_pong: (?socket: Transport?) -> void
+      def setup: (untyped) -> void
+
+      private
+
+      def begin_ping: (Transport) -> PingWrite?
+      def ping_due?: () -> boolish
+      def finish_ping: (PingWrite, Integer?) -> void
+      def monotonic_milliseconds: () -> Integer
+      def monotonic_from_unix_seconds: (Integer?) -> Integer?
+    end
+
+    class SocketIOSession
+      RESPONSE_TIMEOUT_MS: Integer
+      type deadline = [Integer, :setup | :authentication]
+      type session_deadline = deadline | :expired | :established | nil
+
+      @connection: ConnectionLifecycle
+      @heartbeat: Heartbeat
+      @subscriptions: SubscriptionSession
+      @dispatcher: CallbackDispatcher
+      @key: String?
+      @secret: String?
+      @log: realtime_logger
+      @session_deadline: session_deadline
+      @awaiting_authentication: bool?
+
+      def initialize: (ConnectionLifecycle, Heartbeat, SubscriptionSession, CallbackDispatcher, [String?, String?], realtime_logger) -> void
+      def opened: () -> void
+      def reset: () -> void
+      def replace: () -> void
+      def handle_message: (payload: untyped, ?socket: Transport?) -> void
+      def setup_by_response: (json: String, ?socket: Transport?) -> void
+      def authenticate: (?socket: Transport?) -> void
+      def authenticated: (json: String, ?socket: Transport?) -> void
+      def authentication_succeeded?: (String) -> bool
+      def session_expired?: (Transport) -> bool
+      def emit_message: (json: String, ?socket: Transport?) -> void
+
+      private
+
+      def accept_authentication_response: (Transport?) -> bool
+      def reject_authentication: (String, socket: Transport?) -> void
+      def apply_setup: (untyped, Transport?) -> bool
+      def awaiting_setup?: (session_deadline) -> bool
+      def authentication_deadline: () -> [Integer, :authentication]?
+      def session_deadline_elapsed?: (deadline) -> bool
+      def monotonic_milliseconds: () -> Integer
+    end
+  end
+end
