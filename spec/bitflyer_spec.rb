@@ -88,7 +88,7 @@ describe Bitflyer do
     it 'closes the transport once, stops its monitor, and ignores later recovery requests' do
       allow(socket).to receive(:close_for_shutdown) { allow(socket).to receive(:open?).and_return(false) }
       @client = Bitflyer.realtime_client
-      monitor = @client.websocket_client.instance_variable_get(:@monitor)
+      monitor = @client.websocket_client.instance_variable_get(:@connection).instance_variable_get(:@monitor)
       expect(monitor).to be_alive
 
       @client.shutdown
@@ -104,7 +104,7 @@ describe Bitflyer do
     it 'waits for the connection to close in concurrent shutdown calls' do
       close_started = Queue.new
       release_close = Queue.new
-      monitor = session.instance_variable_get(:@monitor)
+      monitor = session.instance_variable_get(:@connection).instance_variable_get(:@monitor)
       allow(socket).to receive(:close_for_shutdown) do
         close_started << true
         release_close.pop
@@ -137,7 +137,7 @@ describe Bitflyer do
         TCPServer.open('127.0.0.1', 0) do |server|
           use_tcp_peer(server)
           transport = session.websocket_client
-          monitor = session.instance_variable_get(:@monitor)
+          monitor = session.instance_variable_get(:@connection).instance_variable_get(:@monitor)
           completed = Queue.new
           stop_client = lambda do |*|
             client.shutdown
@@ -202,7 +202,7 @@ describe Bitflyer do
 
       client.ping_interval = 0
       client.last_ping_at = Time.now.to_i - 1
-      monitor = session.instance_variable_get(:@monitor)
+      monitor = session.instance_variable_get(:@connection).instance_variable_get(:@monitor)
 
       Timeout.timeout(5) do
         ping_started.pop
@@ -240,7 +240,7 @@ describe Bitflyer do
 
       client.ping_interval = 0
       client.last_ping_at = connected_at.to_i
-      monitor = session.instance_variable_get(:@monitor)
+      monitor = session.instance_variable_get(:@connection).instance_variable_get(:@monitor)
 
       Timeout.timeout(5) do
         ping_started.pop
@@ -276,7 +276,7 @@ describe Bitflyer do
       allow(driver).to receive(:text).with('2').and_return(true)
       session.setup_by_response(json: '{"pingInterval":1,"pingTimeout":0}')
       session.last_ping_at = connected_at.to_i - 1
-      monitor = session.instance_variable_get(:@monitor)
+      monitor = session.instance_variable_get(:@connection).instance_variable_get(:@monitor)
       monitor.report_on_exception = false
 
       Timeout.timeout(5) do
@@ -355,7 +355,7 @@ describe Bitflyer do
       TCPServer.open('127.0.0.1', 0) do |server|
         stub_const('Bitflyer::Realtime::SOCKET_HOST', "https://127.0.0.1:#{server.addr[1]}")
         @client = Bitflyer.realtime_client
-        monitor = @client.websocket_client.instance_variable_get(:@monitor)
+        monitor = @client.websocket_client.instance_variable_get(:@connection).instance_variable_get(:@monitor)
         allow(socket).to receive(:open?).and_return(false)
         allow(socket).to receive(:reconnectable?).and_return(true)
 
