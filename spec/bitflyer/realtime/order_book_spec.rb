@@ -74,6 +74,67 @@ RSpec.describe Bitflyer::Realtime::OrderBook do
     expect(book.current.spread).to be_nil
   end
 
+  it 'reuses the full view after empty deltas and no-op level updates' do
+    book
+    frame('0{}')
+    frame('431[null]')
+    board(snapshot, bids: [[8, 1]], asks: [[10, 2]])
+    view = book.current
+    expect(book).not_to receive(:sorted_levels)
+
+    board(delta)
+    expect(book.current).to equal(view)
+    board(delta, bids: [[8, 1], [7, 0]], asks: [[0, 1], [10, 2]])
+    expect(book.current).to equal(view)
+  end
+
+  it 'sorts only the changed side after bid-only and ask-only deltas' do
+    book
+    frame('0{}')
+    frame('431[null]')
+    board(snapshot, bids: [[8, 1], [9, 2]], asks: [[12, 3], [10, 4]])
+    original = book.current
+
+    expect(book).to receive(:sorted_levels).exactly(2).times.and_call_original
+    board(delta, bids: [[8, 0], [11, 5]])
+    bid_update = book.current
+    expect(bid_update.bids.map(&:price)).to eq([11, 9])
+    expect(bid_update.asks).to equal(original.asks)
+
+    board(delta, asks: [[12, 0], [13, 6]])
+    ask_update = book.current
+    expect(ask_update.bids).to equal(bid_update.bids)
+    expect(ask_update.asks.map(&:price)).to eq([10, 13])
+    expect(ask_update.bids).to be_frozen
+    expect(ask_update.asks).to be_frozen
+    expect(ask_update.bids.first).to be_frozen
+    expect(ask_update.asks.last).to be_frozen
+    expect(original.bids.map(&:price)).to eq([9, 8])
+    expect(original.asks.map(&:price)).to eq([10, 12])
+  end
+
+  it 'clears both cached sides on snapshot replacement and invalidation' do
+    book
+    frame('0{}')
+    frame('431[null]')
+    board(snapshot, bids: [[8, 1]], asks: [[10, 2]])
+    original = book.current
+
+    board(snapshot, bids: [[8, 1]], asks: [[11, 2]])
+    replacement = book.current
+    expect(replacement.bids).not_to equal(original.bids)
+    expect(replacement.bids.map(&:price)).to eq([8])
+    expect(replacement.asks.map(&:price)).to eq([11])
+
+    book.invalidate
+    expect(book.current).to be_nil
+    board(delta, bids: [[12, 1]], asks: [[13, 1]])
+    expect(book.current).to be_nil
+    board(snapshot, bids: [[9, 1]])
+    expect(book.current.bids.map(&:price)).to eq([9])
+    expect(book.current.asks).to be_empty
+  end
+
   it 'reuses the top after unrelated deltas without scanning either side' do
     book
     frame('0{}')
