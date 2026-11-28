@@ -2,6 +2,7 @@ module Bitflyer
   module Realtime
     class Transport
       HANDSHAKE_TIMEOUT: Integer
+      MAX_MESSAGE_SIZE: Integer
       READ_SIZE: Integer
       WRITE_TIMEOUT: Integer
 

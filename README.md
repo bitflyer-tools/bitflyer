@@ -266,6 +266,11 @@ The `ready` callback is called when the `realtime_client` is ready to receive ev
 During an outage, retry delays increase exponentially, with jitter and a 30-second cap. When the session becomes ready, the retry delay resets.
 If setup finishes before registration, assigning `ready` delivers the pending notification synchronously, once per connection.
 If any setup subscription acknowledgment is missing when the 10-second deadline is reached, the client closes the connection and retries the registered subscriptions on a new connection. Acknowledgments at or after the deadline cannot make the connection ready.
+
+Inbound WebSocket messages are limited to 1 MiB (1,048,576 bytes) across all fragments.
+The WebSocket driver rejects oversized messages before Socket.IO parsing or JSON decoding.
+The client reports the error to `disconnected` and reconnects if automatic reconnection is enabled.
+
 Each WebSocket write has a 10-second deadline. If a write on an established connection times out or detects a reset, the client reports the error to `disconnected` and replays registered subscriptions after reconnecting.
 
 Each realtime connection attempt has a 10-second deadline for TCP and TLS establishment. If that deadline expires, the client closes the connection and retries automatically.

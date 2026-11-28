@@ -11,7 +11,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'pong timeout recovery' do
     socket = instance_double(OpenSSL::SSL::SSLSocket, close: nil)
     reconnect_attempts = Queue.new
     warnings = Queue.new
-    allow(WebSocket::Driver).to receive(:client).with(original).and_return(driver)
+    allow(WebSocket::Driver).to receive(:client).with(original, max_length: Bitflyer::Realtime::Transport::MAX_MESSAGE_SIZE).and_return(driver)
     allow(original).to receive(:connect_tls).and_return(socket)
     allow(original).to receive(:read_messages)
     allow(replacement).to receive(:connect) { |url| reconnect_attempts << url }
@@ -51,7 +51,7 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient, 'blocked disconnect callback
       reconnected = Queue.new
       allow(socket).to receive(:readpartial) { eof.pop; raise EOFError }
       allow(socket).to receive(:close) { eof << true }
-      allow(WebSocket::Driver).to receive(:client).with(original).and_return(driver)
+      allow(WebSocket::Driver).to receive(:client).with(original, max_length: Bitflyer::Realtime::Transport::MAX_MESSAGE_SIZE).and_return(driver)
       allow(original).to receive(:connect_tls).and_return(socket)
       allow(replacement).to receive_messages(connect: nil, closed?: false)
       allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(original, replacement)

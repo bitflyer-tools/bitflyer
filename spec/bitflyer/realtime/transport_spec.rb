@@ -74,4 +74,66 @@ RSpec.describe Bitflyer::Realtime::Transport do
 
     expect(events).to eq([:open, 'first', 'second', "third \n", [:close, nil]])
   end
+
+  context 'with the realtime client' do
+    let(:incoming) { Queue.new }
+    let(:reconnects) { Queue.new }
+    let(:replacement) { described_class.new }
+    let(:snapshots) { Queue.new }
+    let(:disconnects) { Queue.new }
+    let(:channel) { :lightning_board_snapshot_BTC_JPY }
+    let(:limit) { described_class::MAX_MESSAGE_SIZE }
+
+    before do
+      allow(described_class).to receive(:new).and_return(transport, replacement)
+      allow(replacement).to receive(:connect) { |url| reconnects << url }
+      allow(socket).to receive(:readpartial).with(described_class::READ_SIZE) { incoming.pop || raise(EOFError) }
+      allow(socket).to receive(:close) { incoming << nil }
+      allow(JSON).to receive(:parse).and_call_original
+
+      @client = Bitflyer::Realtime::WebSocketClient.new(host: 'wss://example.test', key: nil, secret: nil)
+      @client.disconnected = ->(error) { disconnects << error }
+      @client.subscribe(channel_name: channel) { |snapshot| snapshots << snapshot }
+      incoming << response.pop(timeout: 5)
+      enqueue_frame(0x81, '0{}')
+      enqueue_frame(0x81, '431[null]')
+    end
+
+    after do
+      @client&.shutdown
+      transport.thread&.join(5)
+    end
+
+    def enqueue_frame(first_byte, payload)
+      length = payload.bytesize
+      header = length <= 125 ? [first_byte, length].pack('CC') : [first_byte, 127, length].pack('CCQ>')
+      bytes = header + payload.b
+      (0...bytes.bytesize).step(described_class::READ_SIZE) do |offset|
+        incoming << bytes.byteslice(offset, described_class::READ_SIZE)
+      end
+    end
+
+    { single: false, fragmented: true }.each do |kind, fragmented|
+      it "delivers a snapshot at the limit and reconnects after rejecting a #{kind} oversized message" do
+        snapshot = { 'mid_price' => 10_000, 'bids' => [{ 'price' => 9900, 'size' => 0.5 }], 'asks' => [] }
+        packet = "42#{JSON.generate([channel, snapshot])}".ljust(limit)
+        enqueue_frame(0x81, packet)
+        expect(snapshots.pop(timeout: 5)).to eq(snapshot)
+
+        oversized = packet + ' '
+        if fragmented
+          enqueue_frame(0x01, packet)
+          enqueue_frame(0x80, ' ')
+        else
+          enqueue_frame(0x81, oversized)
+        end
+
+        expect(disconnects.pop(timeout: 5)).to be_a(WebSocket::Driver::ProtocolError)
+          .and have_attributes(message: /length too large/)
+        expect(reconnects.pop(timeout: 5)).to eq('wss://example.test/socket.io/?transport=websocket')
+        expect(JSON).not_to have_received(:parse).with(oversized.delete_prefix('42'))
+        expect(snapshots).to be_empty
+      end
+    end
+  end
 end
