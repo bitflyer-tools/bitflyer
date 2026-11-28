@@ -39,6 +39,41 @@ describe Bitflyer::HTTP::Connection do
     end
   end
 
+  describe 'encoding optional parameters' do
+    let(:connection) { described_class.new('test_key', 'test_secret') }
+    let(:transport) { instance_double(Net::HTTP) }
+    let(:response) { instance_double(Net::HTTPOK, code: '200', body: '{}') }
+    let(:parameters) { { omitted: nil, flag: false, zero: 0 } }
+
+    before do
+      allow(Net::HTTP).to receive(:start).and_return(transport)
+      allow(Time).to receive(:now).and_return(Time.at(1_000_000))
+    end
+
+    it 'omits nil and signs the encoded GET query with false and zero intact' do
+      path = '/v1/example?flag=false&zero=0'
+      signature = OpenSSL::HMAC.hexdigest('SHA256', 'test_secret', "1000000GET#{path}")
+      expect(transport).to receive(:request).with(have_attributes(path: path)) do |request|
+        expect(request['ACCESS-SIGN']).to eq(signature)
+        response
+      end
+
+      connection.get('/v1/example', parameters)
+    end
+
+    it 'omits only top-level nil and signs the exact POST body' do
+      path = '/v1/example'
+      body = '{"flag":false,"zero":0,"nested":{"value":null}}'
+      signature = OpenSSL::HMAC.hexdigest('SHA256', 'test_secret', "1000000POST#{path}#{body}")
+      expect(transport).to receive(:request).with(have_attributes(path: path, body: body)) do |request|
+        expect(request['ACCESS-SIGN']).to eq(signature)
+        response
+      end
+
+      connection.post(path, parameters.merge(nested: { value: nil }))
+    end
+  end
+
   describe 'request deadlines under contention' do
     let(:connection) { described_class.new(nil, nil) }
     let(:response) { instance_double(Net::HTTPOK, code: '200', body: '{}') }

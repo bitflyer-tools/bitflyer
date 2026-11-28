@@ -47,7 +47,7 @@ module Bitflyer
             count: count,
             before: before,
             after: after
-          }.delete_if { |_, v| v.nil? }
+          }
           @connection.get('/v1/executions', query).body
         end
 
