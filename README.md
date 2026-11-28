@@ -36,6 +36,28 @@ See the [getting started guide](docs/getting-started.md) for a script that lists
 - Iterate through execution and balance history one page at a time.
 - Subscribe to live market data and authenticated order events, and track a live order book.
 
+## Configuration
+
+Pass your API key and secret as positional arguments when creating an authenticated client.
+
+| Client | Public access | Authenticated access |
+| --- | --- | --- |
+| HTTP | `Bitflyer.http_public_client` | `Bitflyer.http_private_client(key, secret)` |
+| Realtime | `Bitflyer.realtime_client` | `Bitflyer.realtime_client(key, secret)` |
+
+The gem takes credentials from these arguments. To keep credentials in environment
+variables, read them in your application and pass them to the client:
+
+```ruby
+require 'bitflyer'
+
+key = ENV.fetch('BITFLYER_API_KEY')
+secret = ENV.fetch('BITFLYER_API_SECRET')
+private_client = Bitflyer.http_private_client(key, secret)
+```
+
+See [Troubleshooting](docs/troubleshooting.md) for authentication and connection errors.
+
 ## Usage
 
 See https://lightning.bitflyer.jp/docs for details.
