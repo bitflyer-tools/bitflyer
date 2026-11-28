@@ -10,6 +10,7 @@ module Bitflyer
   module Realtime
     class Transport
       HANDSHAKE_TIMEOUT = 10
+      MAX_MESSAGE_SIZE = 1024 * 1024
       READ_SIZE = 16 * 1024
       WRITE_TIMEOUT = 10
 
@@ -90,7 +91,7 @@ module Bitflyer
 
       def setup_driver
         @events = []
-        driver = WebSocket::Driver.client(self)
+        driver = WebSocket::Driver.client(self, max_length: MAX_MESSAGE_SIZE)
         %i[open message error close].each do |event|
           driver.on(event) { |event_data| @events << [event, event_data] }
         end

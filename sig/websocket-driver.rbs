@@ -1,6 +1,6 @@
 module WebSocket
   class Driver
-    def self.client: (Bitflyer::Realtime::Transport socket) -> Driver
+    def self.client: (Bitflyer::Realtime::Transport socket, ?max_length: Integer) -> Driver
 
     def state: () -> Symbol?
 
