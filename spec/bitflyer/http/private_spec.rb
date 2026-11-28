@@ -57,6 +57,12 @@ describe Bitflyer::HTTP::Private::Client do
       end
     end
 
+    it 'rejects a nil product_code before making an HTTP request' do
+      expect(Net::HTTP).not_to receive(:start)
+      expect { client.send_child_order(**order.merge(product_code: nil)) }
+        .to raise_error(ArgumentError, 'product_code is required')
+    end
+
     [{}, { price: nil }].each do |price_option|
       it "rejects a limit order with #{price_option.empty? ? 'an omitted' : 'a nil'} price before making an HTTP request" do
         expect(Net::HTTP).not_to receive(:start)
@@ -172,30 +178,29 @@ describe Bitflyer::HTTP::Private::Client do
 
   describe '#child_orders' do
     let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
-    let(:connection) { instance_double(Bitflyer::HTTP::Connection) }
+    let(:http) { instance_double(Net::HTTP) }
 
     before do
-      allow(Bitflyer::HTTP::Connection).to receive(:new).with('test_key', 'test_secret').and_return(connection)
-      allow(connection).to receive(:get).and_return(Bitflyer::HTTP::Response.new([]))
+      allow(Net::HTTP).to receive(:start).and_return(http)
+      allow(http).to receive(:request).and_return(instance_double(Net::HTTPOK, code: '200', body: '[]'))
     end
 
     it 'passes the child order ID' do
       client.child_orders(child_order_id: 'JOR20150707-084555-022523')
-      expect(connection).to have_received(:get).with(
-        '/v1/me/getchildorders', { product_code: 'BTC_JPY', child_order_id: 'JOR20150707-084555-022523' }
+      expect(http).to have_received(:request).with(
+        have_attributes(path: '/v1/me/getchildorders?product_code=BTC_JPY&child_order_id=JOR20150707-084555-022523')
       )
     end
 
     it 'passes the child order acceptance ID' do
       client.child_orders(child_order_acceptance_id: 'JRF20150707-084552-031927')
-      expect(connection).to have_received(:get).with(
-        '/v1/me/getchildorders', { product_code: 'BTC_JPY', child_order_acceptance_id: 'JRF20150707-084552-031927' }
-      )
+      path = '/v1/me/getchildorders?product_code=BTC_JPY&child_order_acceptance_id=JRF20150707-084552-031927'
+      expect(http).to have_received(:request).with(have_attributes(path: path))
     end
 
     it 'preserves the default query without ID filters' do
       client.child_orders
-      expect(connection).to have_received(:get).with('/v1/me/getchildorders', { product_code: 'BTC_JPY' })
+      expect(http).to have_received(:request).with(have_attributes(path: '/v1/me/getchildorders?product_code=BTC_JPY'))
     end
   end
 
@@ -286,7 +291,43 @@ describe Bitflyer::HTTP::Private::Client do
             expect(client.public_send(method, identifier => 'identifier', other_identifier => nil)).to eq({})
           end
         end
+
+        next unless verb == :post
+
+        it 'rejects a nil product_code before dispatch' do
+          expect(connection).not_to receive(verb)
+          parameters = { order_id => 'order-id', product_code: nil }
+          expect { client.public_send(method, **parameters) }
+            .to raise_error(ArgumentError, 'product_code is required')
+        end
       end
+    end
+  end
+
+  describe '#cancel_all_child_orders' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:connection) { instance_double(Bitflyer::HTTP::Connection) }
+
+    before do
+      allow(Bitflyer::HTTP::Connection).to receive(:new).with('test_key', 'test_secret').and_return(connection)
+    end
+
+    it 'rejects a nil product_code before dispatch' do
+      expect(connection).not_to receive(:post)
+      expect { client.cancel_all_child_orders(product_code: nil) }
+        .to raise_error(ArgumentError, 'product_code is required')
+    end
+
+    it 'sends the default product code when omitted' do
+      expect(connection).to receive(:post).with('/v1/me/cancelallchildorders', product_code: 'BTC_JPY')
+                                           .and_return(Bitflyer::HTTP::Response.new({}))
+      expect(client.cancel_all_child_orders).to eq({})
+    end
+
+    it 'sends the supplied product code' do
+      expect(connection).to receive(:post).with('/v1/me/cancelallchildorders', product_code: 'ETH_JPY')
+                                           .and_return(Bitflyer::HTTP::Response.new({}))
+      expect(client.cancel_all_child_orders(product_code: 'ETH_JPY')).to eq({})
     end
   end
 
@@ -504,6 +545,39 @@ describe Bitflyer::HTTP::Private::Client do
 
       expect(client.send_parent_order(parameters: [symbol_trail, string_trail, mixed], order_method: 'IFDOCO'))
         .to eq('parent_order_acceptance_id' => '123')
+    end
+  end
+
+  describe 'account information requests' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:http) { instance_double(Net::HTTP) }
+
+    before do
+      allow(Net::HTTP).to receive(:start).and_return(http)
+      allow(Time).to receive(:now).and_return(Time.at(1_000_000))
+    end
+
+    {
+      permissions: ['/v1/me/getpermissions', ['/v1/me/getbalance']],
+      balance: ['/v1/me/getbalance', [{ 'currency_code' => 'JPY', 'amount' => 1000, 'available' => 900 }]],
+      collateral: ['/v1/me/getcollateral', { 'collateral' => 1000, 'require_collateral' => 100 }],
+      addresses: ['/v1/me/getaddresses', [{ 'currency_code' => 'BTC', 'address' => 'example-address' }]],
+      bank_accounts: ['/v1/me/getbankaccounts', [{ 'id' => 1, 'bank_name' => 'Example Bank' }]]
+    }.each do |method, (path, payload)|
+      it "signs the GET request and returns the parsed response for ##{method}" do
+        signature = OpenSSL::HMAC.hexdigest('SHA256', 'test_secret', "1000000GET#{path}")
+        response = instance_double(Net::HTTPOK, code: '200', body: JSON.generate(payload))
+
+        expect(http).to receive(:request) do |request|
+          expect(request).to have_attributes(method: 'GET', path: path)
+          expect(request['ACCESS-KEY']).to eq('test_key')
+          expect(request['ACCESS-TIMESTAMP']).to eq('1000000')
+          expect(request['ACCESS-SIGN']).to eq(signature)
+          response
+        end
+
+        expect(client.public_send(method)).to eq(payload)
+      end
     end
   end
 

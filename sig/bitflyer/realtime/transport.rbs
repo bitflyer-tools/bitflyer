@@ -8,7 +8,9 @@ module Bitflyer
       attr_reader url: String?
       attr_reader thread: Thread?
 
-      def initialize: () -> void
+      def self.default_ssl_context: () -> OpenSSL::SSL::SSLContext
+
+      def initialize: (?ssl_context: OpenSSL::SSL::SSLContext?) -> void
 
       def connect: (String url) -> void
 

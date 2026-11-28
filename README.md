@@ -39,7 +39,7 @@ See the [getting started guide](docs/getting-started.md) for a script that lists
 
 ## Features
 
-- Fetch markets, order book snapshots, tickers, executions, and funding rates over public HTTP.
+- Fetch markets, order book snapshots, tickers, executions, funding rates, and board state over public HTTP.
 - Read balances and positions and place or cancel orders over authenticated HTTP.
 - Iterate through execution and balance history one page at a time.
 - Subscribe to live market data and authenticated order events, and track a live order book.
@@ -75,6 +75,10 @@ the connection. The next request opens a new connection.
 `cancel_child_order`, `cancel_parent_order`, and `parent_order` require exactly one
 order ID or order acceptance ID. They raise `ArgumentError` before sending a request
 if neither identifier or both identifiers are non-nil.
+
+`send_child_order`, `cancel_child_order`, `cancel_parent_order`, and `cancel_all_child_orders`
+default `product_code` to `BTC_JPY` when omitted, but raise `ArgumentError` before sending a
+request if `product_code: nil` is passed explicitly.
 
 `send_child_order` requires `child_order_type`, `side`, and `size`. A `LIMIT` order also requires
 `price`. Missing or nil required values raise `ArgumentError` before an HTTP request is made.
@@ -252,6 +256,8 @@ in arrival order when a book update fails. Views already read stay unchanged as 
 
 Updates with a non-finite or negative price or size invalidate the book until a valid
 snapshot arrives. Zero-price levels are ignored, and a zero size removes the level at its price.
+Each side retains at most 5,000 price levels; a snapshot or delta that would push a side past
+that limit invalidates the book until a valid snapshot arrives.
 
 See the [snapshot](https://bf-lightning-api.readme.io/docs/realtime-board-snapshot) and
 [delta](https://bf-lightning-api.readme.io/docs/realtime-board) channel documentation.
@@ -259,6 +265,8 @@ See the [snapshot](https://bf-lightning-api.readme.io/docs/realtime-board-snapsh
 #### Private events
 
 To subscribe to the private `child_order_events` and `parent_order_events`, pass your API key and secret when creating the `realtime_client`.
+Private callbacks start receiving events after authentication succeeds and the server acknowledges
+their subscription on the current connection. Both steps are required again after reconnection.
 
 #### Connection status monitoring
 
@@ -320,7 +328,8 @@ client.executions_btc_jpy = ->(json){ p json }
 ```
 
 To update a watchlist on the same connection, pass the full Socket.IO channel name
-to `subscribe` and `unsubscribe`. A second callback for the same channel replaces the
+as a `Symbol` via the `channel_name:` keyword to `subscribe` and `unsubscribe`.
+A second callback for the same channel replaces the
 previous callback. Unsubscribing discards pending events for that subscription,
 immediately freeing their queue space, and allows any callback already running to finish.
 It also removes the channel from the subscriptions restored on reconnect. For runtime
@@ -342,10 +351,10 @@ watchlist = []
 
 update_watchlist = lambda do |product_codes|
   (watchlist - product_codes).each do |code|
-    client.unsubscribe("lightning_ticker_#{code}")
+    client.unsubscribe(channel_name: :"lightning_ticker_#{code}")
   end
   (product_codes - watchlist).each do |code|
-    client.subscribe("lightning_ticker_#{code}") { |ticker| p [code, ticker] }
+    client.subscribe(channel_name: :"lightning_ticker_#{code}") { |ticker| p [code, ticker] }
   end
   watchlist = product_codes
 end

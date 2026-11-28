@@ -5,6 +5,11 @@ require_relative 'order_book/price_index'
 module Bitflyer
   module Realtime
     class OrderBook
+      # Caps retained levels per side so a feed sending small deltas at distinct prices, or a single
+      # oversized snapshot, cannot grow client memory without bound.
+      MAX_LEVELS_PER_SIDE = 5_000
+      private_constant :MAX_LEVELS_PER_SIDE
+
       class Level
         attr_reader :price, :size
 
@@ -137,12 +142,22 @@ module Bitflyer
 
         key = price.to_r
         if size.zero?
-          index.remove(key) if side.delete(key)
+          remove_level(side, index, key)
           return
         end
 
+        raise ArgumentError, "Order book side exceeds #{MAX_LEVELS_PER_SIDE} levels" if new_level_over_limit?(side, key)
+
         index.add(key) unless side.key?(key)
         side[key] = Level.new(price: price, size: size)
+      end
+
+      def remove_level(side, index, key)
+        index.remove(key) if side.delete(key)
+      end
+
+      def new_level_over_limit?(side, key)
+        !side.key?(key) && side.size >= MAX_LEVELS_PER_SIDE
       end
 
       def valid_level_number?(value)

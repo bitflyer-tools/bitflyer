@@ -1,6 +1,7 @@
 module Bitflyer
   module Realtime
     class Transport
+      @ssl_context: OpenSSL::SSL::SSLContext?
       @socket: (OpenSSL::SSL::SSLSocket | TCPSocket)?
       @close_state: (:closing | :closed)?
       @driver: WebSocket::Driver?
@@ -57,8 +58,11 @@ module Bitflyer
       @session_deadline: [Integer, :setup | :authentication] | :expired | :established | nil
       @subscription_frames: Array[[Transport?, String, Integer?]]
       @subscription_writer: Mutex
+      @tls_context: OpenSSL::SSL::SSLContext?
 
       private
+
+      def tls_context: () -> OpenSSL::SSL::SSLContext
 
       def initialize_callbacks: () -> void
 
@@ -80,7 +84,8 @@ module Bitflyer
 
       def active_callback_transport?: (Transport? socket) -> bool
 
-      def subscribed_callback: (Symbol channel, Object? token) -> (^(untyped) -> void)?
+      def subscribed_callback: (Symbol channel, Object? token, Transport? socket) -> (^(untyped) -> void)?
+      def callback_channel_ready?: (Symbol channel) -> bool
 
       def discard_channel_callbacks: (Symbol channel_name) -> void
 

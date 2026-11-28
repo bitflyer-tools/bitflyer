@@ -38,10 +38,24 @@ describe Bitflyer::HTTP::Public::Client do
     end
   end
 
+  describe '#board_state' do
+    it 'calls GET /v1/getboardstate with default product_code' do
+      client.board_state
+      expect(connection).to have_received(:get).with('/v1/getboardstate', product_code: 'BTC_JPY')
+    end
+
+    it 'calls GET /v1/getboardstate with custom product_code' do
+      client.board_state(product_code: 'ETH_JPY')
+      expect(connection).to have_received(:get).with('/v1/getboardstate', product_code: 'ETH_JPY')
+    end
+  end
+
   describe '#executions' do
     it 'calls GET /v1/executions with default params' do
       client.executions
-      expect(connection).to have_received(:get).with('/v1/executions', product_code: 'BTC_JPY')
+      expect(connection).to have_received(:get).with(
+        '/v1/executions', product_code: 'BTC_JPY', count: nil, before: nil, after: nil
+      )
     end
 
     it 'passes optional parameters' do
@@ -54,6 +68,8 @@ describe Bitflyer::HTTP::Public::Client do
   end
 
   describe '#each_execution' do
+    let(:latest_page_params) { { product_code: 'BTC_JPY', count: nil, before: nil, after: nil } }
+
     def execution_page(*ids)
       Bitflyer::HTTP::Response.new(ids.map { |id| { 'id' => id } })
     end
@@ -74,14 +90,14 @@ describe Bitflyer::HTTP::Public::Client do
     end
 
     it 'starts at the latest page and stops fetching when the caller has enough records' do
-      expect(connection).to receive(:get).with('/v1/executions', { product_code: 'BTC_JPY' })
+      expect(connection).to receive(:get).with('/v1/executions', latest_page_params)
                                          .once.and_return(execution_page(95, 90))
 
       expect(client.each_execution.first).to eq('id' => 95)
     end
 
     it 'stops at the requested page budget' do
-      expect(connection).to receive(:get).with('/v1/executions', { product_code: 'BTC_JPY' })
+      expect(connection).to receive(:get).with('/v1/executions', latest_page_params)
                                          .once.and_return(execution_page(95, 90))
 
       expect(client.each_execution(max_pages: 1).to_a.size).to eq(2)
@@ -107,9 +123,9 @@ describe Bitflyer::HTTP::Public::Client do
     end
 
     it 'stops before yielding a page whose cursor does not move backward' do
-      expect(connection).to receive(:get).with('/v1/executions', { product_code: 'BTC_JPY' })
+      expect(connection).to receive(:get).with('/v1/executions', latest_page_params)
                                          .ordered.and_return(execution_page(95, 90))
-      expect(connection).to receive(:get).with('/v1/executions', { product_code: 'BTC_JPY', before: 90 })
+      expect(connection).to receive(:get).with('/v1/executions', latest_page_params.merge(before: 90))
                                          .ordered.and_return(execution_page(95, 90))
 
       expect(client.each_execution.to_a).to eq([{ 'id' => 95 }, { 'id' => 90 }])
@@ -124,10 +140,15 @@ describe Bitflyer::HTTP::Public::Client do
   end
 
   describe '#chats' do
-    it 'calls GET /v1/getchats with from_date' do
+    it 'formats a Time from_date as ISO 8601 with milliseconds' do
       frozen_time = Time.new(2025, 1, 10, 0, 0, 0, '+00:00')
       client.chats(from_date: frozen_time)
-      expect(connection).to have_received(:get).with('/v1/getchats', from_date: frozen_time)
+      expect(connection).to have_received(:get).with('/v1/getchats', from_date: '2025-01-10T00:00:00.000')
+    end
+
+    it 'passes a String from_date through unchanged' do
+      client.chats(from_date: '2025-01-10T00:00:00.000')
+      expect(connection).to have_received(:get).with('/v1/getchats', from_date: '2025-01-10T00:00:00.000')
     end
   end
 end
@@ -159,6 +180,24 @@ describe 'Public health requests' do
     it 'calls GET /v1/gethealth when product_code is explicitly nil' do
       client.health(product_code: nil)
       expect(http).to have_received(:request).with(have_attributes(method: 'GET', path: '/v1/gethealth'))
+    end
+  end
+
+  describe 'GET /v1/getchats' do
+    let(:http) { instance_double(Net::HTTP) }
+    let(:http_response) { instance_double(Net::HTTPOK, code: '200', body: '[]') }
+
+    before do
+      allow(Net::HTTP).to receive(:start).and_return(http)
+      allow(http).to receive(:request).and_return(http_response)
+    end
+
+    it 'sends an ISO 8601 formatted from_date query parameter' do
+      frozen_time = Time.new(2025, 1, 10, 0, 0, 0, '+00:00')
+      client.chats(from_date: frozen_time)
+      expect(http).to have_received(:request).with(
+        have_attributes(method: 'GET', path: '/v1/getchats?from_date=2025-01-10T00%3A00%3A00.000')
+      )
     end
   end
 end

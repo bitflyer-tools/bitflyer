@@ -447,6 +447,16 @@ describe Bitflyer::Realtime::WebSocketClient do
     expect(socket).to have_received(:connect).exactly(8).times
   end
 
+  it 'builds the TLS trust store once despite repeated connection refusals' do
+    allow(Bitflyer::Realtime::Transport).to receive(:default_ssl_context).and_call_original
+    @attempts = Array.new(8) { Errno::ECONNREFUSED.new }
+
+    measure_retries(random: 0.5, ticks: 8)
+
+    expect(socket).to have_received(:connect).exactly(8).times
+    expect(Bitflyer::Realtime::Transport).to have_received(:default_ssl_context).once
+  end
+
   it 'uses different retry delays across clients with different jitter samples' do
     delays = [0.25, 0.75].map do |random|
       @attempts = [Errno::ECONNREFUSED.new, Errno::ECONNREFUSED.new]
@@ -471,6 +481,17 @@ describe Bitflyer::Realtime::WebSocketClient do
 
   it 'keeps the monitor alive after a refused retry' do
     @attempts = [SocketError.new('DNS lookup failed'), Errno::ECONNREFUSED.new, nil]
+    @reconnected = Queue.new
+
+    @client = Bitflyer.realtime_client
+
+    Timeout.timeout(5) { @reconnected.pop }
+    expect(socket).to have_received(:connect).exactly(3).times
+    expect(@client.websocket_client.websocket_client).to eq(socket)
+  end
+
+  it 'keeps the monitor alive after reconnect errors outside the hardcoded whitelist' do
+    @attempts = [SocketError.new('DNS lookup failed'), Errno::ENETDOWN.new, nil]
     @reconnected = Queue.new
 
     @client = Bitflyer.realtime_client
@@ -1240,8 +1261,12 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
     allow(transport).to receive(:reconnectable?).and_return(true)
     allow(Bitflyer::Realtime::Transport).to receive(:new).and_return(next_transport)
     client.websocket_client.reconnect
+    receive_frame('42["child_order_events","before setup"]', next_handlers)
     receive_frame('0{}', next_handlers)
+    receive_frame('42["child_order_events","before authentication"]', next_handlers)
     receive_frame('430[null]', next_handlers)
+    client.websocket_client.handle_message(payload: double(data: '431[null]'), socket: transport)
+    receive_frame('42["child_order_events","before acknowledgment"]', next_handlers)
     receive_frame('431[null]', next_handlers)
     receive_frame('42["child_order_events",4]', next_handlers)
 
@@ -1805,17 +1830,24 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
 
     it 'waits for the private subscription after authentication' do
       client = realtime_client
-      client.child_order_events = ->(_message) {}
+      events = Queue.new
+      client.child_order_events = ->(message) { events << message }
 
+      receive_frame('42["child_order_events","before setup"]')
       receive_frame('0{}')
+      receive_frame('42["child_order_events","before authentication"]')
       expect(transport).to have_received(:send).with(start_with('420["auth",'))
       expect(transport).not_to have_received(:send).with('421["subscribe","child_order_events"]')
 
       receive_frame('430[ null ]')
+      receive_frame('431{}')
+      receive_frame('42["child_order_events","before acknowledgment"]')
       expect(transport).to have_received(:send).with('421["subscribe","child_order_events"]')
       expect(ready).not_to have_received(:call)
 
       receive_frame("431[\n  null\n]")
+      receive_frame('42["child_order_events","acknowledged"]')
+      expect(events.pop(timeout: 5)).to eq('acknowledged')
       expect(ready_notifications.pop(timeout: 5)).to be(true)
       expect(ready).to have_received(:call).once
 
@@ -1824,21 +1856,22 @@ RSpec.describe Bitflyer::Realtime::WebSocketClient do
       expect(ready).to have_received(:call).once
     end
 
-    it 'reports a rejected channel and keeps ready pending after the other subscription succeeds' do
+    it 'reports a false subscription error and keeps ready pending after the other subscription succeeds' do
       client = realtime_client
       events = Queue.new
-      client.child_order_events = ->(_message) {}
+      client.child_order_events = ->(message) { events << message }
       client.ticker_btc_jpy = ->(message) { events << message }
 
       receive_frame('0{}')
       receive_frame('430[null]')
-      receive_frame('431[{"message":"Access denied"}]')
-      receive_frame('431[{"message":"Access denied"}]')
+      receive_frame('431[false]')
+      receive_frame('431[false]')
       receive_frame('432[null]')
+      receive_frame('42["child_order_events","rejected"]')
       receive_frame('42["lightning_ticker_BTC_JPY",1]')
 
       expect(events.pop(timeout: 5)).to eq(1)
-      expect(failure_notifications.pop(timeout: 5)).to eq([:child_order_events, { 'message' => 'Access denied' }])
+      expect(failure_notifications.pop(timeout: 5)).to eq([:child_order_events, false])
       expect(subscription_failed).to have_received(:call).once
       expect(ready).not_to have_received(:call)
     end
@@ -1868,6 +1901,19 @@ describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
 
   def receive_frame(data)
     @receive.call(double('frame', data: data))
+  end
+
+  it 'delivers public events without credentials while suppressing acknowledged private events' do
+    events = Queue.new
+    client.subscribe(channel_name: :parent_order_events) { |message| events << message }
+    client.subscribe(channel_name: :lightning_ticker_BTC_JPY) { |message| events << message }
+    receive_frame('0{}')
+    receive_frame('431[null]')
+    receive_frame('432[null]')
+    receive_frame('42["parent_order_events","private"]')
+    receive_frame('42["lightning_ticker_BTC_JPY","public"]')
+
+    expect(events.pop(timeout: 5)).to eq('public')
   end
 
   it 'sets heartbeat intervals and signals readiness on handshake' do
@@ -2004,17 +2050,6 @@ describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
     resume.close
   end
 
-  it 'logs a fixed diagnostic for a malformed private event and delivers the next event' do
-    events = Queue.new
-    client.subscribe(channel_name: :child_order_events) { |message| events << message }
-
-    expect do
-      receive_frame('42["child_order_events",{"order_id":INVALID"demo-private-order"}]')
-    end.to output("Invalid JSON in realtime frame\n").to_stdout
-    receive_frame('42["child_order_events",{"order_id":"valid-order"}]')
-    expect(events.pop(timeout: 5)).to eq({ 'order_id' => 'valid-order' })
-  end
-
   it 'delivers the complete decoded large board event to its callback' do
     events = Queue.new
     channel = :lightning_board_BTC_JPY
@@ -2034,6 +2069,38 @@ describe Bitflyer::Realtime::WebSocketClient, 'packet handling' do
     let(:key) { 'key' }
     let(:secret) { 'secret' }
 
+    it 'suppresses private events around authentication rejection' do
+      events = Queue.new
+      client.subscribe(channel_name: :parent_order_events) { |message| events << message }
+      client.subscribe(channel_name: :lightning_ticker_BTC_JPY) { |message| events << message }
+      receive_frame('0{}')
+      receive_frame('42["parent_order_events","before rejection"]')
+      receive_frame('42["lightning_ticker_BTC_JPY","public"]')
+      expect(events.pop(timeout: 5)).to eq('public')
+
+      receive_frame('430[{"message":"Invalid API key"}]')
+      receive_frame('430[null]')
+      receive_frame('431[null]')
+      receive_frame('42["parent_order_events","after rejection"]')
+
+      expect(socket).to have_received(:close).once
+      expect(events).to be_empty
+    end
+
+    it 'logs a fixed diagnostic for a malformed private event and delivers the next event' do
+      events = Queue.new
+      client.subscribe(channel_name: :child_order_events) { |message| events << message }
+      receive_frame('0{}')
+      receive_frame('430[null]')
+      receive_frame('431[null]')
+
+      expect do
+        receive_frame('42["child_order_events",{"order_id":INVALID"demo-private-order"}]')
+      end.to output("Invalid JSON in realtime frame\n").to_stdout
+      receive_frame('42["child_order_events",{"order_id":"valid-order"}]')
+      expect(events.pop(timeout: 5)).to eq({ 'order_id' => 'valid-order' })
+    end
+
     it 'requests authentication on handshake and signals readiness on acknowledgement' do
       receive_frame('0{}')
 
@@ -2051,7 +2118,7 @@ describe Bitflyer::Realtime::WebSocketClient, 'debug logging' do
   subject(:client) { described_class.new(host: 'wss://example.test', key: 'key', secret: 'secret', debug: true) }
 
   let(:socket) do
-    instance_double(Bitflyer::Realtime::Transport, on: nil, connect: nil, closed?: false, close_for_shutdown: nil)
+    instance_double(Bitflyer::Realtime::Transport, on: nil, connect: nil, send: nil, closed?: false, close_for_shutdown: nil)
   end
 
   before do
@@ -2067,15 +2134,15 @@ describe Bitflyer::Realtime::WebSocketClient, 'debug logging' do
       payload = double('frame', data: "42#{[channel_name, event].to_json}")
       received = Queue.new
       expected_log = [
-        "Subscribe #{channel_name}",
         'Received packet 42',
         "Received event on #{channel_name}"
       ].map(&:inspect).join("\n") + "\n"
 
       expect do
         client.subscribe(channel_name: channel_name.to_sym) { |message| received << message }
-        client.handle_message(payload: payload)
-      end.to output(expected_log).to_stdout
+        %w[0{} 430[null] 431[null]].each { |data| client.handle_message(payload: double(data: data)) }
+      end.to output(/Authenticated/).to_stdout
+      expect { client.handle_message(payload: payload) }.to output(expected_log).to_stdout
       expect(received.pop(timeout: 5)).to eq(event)
     end
   end
