@@ -18,12 +18,12 @@ requests work without credentials.
 `max_pages` to increase that limit. Use a non-negative integer, since
 `max_pages: 0` skips all requests. If the enumerator reaches an empty page
 or the cursor stops moving backward, raising the page limit has no effect.
-See [Stream execution history](../README.md#stream-execution-history) for
+See [Stream execution history](https://github.com/bitflyer-tools/bitflyer/blob/master/README.md#stream-execution-history) for
 cursor examples and the public endpoint's history limit.
 
 ## Realtime authentication fails
 
-Set the [`disconnected` callback](../README.md#connection-status-monitoring)
+Set the [`disconnected` callback](https://github.com/bitflyer-tools/bitflyer/blob/master/README.md#connection-status-monitoring)
 to inspect the authentication error. If bitFlyer rejects authentication, the
 client closes the connection and stops reconnecting. Check the API key and
 secret, then call `shutdown` and create a new realtime client with the
@@ -34,4 +34,4 @@ corrected credentials.
 `book.current` returns `nil` while the client waits for a fresh snapshot.
 Handle `nil` before reading bids, asks, or the spread. Keep using the same
 book while the client reconnects and restores its subscriptions. See
-[Live order book](../README.md#live-order-book) for an example.
+[Live order book](https://github.com/bitflyer-tools/bitflyer/blob/master/README.md#live-order-book) for an example.

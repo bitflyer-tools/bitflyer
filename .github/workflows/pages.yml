@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up Pages
-        if: github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/master'
         uses: actions/configure-pages@v6
       - name: Build with Jekyll
         uses: actions/jekyll-build-pages@v1
@@ -35,11 +35,11 @@ jobs:
           source: docs
           destination: ./_site
       - name: Upload Pages artifact
-        if: github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/master'
         uses: actions/upload-pages-artifact@v5
 
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master'
     needs: build
     runs-on: ubuntu-24.04
     environment:
