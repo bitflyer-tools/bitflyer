@@ -44,6 +44,14 @@ bundle exec rubocop --autocorrect --only Layout lib
 
 Follow the [code of conduct](CODE_OF_CONDUCT.md) when participating.
 
+## Publish the documentation
+
+In the repository's **Settings → Pages**, set the publishing source to
+**GitHub Actions**. To run the first deployment after merging the workflow,
+open **Actions → pages → Run workflow**, select `master`, and run it.
+Subsequent pushes to `master` that change `docs/` or the Pages workflow
+trigger a deployment automatically.
+
 ## Release a gem
 
 Update `Bitflyer::VERSION` in `lib/bitflyer/version.rb` and refresh

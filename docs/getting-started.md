@@ -1,3 +1,8 @@
+---
+layout: default
+title: Getting started
+---
+
 # Getting started
 
 Use the bitflyer Ruby gem to list available markets and fetch an order book from
@@ -47,6 +52,6 @@ orders) and asks (sell orders). To fetch another market, pass one of the
 ruby market_snapshot.rb ETH_JPY
 ```
 
-See the [README usage examples](../README.md#usage) for authenticated requests
+See the [README usage examples](https://github.com/bitflyer-tools/bitflyer/blob/master/README.md#usage) for authenticated requests
 and realtime subscriptions. See [Troubleshooting](troubleshooting.md) if a
 request or subscription fails.
