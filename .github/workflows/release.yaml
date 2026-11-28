@@ -1,27 +1,19 @@
 name: release
 
-on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: Release version
-        required: true
-        type: choice
-        options:
-          - major
-          - minor
-          - patch
+"on":
+  push:
+    tags: ["v*"]
+
 jobs:
   push:
     name: Push gem to RubyGems.org
+    if: github.event.deleted == false
     runs-on: ubuntu-24.04
     environment:
       name: release
     permissions:
       id-token: write
       contents: write
-    env:
-      BUNDLE_WITH: release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -31,21 +23,21 @@ jobs:
         with:
           bundler-cache: true
           ruby-version: .ruby-version
-      - name: Setup Git
-        run: |
-          git config --global user.email "unhappychoice@gmail.com"
-          git config --global user.name "Yuji Ueki"
-      - name: Bump version
+      - name: Check release tag
+        shell: ruby {0}
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          BUNDLE_FROZEN=true bundle exec ruby -rrubygems_plugin -S gem bump --version "$RELEASE_VERSION" --message ':tada: Bump %{name} to %{version}'
-          BUNDLE_FROZEN=false bundle lock --local
-          git add Gemfile.lock && git commit --amend --no-edit
+          require File.join(Dir.pwd, 'lib/bitflyer/version')
+          version = Bitflyer::VERSION
+          tag = ENV.fetch('RELEASE_TAG')
+          unless version.match?(/\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\z/) && tag == "v#{version}"
+            abort "Release tag #{tag.inspect} must match the gem's stable version (v#{version})"
+          end
       - uses: rubygems/release-gem@5c53f5308233b7c0f47411f0471b3faae6fa57b2 # v1.4.2
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          version=$(ruby -Ilib -rbitflyer/version -e 'puts Bitflyer::VERSION')
-          gh release create "v$version" --generate-notes
+          gh release create "$RELEASE_TAG" --verify-tag --generate-notes
