@@ -36,6 +36,21 @@ describe Bitflyer::Realtime::Client do
     client.subscription_failed = failure_callback
   end
 
+  it 'adds and removes ticker subscriptions in the README watchlist example' do
+    readme = File.expand_path('../../../README.md', __dir__)
+    example = File.read(readme).scan(/^```ruby\n(.*?)^```$/m).flatten.find do |snippet|
+      snippet.include?('update_watchlist =')
+    end
+    expect(example).not_to be_nil
+
+    expect(websocket_client).to receive(:subscribe).with(channel_name: :lightning_ticker_BTC_JPY).ordered
+    expect(websocket_client).to receive(:subscribe).with(channel_name: :lightning_ticker_ETH_JPY).ordered
+    expect(websocket_client).to receive(:unsubscribe).with(channel_name: :lightning_ticker_BTC_JPY).ordered
+    expect(websocket_client).to receive(:subscribe).with(channel_name: :lightning_ticker_XRP_JPY).ordered
+
+    eval(example, binding, readme)
+  end
+
   describe 'channel mapping' do
     {
       board_snapshot_btc_jpy: :lightning_board_snapshot_BTC_JPY,
