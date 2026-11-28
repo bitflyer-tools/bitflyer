@@ -59,7 +59,10 @@ module Bitflyer
         @lock.synchronize do
           next unless @ready
 
-          @current ||= View.new(bids: sorted_levels(@bids).reverse, asks: sorted_levels(@asks))
+          @current ||= View.new(
+            bids: (@sorted_bids ||= sorted_levels(@bids).reverse.freeze),
+            asks: (@sorted_asks ||= sorted_levels(@asks).freeze)
+          )
         end
       end
 
@@ -108,6 +111,8 @@ module Bitflyer
         @ask_index = PriceIndex.new(descending: false)
         @best_bid = nil
         @best_ask = nil
+        @sorted_bids = nil
+        @sorted_asks = nil
         @current = nil
         @top_of_book = nil
         @ready = false
@@ -118,16 +123,20 @@ module Bitflyer
         asks = message.fetch('asks')
         raise ArgumentError, 'Order book sides must be arrays' unless bids.is_a?(Array) && asks.is_a?(Array)
 
-        @current = nil
-        best_bid = merge_side(@bids, bids, @bid_index)
-        best_ask = merge_side(@asks, asks, @ask_index)
+        @sorted_bids = @current = nil if merge_side(@bids, bids, @bid_index)
+        @sorted_asks = @current = nil if merge_side(@asks, asks, @ask_index)
+        best_bid = best_level(@bids, @bid_index)
+        best_ask = best_level(@asks, @ask_index)
         @top_of_book = nil unless @best_bid.equal?(best_bid) && @best_ask.equal?(best_ask)
         @best_bid = best_bid
         @best_ask = best_ask
       end
 
       def merge_side(side, levels, index)
-        levels.each { |level| apply_level(side, index, level) }
+        levels.reduce(false) { |changed, level| !apply_level(side, index, level).nil? || changed }
+      end
+
+      def best_level(side, index)
         key = index.best
         key && side[key]
       end
@@ -141,19 +150,25 @@ module Bitflyer
         return if price.zero?
 
         key = price.to_r
-        if size.zero?
-          remove_level(side, index, key)
-          return
-        end
+        return remove_level(side, index, key) if size.zero?
+
+        set_level(side, index, key, price, size)
+      end
+
+      def set_level(side, index, key, price, size)
+        existing = side[key]
+        return if existing && existing.price.eql?(price) && existing.size.eql?(size)
 
         raise ArgumentError, "Order book side exceeds #{MAX_LEVELS_PER_SIDE} levels" if new_level_over_limit?(side, key)
 
-        index.add(key) unless side.key?(key)
+        index.add(key) unless existing
         side[key] = Level.new(price: price, size: size)
       end
 
       def remove_level(side, index, key)
-        index.remove(key) if side.delete(key)
+        removed = side.delete(key)
+        index.remove(key) if removed
+        removed
       end
 
       def new_level_over_limit?(side, key)
