@@ -548,6 +548,39 @@ describe Bitflyer::HTTP::Private::Client do
     end
   end
 
+  describe 'account information requests' do
+    let(:client) { Bitflyer.http_private_client('test_key', 'test_secret') }
+    let(:http) { instance_double(Net::HTTP) }
+
+    before do
+      allow(Net::HTTP).to receive(:start).and_return(http)
+      allow(Time).to receive(:now).and_return(Time.at(1_000_000))
+    end
+
+    {
+      permissions: ['/v1/me/getpermissions', ['/v1/me/getbalance']],
+      balance: ['/v1/me/getbalance', [{ 'currency_code' => 'JPY', 'amount' => 1000, 'available' => 900 }]],
+      collateral: ['/v1/me/getcollateral', { 'collateral' => 1000, 'require_collateral' => 100 }],
+      addresses: ['/v1/me/getaddresses', [{ 'currency_code' => 'BTC', 'address' => 'example-address' }]],
+      bank_accounts: ['/v1/me/getbankaccounts', [{ 'id' => 1, 'bank_name' => 'Example Bank' }]]
+    }.each do |method, (path, payload)|
+      it "signs the GET request and returns the parsed response for ##{method}" do
+        signature = OpenSSL::HMAC.hexdigest('SHA256', 'test_secret', "1000000GET#{path}")
+        response = instance_double(Net::HTTPOK, code: '200', body: JSON.generate(payload))
+
+        expect(http).to receive(:request) do |request|
+          expect(request).to have_attributes(method: 'GET', path: path)
+          expect(request['ACCESS-KEY']).to eq('test_key')
+          expect(request['ACCESS-TIMESTAMP']).to eq('1000000')
+          expect(request['ACCESS-SIGN']).to eq(signature)
+          response
+        end
+
+        expect(client.public_send(method)).to eq(payload)
+      end
+    end
+  end
+
   describe 'history pagination' do
     let(:client) { described_class.new('test_key', 'test_secret') }
     let(:http) { instance_double(Net::HTTP) }
