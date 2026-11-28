@@ -479,6 +479,20 @@ describe Bitflyer::Realtime::WebSocketClient do
     expect(socket).to have_received(:connect).exactly(4).times
   end
 
+  it 'reaches session readiness after the network is down at startup' do
+    @attempts = [Errno::ENETDOWN.new, nil]
+    @reconnected = Queue.new
+    ready = Queue.new
+
+    @client = Bitflyer.realtime_client
+    @client.ready = -> { ready << true }
+
+    Timeout.timeout(5) { @reconnected.pop }
+    receive_message('0{}')
+    expect(ready.pop(timeout: 5)).to be(true)
+    expect(socket).to have_received(:connect).twice
+  end
+
   it 'keeps the monitor alive after a refused retry' do
     @attempts = [SocketError.new('DNS lookup failed'), Errno::ECONNREFUSED.new, nil]
     @reconnected = Queue.new
@@ -491,7 +505,7 @@ describe Bitflyer::Realtime::WebSocketClient do
   end
 
   it 'keeps the monitor alive after reconnect errors outside the hardcoded whitelist' do
-    @attempts = [SocketError.new('DNS lookup failed'), Errno::ENETDOWN.new, nil]
+    @attempts = [SocketError.new('DNS lookup failed'), IOError.new('Connection failed'), nil]
     @reconnected = Queue.new
 
     @client = Bitflyer.realtime_client
