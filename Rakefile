@@ -23,6 +23,24 @@ task :validate_public_signatures do
     validate_websocket_subscription_signature(signatures)
     validate_websocket_channel_snapshot_signatures(signatures)
     validate_order_book_side_signatures(signatures)
+    validate_private_constants_are_hidden(signatures)
+  end
+end
+
+def validate_private_constants_are_hidden(signatures)
+  loader = RBS::EnvironmentLoader.new(core_root: nil)
+  loader.add(path: Pathname(signatures))
+  environment = RBS::Environment.from_loader(loader)
+
+  %w[
+    ::Bitflyer::HTTP::REQUEST_TIMEOUT
+    ::Bitflyer::HTTP::IdPagination
+    ::Bitflyer::Realtime::OrderBook::MAX_LEVELS_PER_SIDE
+  ].each do |constant|
+    name = RBS::TypeName.parse(constant)
+    if environment.constant_decls.key?(name) || environment.class_decls.key?(name)
+      abort "Unexpected private constant in public signatures: #{constant}"
+    end
   end
 end
 

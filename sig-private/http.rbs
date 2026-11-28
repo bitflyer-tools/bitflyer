@@ -1,0 +1,15 @@
+module Bitflyer
+  module HTTP
+    REQUEST_TIMEOUT: Integer
+
+    module IdPagination
+      DEFAULT_MAX_PAGES: Integer
+
+      def self.stream: (Integer? before, Integer max_pages, ?on_each: (^(untyped) -> void)?) { (Integer?) -> untyped } -> (Enumerator[untyped, untyped] | nil)
+
+      private def self.advance_page: (Enumerator::Yielder yielder, Integer? cursor) { () -> untyped } -> Integer?
+
+      private def self.validate_page_budget: (Integer max_pages) -> void
+    end
+  end
+end
