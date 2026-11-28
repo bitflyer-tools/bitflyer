@@ -43,3 +43,11 @@ bundle exec rubocop --autocorrect --only Layout lib
    Explain what changed, why, and how you verified it.
 
 Follow the [code of conduct](CODE_OF_CONDUCT.md) when participating.
+
+## Release a gem
+
+Update `Bitflyer::VERSION` in `lib/bitflyer/version.rb` and refresh
+`Gemfile.lock` with `bundle lock`. After the version update is merged and CI
+passes, push an annotated `vMAJOR.MINOR.PATCH` tag on that commit. The release
+workflow checks that the tag matches the gem version, publishes to RubyGems.org,
+and creates a GitHub release with generated notes.
