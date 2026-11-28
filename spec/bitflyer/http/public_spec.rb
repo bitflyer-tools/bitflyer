@@ -53,7 +53,9 @@ describe Bitflyer::HTTP::Public::Client do
   describe '#executions' do
     it 'calls GET /v1/executions with default params' do
       client.executions
-      expect(connection).to have_received(:get).with('/v1/executions', product_code: 'BTC_JPY')
+      expect(connection).to have_received(:get).with(
+        '/v1/executions', product_code: 'BTC_JPY', count: nil, before: nil, after: nil
+      )
     end
 
     it 'passes optional parameters' do
@@ -66,6 +68,8 @@ describe Bitflyer::HTTP::Public::Client do
   end
 
   describe '#each_execution' do
+    let(:latest_page_params) { { product_code: 'BTC_JPY', count: nil, before: nil, after: nil } }
+
     def execution_page(*ids)
       Bitflyer::HTTP::Response.new(ids.map { |id| { 'id' => id } })
     end
@@ -86,14 +90,14 @@ describe Bitflyer::HTTP::Public::Client do
     end
 
     it 'starts at the latest page and stops fetching when the caller has enough records' do
-      expect(connection).to receive(:get).with('/v1/executions', { product_code: 'BTC_JPY' })
+      expect(connection).to receive(:get).with('/v1/executions', latest_page_params)
                                          .once.and_return(execution_page(95, 90))
 
       expect(client.each_execution.first).to eq('id' => 95)
     end
 
     it 'stops at the requested page budget' do
-      expect(connection).to receive(:get).with('/v1/executions', { product_code: 'BTC_JPY' })
+      expect(connection).to receive(:get).with('/v1/executions', latest_page_params)
                                          .once.and_return(execution_page(95, 90))
 
       expect(client.each_execution(max_pages: 1).to_a.size).to eq(2)
@@ -119,9 +123,9 @@ describe Bitflyer::HTTP::Public::Client do
     end
 
     it 'stops before yielding a page whose cursor does not move backward' do
-      expect(connection).to receive(:get).with('/v1/executions', { product_code: 'BTC_JPY' })
+      expect(connection).to receive(:get).with('/v1/executions', latest_page_params)
                                          .ordered.and_return(execution_page(95, 90))
-      expect(connection).to receive(:get).with('/v1/executions', { product_code: 'BTC_JPY', before: 90 })
+      expect(connection).to receive(:get).with('/v1/executions', latest_page_params.merge(before: 90))
                                          .ordered.and_return(execution_page(95, 90))
 
       expect(client.each_execution.to_a).to eq([{ 'id' => 95 }, { 'id' => 90 }])
