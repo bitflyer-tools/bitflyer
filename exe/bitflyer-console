@@ -1,0 +1,19 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'bitflyer'
+require 'irb'
+
+public_client = Bitflyer.http_public_client
+
+api_key = ENV['BITFLYER_API_KEY']
+api_secret = ENV['BITFLYER_API_SECRET']
+
+if api_key && api_secret
+  private_client = Bitflyer.http_private_client(api_key, api_secret)
+  puts 'public_client and private_client are ready (BITFLYER_API_KEY/BITFLYER_API_SECRET found).'
+else
+  puts 'public_client is ready. Set BITFLYER_API_KEY and BITFLYER_API_SECRET to also get a private client.'
+end
+
+binding.irb
